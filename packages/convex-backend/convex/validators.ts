@@ -10,8 +10,9 @@ import { v } from 'convex/values';
 /**
  * Convex validators for the union types Sandy shares across packages. Each
  * literal is pinned to its `@sandy/shared-types` counterpart with `satisfies`,
- * so a change to a shared union surfaces here as a type error rather than
- * silently drifting from the persisted shape.
+ * so renaming or removing a shared union member fails compilation here. Adding a
+ * new member is not caught — keep these validators in sync when a shared union
+ * grows.
  */
 export const reviewJobStatus = v.union(
   v.literal('pending' satisfies ReviewJobStatus),
