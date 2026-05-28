@@ -1,0 +1,18 @@
+{
+  "name": "@sandy/convex-backend",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "convex dev",
+    "build": "convex codegen",
+    "type-check": "tsc --noEmit -p convex/tsconfig.json",
+    "deploy": "convex deploy"
+  },
+  "dependencies": {
+    "convex": "^1.39.0"
+  },
+  "devDependencies": {
+    "@sandy/shared-types": "workspace:*"
+  }
+}

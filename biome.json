@@ -1,7 +1,18 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "files": {
-    "ignore": ["dist", "build", "node_modules", ".config", ".convex", ".turbo"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/build",
+      "!**/node_modules",
+      "!**/.config",
+      "!**/.convex",
+      "!**/.turbo",
+      "!**/_generated",
+      "!**/.agents",
+      "!**/skills-lock.json"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -34,7 +45,5 @@
       "arrowParentheses": "always"
     }
   },
-  "organizeImports": {
-    "enabled": true
-  }
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }
