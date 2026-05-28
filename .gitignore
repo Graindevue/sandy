@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Test artifacts
+coverage/
+.vitest-cache/
+
+# Per-instance configuration (user-specific)
+.config/
+
+# Env files
+.env
+.env.local
+*.env.local
+
+# Convex local state
+.convex/
+
+# Logs
+*.log
+logs/
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+.cursor/

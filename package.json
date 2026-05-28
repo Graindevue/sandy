@@ -1,0 +1,28 @@
+{
+  "name": "sandy",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Self-hosted, agent-driven code reviewer for GitHub pull requests.",
+  "license": "MIT",
+  "author": "Tony Cosentino",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter @sandy/bot-worker dev",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "type-check": "pnpm -r type-check",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "typescript": "^7.0.0",
+    "vitest": "^4.0.0"
+  }
+}
