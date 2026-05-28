@@ -78,10 +78,14 @@ export const processFileMountParents = (
     if (!isFile) continue;
 
     const parentDir = dirname(mount.sandboxPath);
+    // Normalize before the containment check so a sandboxPath like
+    // `/home/agent/../etc/x` can't slip past the guard via `..` segments.
+    const normalizedParentDir = resolve(parentDir);
+    const normalizedSandboxHome = resolve(sandboxHomedir);
 
-    if (parentDir === sandboxHomedir) continue;
+    if (normalizedParentDir === normalizedSandboxHome) continue;
 
-    if (!parentDir.startsWith(`${sandboxHomedir}/`)) {
+    if (!normalizedParentDir.startsWith(`${normalizedSandboxHome}/`)) {
       throw new Error(
         `Cannot mount file to '${mount.sandboxPath}': ` +
           `parent directory '${parentDir}' is outside the sandbox home directory ('${sandboxHomedir}'). ` +
@@ -89,7 +93,7 @@ export const processFileMountParents = (
       );
     }
 
-    parentDirs.add(parentDir);
+    parentDirs.add(normalizedParentDir);
   }
 
   return [...parentDirs];

@@ -186,6 +186,41 @@ describe('appleContainer()', () => {
     rmdirSync(tmpDir);
   });
 
+  it('rejects a file mount whose sandboxPath escapes home via ".."', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'apple-container-test-'));
+    const tmpFile = join(tmpDir, 'config.json');
+    writeFileSync(tmpFile, '{}');
+
+    expect(() =>
+      appleContainer({
+        mounts: [{ hostPath: tmpFile, sandboxPath: '/home/agent/../etc/evil.json' }],
+      }),
+    ).toThrow(/outside the sandbox home directory/);
+
+    unlinkSync(tmpFile);
+    rmdirSync(tmpDir);
+  });
+
+  it('bounds container CLI calls with a timeout', async () => {
+    mockCreateFlow();
+    const provider = appleContainer();
+    const handle = await provider.create({
+      worktreePath: '/tmp/worktree',
+      hostRepoPath: '/tmp/repo',
+      mounts: [{ hostPath: '/tmp/worktree', sandboxPath: '/home/agent/workspace' }],
+      env: {},
+    });
+    await handle.close();
+
+    expect(mockExecFile.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockExecFile.mock.calls) {
+      const options = call.find(
+        (arg) => typeof arg === 'object' && arg !== null && 'timeout' in arg,
+      ) as { timeout?: number } | undefined;
+      expect(typeof options?.timeout).toBe('number');
+    }
+  });
+
   it('runs pre-flight system status then image inspect then run', async () => {
     const callOrder: string[] = [];
     mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
@@ -943,17 +978,11 @@ describe('appleContainer() — integration (real `container` CLI)', () => {
    * binary. The handoff specifies a round-trip via copyFileIn -> exec cat ->
    * copyFileOut. Kept minimal to avoid pulling in a full sandcastle harness.
    */
-  it.skipIf(process.env.SANDCASTLE_INTEGRATION !== '1')(
-    'round-trips a binary file via copyFileIn + exec cat + copyFileOut',
-    () => {
-      // Implementation intentionally deferred — wiring a real container
-      // session needs the sandcastle image plus the daemon. Fail loudly when
-      // someone opts in, so the placeholder isn't mistaken for a passing
-      // integration gate. Flesh it out the first time the env var is flipped
-      // on in a real workstation run.
-      throw new Error(
-        'Integration round-trip (copyFileIn -> exec cat -> copyFileOut) not yet implemented.',
-      );
-    },
+  // Real round-trip (copyFileIn -> exec cat -> copyFileOut) against the actual
+  // `container` CLI. Kept as a todo until the end-to-end setup (issue #9) wires
+  // the sandcastle image + daemon; flesh it out (gated on SANDCASTLE_INTEGRATION)
+  // the first time integration mode is exercised on a real workstation.
+  it.todo(
+    'round-trips a binary file via copyFileIn + exec cat + copyFileOut (needs SANDCASTLE_INTEGRATION)',
   );
 });

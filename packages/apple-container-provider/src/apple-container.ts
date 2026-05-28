@@ -50,21 +50,29 @@ const CONTAINER_DNS_ARGS = ['--dns', '1.1.1.1', '--dns', '8.8.8.8'];
 const DEFAULT_CONTAINER_MEMORY = '8g';
 const DEFAULT_CONTAINER_CPUS = 4;
 
+/** Bound control-plane `container` CLI calls so a wedged daemon can't hang the worker. */
+const CONTAINER_CLI_TIMEOUT_MS = 60_000;
+
 const execFileAsync = (
   command: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> =>
   new Promise((resolve, reject) => {
-    execFile(command, args, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve({
-          stdout: (stdout ?? '').toString(),
-          stderr: (stderr ?? '').toString(),
-        });
-      }
-    });
+    execFile(
+      command,
+      args,
+      { timeout: CONTAINER_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve({
+            stdout: (stdout ?? '').toString(),
+            stderr: (stderr ?? '').toString(),
+          });
+        }
+      },
+    );
   });
 
 const ensureContainerSystemRunning = async (): Promise<void> => {
@@ -333,6 +341,7 @@ const startDetachedContainer = (
     execFile(
       'container',
       ['run', '-d', '--name', containerName, ...args, imageName, 'infinity'],
+      { timeout: CONTAINER_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' },
       (error) => {
         if (error) {
           reject(new Error(`container run failed: ${error.message}`));
@@ -519,6 +528,7 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
                 dir,
                 `${containerUid}:${containerGid}`,
               ],
+              { timeout: CONTAINER_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' },
               (error) => {
                 if (error) {
                   reject(
@@ -640,7 +650,12 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
         close: async (): Promise<void> => {
           activeContainerNames.delete(containerName);
           await new Promise<void>((resolve) => {
-            execFile('container', ['delete', '-f', containerName], () => resolve());
+            execFile(
+              'container',
+              ['delete', '-f', containerName],
+              { timeout: CONTAINER_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' },
+              () => resolve(),
+            );
           });
         },
       };
