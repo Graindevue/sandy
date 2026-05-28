@@ -50,23 +50,38 @@ export const claim = mutation({
   },
 });
 
-/** Mark a `running` job `completed`. */
+/**
+ * Mark a `running` job `completed`. Guarded like `claim`/`markSuperseded`: only
+ * a job still `running` transitions, so a worker finishing after its job was
+ * superseded can't clobber the `superseded` outcome. Returns whether it did.
+ */
 export const markCompleted = mutation({
   args: { jobId: v.id('reviewJobs'), finishedAt: v.number() },
-  returns: v.null(),
+  returns: v.boolean(),
   handler: async (ctx, { jobId, finishedAt }) => {
+    const job = await ctx.db.get(jobId);
+    if (job === null || job.status !== 'running') {
+      return false;
+    }
     await ctx.db.patch(jobId, { status: 'completed', finishedAt });
-    return null;
+    return true;
   },
 });
 
-/** Mark a job `failed` with a reason. */
+/**
+ * Mark a `running` job `failed` with a reason. Guarded like `markCompleted`, so
+ * a late failure can't overwrite a `superseded` outcome. Returns whether it did.
+ */
 export const markFailed = mutation({
   args: { jobId: v.id('reviewJobs'), finishedAt: v.number(), error: v.string() },
-  returns: v.null(),
+  returns: v.boolean(),
   handler: async (ctx, { jobId, finishedAt, error }) => {
+    const job = await ctx.db.get(jobId);
+    if (job === null || job.status !== 'running') {
+      return false;
+    }
     await ctx.db.patch(jobId, { status: 'failed', finishedAt, error });
-    return null;
+    return true;
   },
 });
 
