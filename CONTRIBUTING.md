@@ -16,13 +16,15 @@ Sandy is built primarily for one developer's daily use, but the runtime is gener
 
 ## Pull request workflow
 
-1. Fork the repository
-2. Branch from `main`
-3. Make focused changes; include tests where reasonable
-4. Run `pnpm lint:fix && pnpm type-check && pnpm test`
-5. Open a PR with a description of the change and its motivation
+Branches: `main` (default / production) ← `staging` (integration) ← feature branches.
 
-Once Sandy is operational, Sandy will review its own PRs. Expect that feedback.
+1. Branch from `staging` (name it `phase-N/<slug>`)
+2. Make focused changes; include tests where reasonable
+3. Run `pnpm lint:fix && pnpm type-check && pnpm test`
+4. Open a PR **against `staging`**, never directly against `main`
+5. **CodeRabbit** reviews every PR automatically — address its actionable feedback before merge
+
+`staging` is promoted to `main` via a separate release PR. Once Sandy is operational, it will review its own PRs too.
 
 ## What we won't merge
 
