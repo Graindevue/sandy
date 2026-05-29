@@ -54,12 +54,12 @@ export interface CloneManagerOptions {
    * Resolve the git URL to clone a Repo from. Injected so production can build an
    * authenticated GitHub App URL (issue #6) while tests point at a local origin.
    */
-  cloneUrl: (repo: RepoIdentity) => string;
+  cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
 }
 
 export class CloneManager {
   readonly #baseDir: string;
-  readonly #cloneUrl: (repo: RepoIdentity) => string;
+  readonly #cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
 
   constructor(options: CloneManagerOptions) {
     this.#baseDir = options.baseDir;
@@ -91,7 +91,7 @@ export class CloneManager {
       'clone',
       '--branch',
       repo.defaultBranch,
-      this.#cloneUrl(repo),
+      await this.#cloneUrl(repo),
       dest,
     ]);
     return dest;
@@ -198,9 +198,33 @@ export class CloneManager {
           ? String((error as { stderr?: unknown }).stderr ?? '')
           : '';
       const detail = stderr.trim() || (error instanceof Error ? error.message : String(error));
-      throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${detail}`);
+      throw new Error(
+        `git ${args.map(redactCredentials).join(' ')} failed in ${cwd}: ${redactCredentialsInText(detail)}`,
+      );
     }
   }
+}
+
+function redactCredentialsInText(value: string): string {
+  return value.replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+@[^\s'"]+/gi, (match) =>
+    redactCredentials(match),
+  );
+}
+
+function redactCredentials(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return value;
+  }
+
+  if (url.username.length === 0 && url.password.length === 0) {
+    return value;
+  }
+  url.username = 'redacted';
+  url.password = 'redacted';
+  return url.toString();
 }
 
 async function pathExists(path: string): Promise<boolean> {

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RepoRef } from './events.js';
+import type { PullRequestFacts, RepoRef } from './events.js';
 import { createWebhookHandler, startWebhookServer } from './server.js';
 import type { EnqueueInput, ReviewSink, UpsertPullRequestInput } from './sink.js';
 
@@ -31,6 +31,18 @@ class RecordingSink implements ReviewSink {
     return 'job:1';
   }
 }
+
+const resolvedPr: PullRequestFacts = {
+  number: 7,
+  draft: false,
+  headSha: 'sha-7',
+  baseRef: 'main',
+  title: 'PR',
+  author: 'octocat',
+  url: 'https://example.test/pr/7',
+  state: 'open',
+  headRepo: { owner: 'tony-co', name: 'sandy' },
+};
 
 function sign(body: string): string {
   return `sha256=${createHmac('sha256', SECRET).update(body).digest('hex')}`;
@@ -111,6 +123,50 @@ describe('webhook server', () => {
     expect(sink.enqueued[0]).toMatchObject({ trigger: 'mention', agentKeys: ['logic'] });
   });
 
+  it('resolves issue_comment PR details before dispatching an @bot review mention', async () => {
+    const body = JSON.stringify({
+      action: 'created',
+      repository: { owner: { login: 'tony-co' }, name: 'sandy' },
+      issue: {
+        number: 7,
+        pull_request: { url: 'https://api.github.com/repos/tony-co/sandy/pulls/7' },
+      },
+      comment: { body: '@bot review' },
+    });
+    const resolved: Array<{ repo: RepoRef; number: number }> = [];
+    const handler = createWebhookHandler({
+      webhookSecret: SECRET,
+      sink,
+      logger,
+      pullRequestResolver: {
+        async resolvePullRequest(repo, number) {
+          resolved.push({ repo, number });
+          return resolvedPr;
+        },
+      },
+    });
+    const req = new EventEmitter() as IncomingMessage;
+    req.url = '/';
+    req.method = 'POST';
+    req.headers = {
+      'x-github-event': 'issue_comment',
+      'x-hub-signature-256': sign(body),
+    };
+    const res = fakeResponse();
+
+    const done = handler(req, res);
+    req.emit('data', Buffer.from(body));
+    req.emit('end');
+    await done;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('enqueued');
+    expect(resolved).toEqual([{ repo: { owner: 'tony-co', name: 'sandy' }, number: 7 }]);
+    expect(sink.enqueued).toEqual([
+      expect.objectContaining({ headSha: 'sha-7', trigger: 'mention', agentKeys: ['logic'] }),
+    ]);
+  });
+
   it('acknowledges a verified but unsupported event without dispatching (202)', async () => {
     const body = JSON.stringify({ zen: 'Keep it logically awesome.' });
     const res = await post(body, {
@@ -131,6 +187,22 @@ describe('webhook server', () => {
     expect(res.status).toBe(405);
   });
 });
+
+function fakeResponse(): ServerResponse & { statusCode?: number; body?: string } {
+  const res = {
+    headersSent: false,
+    writeHead(status: number) {
+      res.statusCode = status;
+      res.headersSent = true;
+      return res;
+    },
+    end(body?: string) {
+      res.body = body;
+      return res;
+    },
+  } as unknown as ServerResponse & { statusCode?: number; body?: string };
+  return res;
+}
 
 describe('webhook body size guard (#7)', () => {
   // Finding #7: the over-size branch used to reject AND `req.destroy()` the shared

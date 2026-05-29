@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { type DispatchLogger, dispatchEvent } from './dispatch.js';
-import { isSupportedEvent, parseEvent } from './parse.js';
+import {
+  type DispatchLogger,
+  type DispatchOptions,
+  dispatchEvent,
+  type ForkDeclineCommenter,
+} from './dispatch.js';
+import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
 import type { ReviewSink } from './sink.js';
 
@@ -26,6 +31,10 @@ export interface WebhookServerOptions {
   webhookSecret: string;
   /** Convex side-effect sink the dispatcher writes through. */
   sink: ReviewSink;
+  /** Optional GitHub lookup for issue_comment payloads that carry only an issue number. */
+  pullRequestResolver?: PullRequestResolver;
+  /** Optional GitHub side-effect used to surface documented v1 fork declines. */
+  forkDeclineCommenter?: ForkDeclineCommenter;
   /** Logger; defaults to `console`. */
   logger?: DispatchLogger;
   /** Path the server accepts deliveries on. Defaults to `/`. */
@@ -146,8 +155,13 @@ export function createWebhookHandler(
     }
 
     try {
-      const parsed = parseEvent(eventName, payload);
-      const outcome = await dispatchEvent(parsed, options.sink, logger);
+      const parsed = await parseEventForDispatch(eventName, payload, options.pullRequestResolver);
+      const outcome = await dispatchEvent(
+        parsed,
+        options.sink,
+        logger,
+        dispatchOptions(options.forkDeclineCommenter),
+      );
       send(res, 200, outcome.action);
     } catch (error) {
       // A side-effect failure (e.g. Convex unreachable) is a server error; 500
@@ -156,6 +170,15 @@ export function createWebhookHandler(
       send(res, 500, 'dispatch failed');
     }
   };
+}
+
+function dispatchOptions(
+  forkDeclineCommenter: ForkDeclineCommenter | undefined,
+): DispatchOptions | undefined {
+  if (forkDeclineCommenter === undefined) {
+    return undefined;
+  }
+  return { forkDeclineCommenter };
 }
 
 /** Create and start the webhook HTTP server, resolving once it is listening. */

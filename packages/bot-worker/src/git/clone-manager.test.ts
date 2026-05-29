@@ -212,6 +212,25 @@ describe('CloneManager', () => {
     await expect(manager.ensureCloned(REPO)).rejects.toThrow(/clone/i);
   });
 
+  it('redacts clone URL credentials from git failure messages', async () => {
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({
+      baseDir,
+      cloneUrl: () => 'https://x-access-token:super-secret-token@127.0.0.1:1/tony-co/sandy.git',
+    });
+
+    let message = '';
+    try {
+      await manager.ensureCloned(REPO);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain('git clone');
+    expect(message).toContain('redacted');
+    expect(message).not.toContain('super-secret-token');
+  });
+
   it('re-creates a worktree at a path left behind by a crashed Review', async () => {
     const origin = await makeOrigin();
     const firstSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');

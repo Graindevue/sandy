@@ -1,13 +1,19 @@
 import { pathToFileURL } from 'node:url';
+import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { isMainModule, loadConfig } from './main.js';
+import { isMainModule, loadConfig, resolveConfiguredAgent } from './main.js';
 
 describe('loadConfig PORT validation', () => {
   // Finding #8: PORT was parsed with Number.parseInt, which silently accepts
   // trailing garbage and scientific notation ('1e4' -> 1, '3007abc' -> 3007),
   // mis-binding the server despite the "fails loudly" contract. The whole string
   // must be a positive integer in [1, 65535].
-  const baseEnv = { GITHUB_WEBHOOK_SECRET: 'secret', CONVEX_URL: 'https://example.convex.cloud' };
+  const baseEnv = {
+    GITHUB_WEBHOOK_SECRET: 'secret',
+    CONVEX_URL: 'https://example.convex.cloud',
+    GITHUB_APP_ID: '123',
+    GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+  };
 
   it.each([
     '1e4',
@@ -46,14 +52,92 @@ describe('loadConfig webhook secret', () => {
     const config = loadConfig({
       GITHUB_WEBHOOK_SECRET: 'shh',
       CONVEX_URL: 'https://example.convex.cloud',
+      GITHUB_APP_ID: '123',
+      GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
     });
     expect(config.webhookSecret).toBe('shh');
   });
 
   it('throws naming GITHUB_WEBHOOK_SECRET when it is missing', () => {
-    expect(() => loadConfig({ CONVEX_URL: 'https://example.convex.cloud' })).toThrow(
-      /GITHUB_WEBHOOK_SECRET/,
+    expect(() =>
+      loadConfig({
+        CONVEX_URL: 'https://example.convex.cloud',
+        GITHUB_APP_ID: '123',
+        GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+      }),
+    ).toThrow(/GITHUB_WEBHOOK_SECRET/);
+  });
+});
+
+describe('loadConfig GitHub App credentials', () => {
+  const baseEnv = {
+    GITHUB_WEBHOOK_SECRET: 'secret',
+    CONVEX_URL: 'https://example.convex.cloud',
+    GITHUB_APP_ID: '123',
+    GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+  };
+
+  it('requires GitHub App credentials for posting reviews and cloning private repos', () => {
+    expect(() => loadConfig({ ...baseEnv, GITHUB_APP_ID: undefined })).toThrow(/GITHUB_APP_ID/);
+    expect(() => loadConfig({ ...baseEnv, GITHUB_APP_PRIVATE_KEY_PATH: undefined })).toThrow(
+      /GITHUB_APP_PRIVATE_KEY_PATH/,
     );
+  });
+
+  it('parses review execution options', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      SANDY_AGENT_IMAGE: 'custom-agent',
+      SANDY_REVIEW_MAX_CHANGED_LINES: '123',
+      SANDY_REVIEW_MAX_CONCURRENT_JOBS: '2',
+      ANTHROPIC_API_KEY: 'sk-test',
+    });
+
+    expect(config.agentImage).toBe('custom-agent');
+    expect(config.maxChangedLines).toBe(123);
+    expect(config.maxConcurrentJobs).toBe(2);
+    expect(config.agentEnv).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+  });
+});
+
+describe('resolveConfiguredAgent', () => {
+  it('returns only Agents that apply to the repo', () => {
+    const logicAgent = agent('logic');
+    const securityAgent = agent('security');
+    const loader = {
+      resolveForRepo: () => ({
+        agents: [logicAgent],
+      }),
+    };
+
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+        'logic',
+      ),
+    ).toBe(logicAgent);
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+        securityAgent.key,
+      ),
+    ).toBeNull();
+  });
+
+  it('returns null when the repo is not registered', () => {
+    const loader = {
+      resolveForRepo: () => null,
+    };
+
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'unknown', defaultBranch: 'main' },
+        'logic',
+      ),
+    ).toBeNull();
   });
 });
 
@@ -93,3 +177,19 @@ describe('isMainModule', () => {
     expect(isMainModule(pathToFileURL(argv1).href, undefined)).toBe(false);
   });
 });
+
+function agent(key: string): AgentDefinition {
+  return {
+    key,
+    name: key,
+    description: `${key} agent`,
+    category: key,
+    vendor: 'claude',
+    model: 'opus',
+    tools: [],
+    maxIterations: 1,
+    completionSignal: '</findings>',
+    defaultEnabled: true,
+    systemPrompt: `# ${key}`,
+  };
+}

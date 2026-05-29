@@ -31,6 +31,47 @@ export const subscribePending = query({
   },
 });
 
+/** Hydrate one claimed ReviewJob with the Repo and PullRequest data the worker needs. */
+export const getForWorker = query({
+  args: { jobId: v.id('reviewJobs') },
+  handler: async (ctx, { jobId }) => {
+    const job = await ctx.db.get(jobId);
+    if (job === null) {
+      return null;
+    }
+    const [repo, pullRequest] = await Promise.all([
+      ctx.db.get(job.repoId),
+      ctx.db.get(job.pullRequestId),
+    ]);
+    if (repo === null || pullRequest === null) {
+      return null;
+    }
+    return {
+      job: {
+        id: job._id,
+        pullRequestId: job.pullRequestId,
+        repoId: job.repoId,
+        headSha: job.headSha,
+        agentKeys: job.agentKeys,
+      },
+      repo: {
+        id: repo._id,
+        owner: repo.owner,
+        name: repo.name,
+        defaultBranch: repo.defaultBranch,
+      },
+      pullRequest: {
+        id: pullRequest._id,
+        number: pullRequest.number,
+        headSha: pullRequest.headSha,
+        baseRef: pullRequest.baseRef,
+        title: pullRequest.title,
+        url: pullRequest.url,
+      },
+    };
+  },
+});
+
 /**
  * Claim a `pending` job, transitioning it to `running`. OCC-protected: Convex
  * runs each mutation as a serializable transaction and retries on write
