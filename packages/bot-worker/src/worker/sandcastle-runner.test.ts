@@ -56,6 +56,7 @@ describe('SandcastleRunner', () => {
     expect(createAppleContainerCalls).toEqual([
       expect.objectContaining({
         imageName: 'sandy-agent',
+        containerNamePrefix: 'sandy-worker-',
         env: { ANTHROPIC_API_KEY: 'sk-test' },
         mounts: expect.arrayContaining([
           expect.objectContaining({ sandboxPath: '/home/agent/.opensrc' }),

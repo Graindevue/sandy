@@ -26,9 +26,10 @@ pnpm -r build
 ## 2. Write the plist
 
 Create a **user** LaunchAgent at
-`~/Library/LaunchAgents/dev.sandy.worker.plist`. Replace every `__PLACEHOLDER__`
-with an absolute path for your host — launchd does not expand `~`, `$HOME`, or
-shell variables, so all paths must be absolute.
+`~/Library/LaunchAgents/dev.sandy.worker.plist`. You can start from the checked-in
+template at [`dev.sandy.worker.plist.template`](./dev.sandy.worker.plist.template).
+Replace every `__PLACEHOLDER__` with an absolute path for your host — launchd
+does not expand `~`, `$HOME`, or shell variables, so all paths must be absolute.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -148,8 +149,8 @@ launchctl bootout gui/$(id -u)/dev.sandy.worker
   signal handlers tear its containers down. `kill -9` sends SIGKILL, which is
   uncatchable — no handler runs, so any in-flight container is orphaned; cleanup
   then relies on launchd restarting the worker, which reconciles on startup and
-  tears down the orphans. Confirm with `container list` after the restart
-  settles (it may briefly show the orphan before the reaper clears it).
+  tears down `sandy-worker-*` orphans. Confirm with `container list` after the
+  restart settles (it may briefly show the orphan before the reaper clears it).
 - **Logs:** tail the files you configured —
 
   ```bash

@@ -27,6 +27,7 @@ import { formatVolumeMount, processFileMountParents, resolveUserMounts } from '.
 
 export interface AppleContainerOptions {
   readonly imageName?: string;
+  readonly containerNamePrefix?: string;
   readonly containerUid?: number;
   readonly containerGid?: number;
   /** VM memory for each sandbox (Apple default is 1g — too small for turbo type-check). */
@@ -49,6 +50,7 @@ const CONTAINER_DNS_ARGS = ['--dns', '1.1.1.1', '--dns', '8.8.8.8'];
  */
 const DEFAULT_CONTAINER_MEMORY = '8g';
 const DEFAULT_CONTAINER_CPUS = 4;
+const DEFAULT_CONTAINER_NAME_PREFIX = 'sandcastle-';
 
 /** Bound control-plane `container` CLI calls so a wedged daemon can't hang the worker. */
 const CONTAINER_CLI_TIMEOUT_MS = 60_000;
@@ -427,6 +429,88 @@ const deleteContainerAsync = (name: string, timeoutMs: number): Promise<void> =>
     }, timeoutMs);
   });
 
+export interface CleanupOrphanedAppleContainersOptions {
+  readonly namePrefix?: string;
+}
+
+export interface CleanupOrphanedAppleContainersResult {
+  readonly found: string[];
+  readonly deleted: string[];
+  readonly failed: readonly { name: string; error: string }[];
+}
+
+/**
+ * Reconcile containers left behind by an uncatchable worker crash, such as
+ * SIGKILL from `kill -9`. Call this once during worker startup before new jobs
+ * are claimed; graceful process exits are handled by the signal handlers below.
+ */
+export async function cleanupOrphanedAppleContainers(
+  options: CleanupOrphanedAppleContainersOptions = {},
+): Promise<CleanupOrphanedAppleContainersResult> {
+  const namePrefix = options.namePrefix ?? DEFAULT_CONTAINER_NAME_PREFIX;
+  await ensureContainerSystemRunning();
+
+  const { stdout } = await execFileAsync('container', ['list', '--format', 'json', '--all']);
+  const found = parseContainerListNames(stdout).filter((name) => name.startsWith(namePrefix));
+  const settled = await Promise.all(
+    found.map(async (name) => {
+      try {
+        await execFileAsync('container', ['delete', '-f', name]);
+        return { name };
+      } catch (error) {
+        return {
+          name,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
+
+  return {
+    found,
+    deleted: settled.filter((item) => !('error' in item)).map((item) => item.name),
+    failed: settled.filter((item): item is { name: string; error: string } => 'error' in item),
+  };
+}
+
+function parseContainerListNames(stdout: string): string[] {
+  const parsed = JSON.parse(stdout) as unknown;
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  return items.flatMap((item) => {
+    const name = containerListItemName(item);
+    return name === null ? [] : [name];
+  });
+}
+
+function containerListItemName(item: unknown): string | null {
+  if (!isRecord(item)) {
+    return null;
+  }
+
+  for (const key of ['id', 'ID', 'name', 'Name']) {
+    const value = item[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+
+  const configuration = item.configuration;
+  if (!isRecord(configuration)) {
+    return null;
+  }
+  for (const key of ['id', 'ID', 'name', 'Name', 'hostname']) {
+    const value = configuration[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 const handleProcessExit = (): void => {
   for (const name of activeContainerNames) {
     deleteContainerSync(name);
@@ -480,6 +564,8 @@ const ensureSignalHandlersInstalled = (): void => {
 
 export const appleContainer = (options?: AppleContainerOptions): SandboxProvider => {
   const configuredImageName = options?.imageName;
+  const configuredContainerNamePrefix =
+    options?.containerNamePrefix ?? DEFAULT_CONTAINER_NAME_PREFIX;
   const sandboxHomedir = '/home/agent';
   const userMounts = options?.mounts ? resolveUserMounts(options.mounts, sandboxHomedir) : [];
   const parentDirsToCreate = processFileMountParents(userMounts, sandboxHomedir);
@@ -491,7 +577,7 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
     ...(options?.env ? { env: options.env } : {}),
     sandboxHomedir,
     create: async (createOptions: BindMountCreateOptions): Promise<BindMountSandboxHandle> => {
-      const containerName = `sandcastle-${randomUUID()}`;
+      const containerName = `${configuredContainerNamePrefix}${randomUUID()}`;
 
       const worktreeMount = createOptions.mounts.find(
         (m) => m.hostPath === createOptions.worktreePath,

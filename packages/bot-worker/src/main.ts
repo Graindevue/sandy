@@ -14,7 +14,7 @@ import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { type RepoForWorktree, ReviewExecutor } from './worker/review-executor.js';
-import { SandcastleRunner } from './worker/sandcastle-runner.js';
+import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './worker/sandcastle-runner.js';
 
 /** Resolved worker configuration, read once from the environment at startup. */
 export interface WorkerConfig {
@@ -128,6 +128,7 @@ function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 export async function main(): Promise<void> {
   loadInstanceEnv(process.cwd(), process.env);
   const config = loadConfig(process.env);
+  await cleanupWorkerAppleContainers();
   const httpClient = new ConvexHttpClient(config.convexUrl);
   const reactiveClient = new ConvexClient(config.convexUrl);
   const sink = new ConvexSink(httpClient);
@@ -175,6 +176,37 @@ export async function main(): Promise<void> {
     },
   });
   console.info(`Sandy webhook server listening on :${config.port}`);
+}
+
+async function cleanupWorkerAppleContainers(): Promise<void> {
+  const packageName = '@sandy/apple-container-provider';
+  const { cleanupOrphanedAppleContainers } = (await import(packageName)) as {
+    cleanupOrphanedAppleContainers: (options: { namePrefix: string }) => Promise<{
+      found: string[];
+      deleted: string[];
+      failed: readonly { name: string; error: string }[];
+    }>;
+  };
+
+  try {
+    const result = await cleanupOrphanedAppleContainers({
+      namePrefix: SANDY_WORKER_CONTAINER_PREFIX,
+    });
+    if (result.deleted.length > 0) {
+      console.info(`Cleaned up ${result.deleted.length} orphaned Sandy worker container(s)`);
+    }
+    for (const failure of result.failed) {
+      console.warn(
+        `Failed to clean up orphaned Sandy worker container ${failure.name}: ${failure.error}`,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `Skipping Sandy worker container startup cleanup: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 function loadInstanceEnv(repoRoot: string, env: NodeJS.ProcessEnv): void {

@@ -34,7 +34,7 @@ import { PassThrough } from 'node:stream';
 
 import type { BindMountCreateOptions, BindMountSandboxHandle } from '@ai-hero/sandcastle';
 
-import { appleContainer } from './apple-container.js';
+import { appleContainer, cleanupOrphanedAppleContainers } from './apple-container.js';
 
 const mockExecFile = vi.mocked(execFile);
 const mockSpawn = vi.mocked(spawn);
@@ -1058,6 +1058,60 @@ describe('appleContainer() — module-level signal handling (F3)', () => {
     expect(deletesAfter - deletesBefore).toBe(0);
 
     exitSpy.mockRestore();
+  });
+});
+
+describe('cleanupOrphanedAppleContainers()', () => {
+  it('deletes only containers matching the configured name prefix', async () => {
+    mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
+      const callback = rest[rest.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+
+      if (!Array.isArray(args)) {
+        callback(null, '', '');
+        return undefined as never;
+      }
+
+      if (args[0] === 'list') {
+        callback(
+          null,
+          JSON.stringify([
+            { configuration: { id: 'sandy-worker-old-running' }, status: 'running' },
+            { id: 'sandy-worker-old-stopped', status: 'stopped' },
+            { configuration: { id: 'sandcastle-other-agent' }, status: 'running' },
+            { configuration: { id: 'buildkit' }, status: 'running' },
+          ]),
+          '',
+        );
+        return undefined as never;
+      }
+
+      callback(null, '', '');
+      return undefined as never;
+    });
+
+    const result = await cleanupOrphanedAppleContainers({ namePrefix: 'sandy-worker-' });
+
+    expect(result).toEqual({
+      found: ['sandy-worker-old-running', 'sandy-worker-old-stopped'],
+      deleted: ['sandy-worker-old-running', 'sandy-worker-old-stopped'],
+      failed: [],
+    });
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'container',
+      ['list', '--format', 'json', '--all'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.any(Function),
+    );
+    expect(
+      mockExecFile.mock.calls
+        .filter(([, args]) => Array.isArray(args) && args[0] === 'delete')
+        .map(([, args]) => (args as string[]).at(-1)),
+    ).toEqual(['sandy-worker-old-running', 'sandy-worker-old-stopped']);
   });
 });
 

@@ -27,37 +27,37 @@
 //   - Build the harness agent image:   pnpm sandcastle:build-agent-image
 //   - Provide secrets in .sandcastle/.env (see .env.example).
 
-import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import path from "node:path";
+import { execFileSync, execSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 // Node blocks --env-file in NODE_OPTIONS, so load .sandcastle/.env ourselves.
 // Existing process.env wins (lets users override per-shell).
 function loadDotenv(filePath: string) {
   if (!existsSync(filePath)) return;
-  for (const line of readFileSync(filePath, "utf8").split("\n")) {
+  for (const line of readFileSync(filePath, 'utf8').split('\n')) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
     if (!match) continue;
     const [, key, rawValue] = match;
     if (process.env[key!] !== undefined) continue;
-    const value = rawValue!.replace(/^['"]|['"]$/g, "");
+    const value = rawValue!.replace(/^['"]|['"]$/g, '');
     process.env[key!] = value;
   }
 }
-loadDotenv(".sandcastle/.env");
+loadDotenv('.sandcastle/.env');
 
-import * as sandcastle from "@ai-hero/sandcastle";
+import * as sandcastle from '@ai-hero/sandcastle';
 
 // The Apple Container provider lives in its own workspace package (ADR 0009).
 // Run `pnpm -r build` once so its dist is present before invoking this script.
-import { appleContainer } from "@sandy/apple-container-provider";
+import { appleContainer } from '@sandy/apple-container-provider';
 
-const SANDBOX_IMAGE_NAME = "sandcastle:sandy";
-const GITHUB_TOKEN = execSync("gh auth token", { encoding: "utf8" }).trim();
+const SANDBOX_IMAGE_NAME = 'sandcastle:sandy';
+const GITHUB_TOKEN = execSync('gh auth token', { encoding: 'utf8' }).trim();
 const CURSOR_API_KEY = process.env.CURSOR_API_KEY;
 if (!CURSOR_API_KEY) {
   throw new Error(
-    "CURSOR_API_KEY is not set. Put it in .sandcastle/.env or export it in your shell.",
+    'CURSOR_API_KEY is not set. Put it in .sandcastle/.env or export it in your shell.',
   );
 }
 
@@ -66,7 +66,7 @@ if (!CURSOR_API_KEY) {
 const IDLE_TIMEOUT_SECONDS = 30 * 60;
 
 // Gitignored cache dir for bind-mounted pnpm store (see .sandcastle/.gitignore).
-mkdirSync(".sandcastle/pnpm-store", { recursive: true });
+mkdirSync('.sandcastle/pnpm-store', { recursive: true });
 
 const sandboxProvider = appleContainer({
   imageName: SANDBOX_IMAGE_NAME,
@@ -76,13 +76,13 @@ const sandboxProvider = appleContainer({
   },
   mounts: [
     {
-      hostPath: "~/.codex",
-      sandboxPath: "/home/agent/.codex",
+      hostPath: '~/.codex',
+      sandboxPath: '/home/agent/.codex',
       readonly: false,
     },
     {
-      hostPath: "~/.config/gh",
-      sandboxPath: "/home/agent/.config/gh",
+      hostPath: '~/.config/gh',
+      sandboxPath: '/home/agent/.config/gh',
       readonly: true,
     },
     {
@@ -90,18 +90,18 @@ const sandboxProvider = appleContainer({
       // narrower exposure (other keys stay on the host) and lets the
       // image's baked-in Linux config + known_hosts take precedence over
       // the host's macOS-flavored ~/.ssh/config.
-      hostPath: "~/.ssh/id_ed25519",
-      sandboxPath: "/home/agent/.ssh/id_ed25519",
+      hostPath: '~/.ssh/id_ed25519',
+      sandboxPath: '/home/agent/.ssh/id_ed25519',
       readonly: true,
     },
     {
-      hostPath: "~/.opensrc",
-      sandboxPath: "/home/agent/.opensrc",
+      hostPath: '~/.opensrc',
+      sandboxPath: '/home/agent/.opensrc',
       readonly: false,
     },
     {
-      hostPath: ".sandcastle/pnpm-store",
-      sandboxPath: "/home/agent/.local/share/pnpm/store",
+      hostPath: '.sandcastle/pnpm-store',
+      sandboxPath: '/home/agent/.local/share/pnpm/store',
       readonly: false,
     },
   ],
@@ -129,7 +129,7 @@ const hooks = {
     onSandboxReady: [
       {
         command:
-          "pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile",
+          'pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile',
         timeoutMs: 600_000,
       },
     ],
@@ -148,12 +148,12 @@ const copyToWorktree: string[] = [];
 // branch. This const is the policy expectation we check the host branch against
 // below — it is NOT passed into promptArgs (that would override the built-in
 // and throw).
-const TARGET_BRANCH = "staging";
+const TARGET_BRANCH = 'staging';
 
 function assertSandboxImageExists() {
   try {
-    execFileSync("container", ["image", "inspect", SANDBOX_IMAGE_NAME], {
-      stdio: "ignore",
+    execFileSync('container', ['image', 'inspect', SANDBOX_IMAGE_NAME], {
+      stdio: 'ignore',
     });
   } catch {
     throw new Error(
@@ -171,30 +171,28 @@ assertSandboxImageExists();
 // before reusing it. Untracked node_modules and other gitignored paths are kept
 // (no -x), so we don't pay for a full pnpm install every iteration.
 function cleanReusedWorktree(branch: string) {
-  const sanitized = branch.replace(/[/\\:*?"<>|]/g, "-");
-  const worktreePath = path.join(".sandcastle", "worktrees", sanitized);
+  const sanitized = branch.replace(/[/\\:*?"<>|]/g, '-');
+  const worktreePath = path.join('.sandcastle', 'worktrees', sanitized);
   if (!existsSync(worktreePath)) return;
   console.log(`Cleaning reused worktree at ${worktreePath}`);
   try {
-    execFileSync("git", ["-C", worktreePath, "reset", "--hard", "HEAD"], {
-      stdio: "inherit",
+    execFileSync('git', ['-C', worktreePath, 'reset', '--hard', 'HEAD'], {
+      stdio: 'inherit',
     });
-    execFileSync("git", ["-C", worktreePath, "clean", "-fd"], {
-      stdio: "inherit",
+    execFileSync('git', ['-C', worktreePath, 'clean', '-fd'], {
+      stdio: 'inherit',
     });
   } catch (err) {
     console.warn(`Worktree cleanup failed for ${worktreePath}: ${err}`);
   }
 }
 
-const currentBranch = execSync("git branch --show-current", {
-  encoding: "utf8",
+const currentBranch = execSync('git branch --show-current', {
+  encoding: 'utf8',
 }).trim();
 
-if (currentBranch === "main") {
-  throw new Error(
-    "Sandcastle must not run from main. Check out staging first.",
-  );
+if (currentBranch === 'main') {
+  throw new Error('Sandcastle must not run from main. Check out staging first.');
 }
 
 if (currentBranch !== TARGET_BRANCH) {
@@ -221,18 +219,18 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   //
   // It outputs a <plan> JSON block — we parse that to drive Phase 2.
   // -------------------------------------------------------------------------
-  let plan;
+  let plan: { stdout: string };
   try {
     plan = await sandcastle.run({
       hooks,
       sandbox: sandboxProvider,
-      name: "planner",
+      name: 'planner',
       // One iteration is enough: the planner just needs to read and reason,
       // not write code.
       maxIterations: 1,
       idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-      agent: sandcastle.codex("gpt-5.5", { effort: "low" }),
-      promptFile: "./.sandcastle/plan-prompt.md",
+      agent: sandcastle.codex('gpt-5.5', { effort: 'low' }),
+      promptFile: './.sandcastle/plan-prompt.md',
     });
   } catch (err) {
     // Transient agent/sandbox failures (rate limits, auth blips, network)
@@ -244,9 +242,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // Extract the <plan>…</plan> block from the agent's stdout.
   const planMatch = plan.stdout.match(/<plan>([\s\S]*?)<\/plan>/);
   if (!planMatch) {
-    throw new Error(
-      "Planning agent did not produce a <plan> tag.\n\n" + plan.stdout,
-    );
+    throw new Error('Planning agent did not produce a <plan> tag.\n\n' + plan.stdout);
   }
 
   // The plan JSON contains an array of issues, each with id, title, branch.
@@ -256,13 +252,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
 
   if (issues.length === 0) {
     // No unblocked work — either everything is done or everything is blocked.
-    console.log("No unblocked issues to work on. Exiting.");
+    console.log('No unblocked issues to work on. Exiting.');
     break;
   }
 
-  console.log(
-    `Planning complete. ${issues.length} issue(s) to work in parallel:`,
-  );
+  console.log(`Planning complete. ${issues.length} issue(s) to work in parallel:`);
   for (const issue of issues) {
     console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
   }
@@ -292,11 +286,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       try {
         // Run the implementer
         const implement = await sandbox.run({
-          name: "implementer",
+          name: 'implementer',
           maxIterations: 100,
           idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-          agent: sandcastle.codex("gpt-5.5", { effort: "xhigh" }),
-          promptFile: "./.sandcastle/implement-prompt.md",
+          agent: sandcastle.codex('gpt-5.5', { effort: 'xhigh' }),
+          promptFile: './.sandcastle/implement-prompt.md',
           promptArgs: {
             TASK_ID: issue.id,
             ISSUE_TITLE: issue.title,
@@ -309,11 +303,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         }
 
         const review = await sandbox.run({
-          name: "reviewer",
+          name: 'reviewer',
           maxIterations: 1,
           idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-          agent: sandcastle.codex("gpt-5.5", { effort: "xhigh" }),
-          promptFile: "./.sandcastle/review-prompt.md",
+          agent: sandcastle.codex('gpt-5.5', { effort: 'xhigh' }),
+          promptFile: './.sandcastle/review-prompt.md',
           // TARGET_BRANCH is a sandcastle built-in (the host branch this run was
           // launched from) and must NOT be passed here — it is auto-injected,
           // and passing it throws. SOURCE_BRANCH (the issue branch) is too.
@@ -323,15 +317,15 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         });
 
         const publish = await sandbox.run({
-          name: "publisher",
+          name: 'publisher',
           maxIterations: 3,
           idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-          agent: sandcastle.codex("gpt-5.5", { effort: "medium" }),
-          promptFile: "./.sandcastle/publish-pr-prompt.md",
+          agent: sandcastle.codex('gpt-5.5', { effort: 'medium' }),
+          promptFile: './.sandcastle/publish-pr-prompt.md',
           // Stop as soon as the agent emits <pr_url>. Without this, the
           // orchestrator's default <promise>COMPLETE</promise> signal is
           // never matched and the publisher runs all 3 iterations.
-          completionSignal: "<pr_url>",
+          completionSignal: '<pr_url>',
           // TARGET_BRANCH is a sandcastle built-in (auto-injected, = the host
           // branch this run launched from); passing it via promptArgs throws.
           promptArgs: {
@@ -350,17 +344,17 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         const prUrl = prUrlMatch[1]!.trim();
 
         const reviewGate = await sandbox.run({
-          name: "review-gate",
+          name: 'review-gate',
           maxIterations: 20,
           idleTimeoutSeconds: IDLE_TIMEOUT_SECONDS,
-          agent: sandcastle.codex("gpt-5.5", { effort: "xhigh" }),
-          promptFile: "./.sandcastle/review-gate-prompt.md",
+          agent: sandcastle.codex('gpt-5.5', { effort: 'xhigh' }),
+          promptFile: './.sandcastle/review-gate-prompt.md',
           // Stop on either terminal state the prompt defines. Without this, a
           // clean gate still triggers another iteration, which has hit agent
           // CLI startup failures and crashed the whole pipeline.
           completionSignal: [
-            "<review-gate>clean</review-gate>",
-            "<review-gate>blocked</review-gate>",
+            '<review-gate>clean</review-gate>',
+            '<review-gate>blocked</review-gate>',
           ],
           promptArgs: {
             BRANCH: issue.branch,
@@ -368,10 +362,8 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
           },
         });
 
-        if (!reviewGate.stdout.includes("<review-gate>clean</review-gate>")) {
-          console.error(
-            `  ✗ ${issue.id} (${issue.branch}) blocked by the review gate.`,
-          );
+        if (!reviewGate.stdout.includes('<review-gate>clean</review-gate>')) {
+          console.error(`  ✗ ${issue.id} (${issue.branch}) blocked by the review gate.`);
           return { ...reviewGate, commits: [] };
         }
 
@@ -380,11 +372,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         // committed but reviewer/review-gate didn't.
         return {
           ...reviewGate,
-          commits: [
-            ...implement.commits,
-            ...review.commits,
-            ...reviewGate.commits,
-          ],
+          commits: [...implement.commits, ...review.commits, ...reviewGate.commits],
         };
       } finally {
         await sandbox.close();
@@ -394,19 +382,15 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
 
   // Log any agents that threw (network error, sandbox crash, etc.).
   for (const [i, outcome] of settled.entries()) {
-    if (outcome.status === "rejected") {
-      console.error(
-        `  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`,
-      );
+    if (outcome.status === 'rejected') {
+      console.error(`  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`);
     }
   }
 
   const completedBranches = settled
     .map((outcome, i) => ({ outcome, issue: issues[i]! }))
     .filter(
-      (entry) =>
-        entry.outcome.status === "fulfilled" &&
-        entry.outcome.value.commits.length > 0,
+      (entry) => entry.outcome.status === 'fulfilled' && entry.outcome.value.commits.length > 0,
     )
     .map((entry) => entry.issue.branch);
 
@@ -418,4 +402,4 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   }
 }
 
-console.log("\nAll done.");
+console.log('\nAll done.');

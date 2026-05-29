@@ -15,6 +15,7 @@ import type { AgentDefinition } from '@sandy/shared-types';
 
 export interface AppleContainerRunnerOptions {
   readonly imageName?: string;
+  readonly containerNamePrefix?: string;
   readonly mounts?: readonly {
     hostPath: string;
     sandboxPath: string;
@@ -57,6 +58,7 @@ export interface SandcastleRunnerOptions {
 
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const OPEN_SRC_SANDBOX_CACHE = '/home/agent/.opensrc';
+export const SANDY_WORKER_CONTAINER_PREFIX = 'sandy-worker-';
 
 export class SandcastleRunner {
   readonly #imageName: string;
@@ -84,6 +86,7 @@ export class SandcastleRunner {
       agent: this.#createAgentProvider(input.agent, this.#env),
       sandbox: await this.#createAppleContainer({
         imageName: this.#imageName,
+        containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
         mounts: [
           {
             hostPath: join(homedir(), '.opensrc'),
