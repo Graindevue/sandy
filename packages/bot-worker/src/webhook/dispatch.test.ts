@@ -20,6 +20,7 @@ function prFacts(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
     title: 'PR',
     author: 'octocat',
     url: 'https://example.test/pr/7',
+    state: 'open',
     headRepo: { ...BASE_REPO },
     ...overrides,
   };
@@ -82,7 +83,10 @@ function pr(
   action: PullRequestEvent['action'],
   prOverrides: Partial<PullRequestFacts> = {},
 ): PullRequestEvent {
-  return { kind: 'pull_request', action, repo: BASE_REPO, pr: prFacts(prOverrides) };
+  // A real `closed` delivery carries `state: 'closed'`; default the fixture to
+  // match so `prStateForEvent` persists the true lifecycle state.
+  const state: PullRequestFacts['state'] = action === 'closed' ? 'closed' : 'open';
+  return { kind: 'pull_request', action, repo: BASE_REPO, pr: prFacts({ state, ...prOverrides }) };
 }
 
 function push(prOverrides: Partial<PullRequestFacts> = {}): PushEvent {
@@ -173,5 +177,50 @@ describe('dispatchEvent', () => {
     const outcome = await dispatchEvent(push(), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
     expect(sink.enqueued[0]).toMatchObject({ headSha: 'sha-7', trigger: 'push' });
+  });
+
+  // Finding #3: a mention on a closed PR must not enqueue, must not flip
+  // reviewActive, and must not clobber the stored state back to 'open'.
+  it('does not enqueue or re-arm on an @bot review mention on a closed PR', async () => {
+    const sink = new FakeSink(false);
+    const outcome = await dispatchEvent(
+      comment('@bot review', { state: 'closed' }),
+      sink,
+      silentLogger,
+    );
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
+    // The PR row is upserted with its real (closed) state, not clobbered to open.
+    expect(sink.upserts[0]?.state).toBe('closed');
+  });
+
+  it('does not enqueue or re-arm on an @bot review mention on a merged PR', async () => {
+    const sink = new FakeSink(false);
+    const outcome = await dispatchEvent(
+      comment('@bot review', { state: 'merged' }),
+      sink,
+      silentLogger,
+    );
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
+    expect(sink.upserts[0]?.state).toBe('merged');
+  });
+
+  // Finding #4: a PR whose head repo GitHub could not resolve (null) is declined
+  // like a fork — never enqueued against an unfetchable head SHA.
+  it('declines a PR with an unknown (null) head repo without upserting or enqueuing', async () => {
+    const warn = vi.fn();
+    const sink = new FakeSink(false);
+    const outcome = await dispatchEvent(comment('@bot review', { headRepo: null }), sink, {
+      info: vi.fn(),
+      warn,
+    });
+    expect(outcome).toEqual({ action: 'declined-fork', repo: 'tony-co/sandy', number: 7 });
+    expect(sink.upserts).toHaveLength(0);
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(FORK_DECLINE_MESSAGE));
   });
 });

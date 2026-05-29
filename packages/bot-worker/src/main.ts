@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { ConvexHttpClient } from 'convex/browser';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
@@ -51,8 +52,23 @@ export async function main(): Promise<void> {
   console.info(`Sandy webhook server listening on :${config.port}`);
 }
 
+/**
+ * Whether this module is the process entry point (`node dist/main.js`) rather
+ * than an import (e.g. from tests). `import.meta.url` is a percent-encoded
+ * `file://` URL, so the script path must be encoded the same way via
+ * {@link pathToFileURL} — a raw `` `file://${argv1}` `` concat fails to match on
+ * any install path containing a space, `#`, `?`, `%`, or non-ASCII character,
+ * which would silently skip {@link main} and boot a worker that binds no port.
+ */
+export function isMainModule(importMetaUrl: string, argv1: string | undefined): boolean {
+  if (argv1 === undefined) {
+    return false;
+  }
+  return importMetaUrl === pathToFileURL(argv1).href;
+}
+
 // Run only when executed directly, not when imported by tests.
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     console.error('failed to start bot-worker', error);
     process.exit(1);

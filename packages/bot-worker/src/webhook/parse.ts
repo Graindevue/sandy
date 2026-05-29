@@ -1,3 +1,4 @@
+import type { PullRequestState } from '@sandy/shared-types';
 import type {
   CommentEvent,
   ParsedEvent,
@@ -24,6 +25,8 @@ interface RawPullRequest {
   draft?: boolean;
   title?: string;
   html_url?: string;
+  state?: string;
+  merged?: boolean;
   user?: { login?: string };
   head?: { sha?: string; repo?: RawRepoRef | null };
   base?: { ref?: string };
@@ -63,11 +66,25 @@ function parseRepoRef(raw: RawRepoRef | null | undefined): RepoRef | null {
   return { owner, name };
 }
 
-/** Build {@link PullRequestFacts}, falling back to the base Repo when no head Repo is given. */
-function parsePullRequestFacts(
-  raw: RawPullRequest | undefined,
-  baseRepo: RepoRef,
-): PullRequestFacts | null {
+/**
+ * Derive the PR's lifecycle state from GitHub's `state` ('open' | 'closed') and
+ * `merged` flag: a merged PR reports `state: 'closed'` plus `merged: true`, so
+ * `merged` is checked first. An unrecognized `state` falls back to `'open'` (the
+ * GitHub default) so a malformed delivery is not mistaken for a dead PR.
+ */
+function parsePullRequestState(raw: RawPullRequest): PullRequestState {
+  if (raw.merged === true) {
+    return 'merged';
+  }
+  return raw.state === 'closed' ? 'closed' : 'open';
+}
+
+/**
+ * Build {@link PullRequestFacts}. The head Repo is left `null` when GitHub could
+ * not resolve it (missing or `null` `head.repo`, e.g. a deleted fork) rather than
+ * being defaulted to the base Repo, so the fork-decline guard is not bypassed.
+ */
+function parsePullRequestFacts(raw: RawPullRequest | undefined): PullRequestFacts | null {
   if (raw === undefined) {
     return null;
   }
@@ -77,10 +94,6 @@ function parsePullRequestFacts(
   if (typeof number !== 'number' || typeof headSha !== 'string' || typeof baseRef !== 'string') {
     return null;
   }
-  // A missing or null head repo means GitHub couldn't resolve it (e.g. the fork
-  // was deleted); attribute the head to the base Repo so it isn't misread as a
-  // fork, and let downstream review logic handle the missing source.
-  const headRepo = parseRepoRef(head?.repo) ?? baseRepo;
   return {
     number,
     draft: raw.draft ?? false,
@@ -89,7 +102,8 @@ function parsePullRequestFacts(
     title: raw.title ?? '',
     author: raw.user?.login ?? '',
     url: raw.html_url ?? '',
-    headRepo,
+    state: parsePullRequestState(raw),
+    headRepo: parseRepoRef(head?.repo),
   };
 }
 
@@ -98,7 +112,7 @@ function parsePullRequestEvent(payload: RawPullRequestPayload): ParsedEvent {
   if (repo === null) {
     return ignored('pull_request: missing repository');
   }
-  const pr = parsePullRequestFacts(payload.pull_request, repo);
+  const pr = parsePullRequestFacts(payload.pull_request);
   if (pr === null) {
     return ignored('pull_request: missing pull_request fields');
   }
@@ -125,6 +139,17 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
   if (!isReviewComment && payload.issue?.pull_request === undefined) {
     return ignored('issue_comment: not on a pull request');
   }
+  // Only a newly *created* comment can be an `@bot review` mention. A `deleted`
+  // or `edited` `pull_request_review_comment` still carries the body and the full
+  // `pull_request`, so without this guard deleting the opt-in comment would start
+  // a review and editing it would re-fire one. (The `issue_comment` path needs no
+  // such guard: its payload lacks `pull_request`, so it already parses to
+  // `ignored` below.)
+  if (isReviewComment && payload.action !== 'created') {
+    return ignored(
+      `pull_request_review_comment: action ${payload.action ?? 'missing'} is not created`,
+    );
+  }
   const repo = parseRepoRef(payload.repository);
   if (repo === null) {
     return ignored('comment: missing repository');
@@ -133,7 +158,7 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
   if (typeof body !== 'string') {
     return ignored('comment: missing body');
   }
-  const pr = parsePullRequestFacts(payload.pull_request, repo);
+  const pr = parsePullRequestFacts(payload.pull_request);
   if (pr === null) {
     // `issue_comment` payloads carry only `issue`, not the full `pull_request`.
     // Resolving the PR's head SHA / fork status then needs a GitHub API lookup,
@@ -197,12 +222,14 @@ export function isSupportedEvent(eventName: string | undefined): eventName is Su
   );
 }
 
-/** Map a `PullRequestFacts` to the PR `state` Sandy persists for an event kind. */
+/**
+ * The PR `state` Sandy persists for an event. Reflects the PR's real lifecycle
+ * state as parsed from the payload (`open` / `closed` / `merged`) rather than
+ * assuming `'open'`, so a comment on a closed or merged PR does not clobber the
+ * stored state back to `'open'`.
+ */
 export function prStateForEvent(event: PullRequestEvent | CommentEvent | PushEvent): {
-  state: 'open' | 'closed';
+  state: PullRequestState;
 } {
-  if (event.kind === 'pull_request' && event.action === 'closed') {
-    return { state: 'closed' };
-  }
-  return { state: 'open' };
+  return { state: event.pr.state };
 }

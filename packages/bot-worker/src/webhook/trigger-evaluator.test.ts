@@ -19,6 +19,7 @@ function prFacts(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
     title: 'Add feature',
     author: 'octocat',
     url: 'https://github.com/tony-co/sandy/pull/42',
+    state: 'open',
     headRepo: { ...BASE_REPO },
     ...overrides,
   };
@@ -175,7 +176,40 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, clearReviewActive: true });
   });
 
+  // Finding #3: a mention on a closed or merged PR must not enqueue a job for a
+  // dead head SHA nor re-arm reviewActive (which clear-on-close already cleared).
+  it('does nothing on an @bot review mention on a closed PR', () => {
+    const event = commentEvent('@bot review', { state: 'closed' });
+    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false });
+    // Even if the flag was somehow still set, the mention must not re-enqueue.
+    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false });
+  });
+
+  it('does nothing on an @bot review mention on a merged PR', () => {
+    const event = commentEvent('@bot review', { state: 'merged' });
+    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false });
+  });
+
+  // Finding #4: a null head repo (GitHub couldn't resolve it, e.g. deleted fork)
+  // is treated as a fork and declined, not enqueued against an unfetchable SHA.
+  it('declines a PR whose head repo is unknown (null) on a mention', () => {
+    const event = commentEvent('@bot review', { headRepo: null });
+    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false, decline: 'fork' });
+  });
+
+  it('declines a null-head-repo PR on a push to an opted-in PR', () => {
+    const event = pushEvent({ headRepo: null });
+    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
+  });
+
   it('does nothing for an ignored event', () => {
     expect(evaluateTrigger({ kind: 'ignored', reason: 'test' }, true)).toEqual({ enqueue: false });
+  });
+});
+
+describe('isForkPr — null head repo (finding #4)', () => {
+  it('is true when the head repo is unknown (null)', () => {
+    expect(isForkPr(BASE_REPO, prFacts({ headRepo: null }))).toBe(true);
   });
 });

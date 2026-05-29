@@ -5,6 +5,8 @@
  * stable contract.
  */
 
+import type { PullRequestState } from '@sandy/shared-types';
+
 /** The GitHub webhook event names Sandy subscribes to (the `X-GitHub-Event` header). */
 export type SupportedEventName =
   | 'pull_request'
@@ -30,10 +32,18 @@ export interface PullRequestFacts {
   author: string;
   url: string;
   /**
-   * Repo the PR's head branch lives in. Differs from the base Repo for a fork
-   * PR, which v1 declines (PRD open question).
+   * Lifecycle state of the PR, derived from GitHub's `pull_request.state` and
+   * `pull_request.merged`. Closed or merged PRs are dead and must not be
+   * re-armed by a late `@bot review` mention (Sticky Opt-In).
    */
-  headRepo: RepoRef;
+  state: PullRequestState;
+  /**
+   * Repo the PR's head branch lives in, or `null` when GitHub could not resolve
+   * it (e.g. the source fork was deleted, so `pull_request.head.repo` is null).
+   * Differs from the base Repo for a fork PR, which v1 declines (PRD open
+   * question); an unknown head Repo is likewise declined rather than guessed.
+   */
+  headRepo: RepoRef | null;
 }
 
 /**
