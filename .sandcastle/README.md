@@ -20,12 +20,16 @@ Each outer iteration:
    - **implement** (`implement-prompt.md`) — TDD the fix, commit (Conventional
      Commits), run `pnpm type-check` / `pnpm test` / `pnpm lint`.
    - **review** (`review-prompt.md`) — local clarity/correctness pass.
-   - **publish** (`publish-pr-prompt.md`) — open a draft PR targeting `staging`
-     with `Closes #<id>`.
-   - **review gate** (`review-gate-prompt.md`) — drive **CodeRabbit** to a clean
-     state (Sandy's automated reviewer per `AGENTS.md`).
+3. **Merge** (`merge-prompt.md`) — one agent merges every completed branch into
+   `staging`, one at a time, keeping it green (`pnpm type-check` / `pnpm test`)
+   and skipping any branch it can't merge cleanly. It runs with the
+   `merge-to-head` branch strategy (isolated worktree, fast-forwarded back into
+   the host `staging`). The orchestrator then pushes `staging` to `origin` and
+   closes the merged issues.
 
-The pipeline stops at "ready for human review" — it never merges.
+There are no per-issue PRs and no external automated reviewer. Work is merged
+autonomously into `staging`; a human reviews the accumulated `staging` diff and
+promotes `staging`→`main` via a separate release PR (`AGENTS.md`).
 
 ## Files
 
@@ -33,7 +37,8 @@ The pipeline stops at "ready for human review" — it never merges.
 | ---- | ------- |
 | `main.mts` | Orchestrator loop. Imports the provider from `@sandy/apple-container-provider`. |
 | `plan-prompt.md` | Phase 1 planner prompt. |
-| `implement-prompt.md` / `review-prompt.md` / `publish-pr-prompt.md` / `review-gate-prompt.md` | Phase 2 agent prompts. |
+| `implement-prompt.md` / `review-prompt.md` | Phase 2 per-issue agent prompts. |
+| `merge-prompt.md` | Phase 3 merge prompt (merge completed branches into `staging`). |
 | `CODING_STANDARDS.md` / `OPENSRC.md` | Standards + dependency-source lookup, referenced by the prompts. |
 | `.env.example` | Secrets the orchestrator needs (copy to `.env`). |
 | `Dockerfile` | Dev-harness agent image (codex + cursor CLIs); built by `pnpm sandcastle:build-agent-image`. |
@@ -77,7 +82,8 @@ pnpm sandcastle         # == npx tsx .sandcastle/main.mts
 
 - **Branching**: targets `staging` only, never `main` (`AGENTS.md`). The script
   refuses to run from `main`.
-- **Adapted from graindevue**: provider extracted to a package; Greptile gate
-  replaced with CodeRabbit; turbo build replaced with `pnpm -r`; commit style is
-  Conventional Commits with no AI footers.
+- **Adapted from graindevue**: provider extracted to a package; the external
+  review gate (Greptile/CodeRabbit) dropped in favor of autonomous merge to
+  `staging`; turbo build replaced with `pnpm -r`; commit style is Conventional
+  Commits with no AI footers.
 - `worktrees/`, `pnpm-store/`, `logs/`, and `.env` are gitignored.

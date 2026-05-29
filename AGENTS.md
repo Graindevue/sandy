@@ -6,16 +6,22 @@ is) and `CONTEXT.md` (domain glossary).
 ## Branching & PRs
 
 `main` (default / production) ← `staging` (integration, cut from `main`) ←
-feature branches (`phase-N/<slug>`).
+feature branches (`phase-N/<slug>`, or `sandcastle/issue-<id>-<slug>` for AFK
+agent work).
 
 - Branch feature work from **`staging`**.
-- Open every PR against **`staging`** — never directly against `main`.
-- `staging` is promoted to `main` via a separate release PR.
+- Human PRs target **`staging`** — never directly against `main`.
+- The `.sandcastle` AFK harness merges agent branches **directly into `staging`**
+  (no per-issue PR) once they pass local review and a type-check/test gate.
+- `staging` is promoted to `main` via a separate release PR — the one place a
+  human reviews the integrated work.
 
 ## Code review
 
-**CodeRabbit** reviews every PR automatically. Expect its inline comments and
-summary; address actionable feedback before merging.
+There is no automated PR reviewer. Agent work is gated by the harness's local
+review pass plus a `pnpm type-check` / `pnpm test` gate at merge time; the
+integrated `staging` branch is reviewed by a human on the `staging`→`main`
+release PR.
 
 ## Commits
 

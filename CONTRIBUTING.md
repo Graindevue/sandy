@@ -22,7 +22,7 @@ Branches: `main` (default / production) ← `staging` (integration) ← feature 
 2. Make focused changes; include tests where reasonable
 3. Run `pnpm lint:fix && pnpm type-check && pnpm test`
 4. Open a PR **against `staging`**, never directly against `main`
-5. **CodeRabbit** reviews every PR automatically — address its actionable feedback before merge
+5. A maintainer reviews before merge — there is no automated PR reviewer (yet; see below)
 
 `staging` is promoted to `main` via a separate release PR. Once Sandy is operational, it will review its own PRs too.
 

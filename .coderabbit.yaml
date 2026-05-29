@@ -1,8 +1,0 @@
-# CodeRabbit configuration — https://docs.coderabbit.ai/guides/configure-coderabbit
-# Sandy is reviewed by CodeRabbit (see AGENTS.md). Keep reviews on our authored
-# code; skip vendored Convex tooling and generated output.
-reviews:
-  path_filters:
-    - "!**/.agents/**"
-    - "!**/_generated/**"
-    - "!**/skills-lock.json"
