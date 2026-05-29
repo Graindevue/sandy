@@ -18,8 +18,8 @@ tables arrive in Phase 3. Convex adds `_id` and `_creationTime` to every row.
   `subscribePending` query the worker subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
 - **findings** — `recordFinding`, `listForPr`.
-
-The `reapStuckJobs` cron lands with Operational hardening (issue #8).
+- **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
+  ReviewJobs claimed more than 30 minutes ago as `failed`.
 
 ## Local setup
 

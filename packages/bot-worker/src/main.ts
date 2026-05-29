@@ -15,7 +15,7 @@ import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { type RepoForWorktree, ReviewExecutor } from './worker/review-executor.js';
-import { SandcastleRunner } from './worker/sandcastle-runner.js';
+import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './worker/sandcastle-runner.js';
 
 /** Resolved worker configuration, read once from the environment at startup. */
 export interface WorkerConfig {
@@ -35,6 +35,15 @@ const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const DEFAULT_MAX_CHANGED_LINES = 5000;
 const DEFAULT_MAX_CONCURRENT_JOBS = 1;
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
+const APPLE_CONTAINER_PROVIDER_PACKAGE = '@sandy/apple-container-provider';
+
+type AppleContainerProviderModule = {
+  cleanupOrphanedAppleContainers: (options: { namePrefix: string }) => Promise<{
+    found: string[];
+    deleted: string[];
+    failed: readonly { name: string; error: string }[];
+  }>;
+};
 
 /**
  * Read and validate the worker's configuration from `env`. Throws with a clear
@@ -129,6 +138,7 @@ function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 export async function main(): Promise<void> {
   loadInstanceEnv(process.cwd(), process.env);
   const config = loadConfig(process.env);
+  await cleanupWorkerAppleContainers();
   const httpClient = new ConvexHttpClient(config.convexUrl);
   const reactiveClient = new ConvexClient(config.convexUrl);
   const sink = new ConvexSink(httpClient);
@@ -179,6 +189,33 @@ export async function main(): Promise<void> {
     },
   });
   console.info(`Sandy webhook server listening on :${config.port}`);
+}
+
+async function cleanupWorkerAppleContainers(): Promise<void> {
+  try {
+    const { cleanupOrphanedAppleContainers } = await importAppleContainerProvider();
+    const result = await cleanupOrphanedAppleContainers({
+      namePrefix: SANDY_WORKER_CONTAINER_PREFIX,
+    });
+    if (result.deleted.length > 0) {
+      console.info(`Cleaned up ${result.deleted.length} orphaned Sandy worker container(s)`);
+    }
+    for (const failure of result.failed) {
+      console.warn(
+        `Failed to clean up orphaned Sandy worker container ${failure.name}: ${failure.error}`,
+      );
+    }
+  } catch (error) {
+    console.warn(`Skipping Sandy worker container startup cleanup: ${errorMessage(error)}`);
+  }
+}
+
+async function importAppleContainerProvider(): Promise<AppleContainerProviderModule> {
+  return (await import(APPLE_CONTAINER_PROVIDER_PACKAGE)) as AppleContainerProviderModule;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function loadInstanceEnv(repoRoot: string, env: NodeJS.ProcessEnv): void {

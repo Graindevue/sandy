@@ -73,17 +73,17 @@ deploys them; it doesn't restate the list.
 
 Two scoping notes to set expectations: the Archetype, Reaction, and
 SuggestedRule tables are **not** in this schema — they arrive in Phase 3 with the
-learning loop. And the `reapStuckJobs` cron (which would mark long-`running` jobs
-`failed`) is **not** part of what ships today — there is no `crons.ts` yet; it
-lands with Operational hardening (issue #8), as the package README notes.
+learning loop. The `reapStuckJobs` cron does ship in Phase 1 operational
+hardening: it runs every 5 minutes and marks ReviewJobs left `running` for more
+than 30 minutes as `failed`.
 
 ## 4. Verify
 
 The Convex dashboard (`npx convex dashboard` from
 `packages/convex-backend`, or <https://dashboard.convex.dev>) should show the six
 tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
-functions under **Functions**. The tables are empty until Sandy observes its
-first PR.
+functions under **Functions**, plus the `reapStuckJobs` cron under **Cron Jobs**.
+The tables are empty until Sandy observes its first PR.
 
 ## Next
 

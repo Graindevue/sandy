@@ -54,6 +54,7 @@ export default defineSchema({
     error: v.optional(v.string()),
   })
     .index('by_status', ['status'])
+    .index('by_status_and_claimed_at', ['status', 'claimedAt'])
     .index('by_pull_request', ['pullRequestId'])
     .index('by_pull_request_and_status', ['pullRequestId', 'status']),
 

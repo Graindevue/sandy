@@ -34,7 +34,7 @@ import { PassThrough } from 'node:stream';
 
 import type { BindMountCreateOptions, BindMountSandboxHandle } from '@ai-hero/sandcastle';
 
-import { appleContainer } from './apple-container.js';
+import { appleContainer, cleanupOrphanedAppleContainers } from './apple-container.js';
 
 const mockExecFile = vi.mocked(execFile);
 const mockSpawn = vi.mocked(spawn);
@@ -48,6 +48,8 @@ type FakeProcOptions = {
   exitCode?: number | null;
   /** POSIX signal name, or null for a normal exit. */
   signal?: NodeJS.Signals | null;
+  /** Whether to emit the close event automatically. */
+  autoClose?: boolean;
 };
 
 /**
@@ -76,12 +78,14 @@ const fakeProc = (opts: FakeProcOptions = {}): ChildProcess => {
     proc.stderr.end(opts.stderr ?? '');
   });
 
-  setImmediate(() => {
-    // Use `in` so callers can pass exitCode: null to model a signal kill —
-    // `?? 0` would coerce explicit null back to 0 and mask the bug we test.
-    const code = 'exitCode' in opts ? opts.exitCode : 0;
-    proc.emit('close', code, opts.signal ?? null);
-  });
+  if (opts.autoClose !== false) {
+    setImmediate(() => {
+      // Use `in` so callers can pass exitCode: null to model a signal kill —
+      // `?? 0` would coerce explicit null back to 0 and mask the bug we test.
+      const code = 'exitCode' in opts ? opts.exitCode : 0;
+      proc.emit('close', code, opts.signal ?? null);
+    });
+  }
 
   return proc;
 };
@@ -596,7 +600,10 @@ describe('appleContainer()', () => {
     const runCall = mockExecFile.mock.calls.find(
       ([, args]) => Array.isArray(args) && args[0] === 'run',
     );
-    const runArgs = runCall![1] as string[];
+    if (runCall === undefined) {
+      throw new Error('Expected `container run` to be called');
+    }
+    const runArgs = runCall[1] as string[];
     expect(runArgs).toContain('--dns');
     expect(runArgs).toContain('1.1.1.1');
     expect(runArgs).toContain('8.8.8.8');
@@ -643,8 +650,10 @@ describe('appleContainer()', () => {
       if (cmd !== 'container' || !Array.isArray(args)) return false;
       return args[0] === 'exec' && args.includes('-i') && args.includes('cat > "$1"');
     });
-    expect(copySpawn).toBeDefined();
-    const spawnArgs = copySpawn![1] as string[];
+    if (copySpawn === undefined) {
+      throw new Error('Expected copyFileIn to spawn `container exec`');
+    }
+    const spawnArgs = copySpawn[1] as string[];
     expect(spawnArgs).toEqual(
       expect.arrayContaining([
         'exec',
@@ -691,8 +700,10 @@ describe('appleContainer()', () => {
       if (cmd !== 'container' || !Array.isArray(args)) return false;
       return args[0] === 'exec' && args.includes('cat -- "$1"');
     });
-    expect(copySpawn).toBeDefined();
-    const spawnArgs = copySpawn![1] as string[];
+    if (copySpawn === undefined) {
+      throw new Error('Expected copyFileOut to spawn `container exec`');
+    }
+    const spawnArgs = copySpawn[1] as string[];
     expect(spawnArgs).toContain('/sandbox/output.txt');
     expect(spawnArgs).not.toContain('-i');
 
@@ -758,8 +769,10 @@ describe('appleContainer()', () => {
           (a: string) => typeof a === 'string' && a.includes('mkdir') && a.includes('chown'),
         ),
     );
-    expect(mkdirCall).toBeDefined();
-    const mkdirArgs = mkdirCall![1] as string[];
+    if (mkdirCall === undefined) {
+      throw new Error('Expected parent directory creation to run in the container');
+    }
+    const mkdirArgs = mkdirCall[1] as string[];
     expect(mkdirArgs).toContain('--user');
     expect(mkdirArgs[mkdirArgs.indexOf('--user') + 1]).toBe('0:0');
     expect(mkdirArgs).toContain('/home/agent/.codex');
@@ -824,7 +837,7 @@ describe('appleContainer()', () => {
 
   it('copyFileIn rejects when the host file cannot be read', async () => {
     mockCreateFlow();
-    mockSpawn.mockImplementation(() => fakeProc({ exitCode: 0 }));
+    mockSpawn.mockImplementation(() => fakeProc({ autoClose: false }));
 
     const provider = appleContainer();
     const handle = await provider.create({
@@ -1058,6 +1071,88 @@ describe('appleContainer() — module-level signal handling (F3)', () => {
     expect(deletesAfter - deletesBefore).toBe(0);
 
     exitSpy.mockRestore();
+  });
+});
+
+describe('cleanupOrphanedAppleContainers()', () => {
+  it('deletes only containers matching the configured name prefix', async () => {
+    mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
+      const callback = rest[rest.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+
+      if (!Array.isArray(args)) {
+        callback(null, '', '');
+        return undefined as never;
+      }
+
+      if (args[0] === 'list') {
+        callback(
+          null,
+          JSON.stringify([
+            { configuration: { id: 'sandy-worker-old-running' }, status: 'running' },
+            { id: 'sandy-worker-old-stopped', status: 'stopped' },
+            { configuration: { id: 'sandcastle-other-agent' }, status: 'running' },
+            { configuration: { id: 'buildkit' }, status: 'running' },
+          ]),
+          '',
+        );
+        return undefined as never;
+      }
+
+      callback(null, '', '');
+      return undefined as never;
+    });
+
+    const result = await cleanupOrphanedAppleContainers({ namePrefix: 'sandy-worker-' });
+
+    expect(result).toEqual({
+      found: ['sandy-worker-old-running', 'sandy-worker-old-stopped'],
+      deleted: ['sandy-worker-old-running', 'sandy-worker-old-stopped'],
+      failed: [],
+    });
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'container',
+      ['list', '--format', 'json', '--all'],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.any(Function),
+    );
+    expect(
+      mockExecFile.mock.calls
+        .filter(([, args]) => Array.isArray(args) && args[0] === 'delete')
+        .map(([, args]) => (args as string[]).at(-1)),
+    ).toEqual(['sandy-worker-old-running', 'sandy-worker-old-stopped']);
+  });
+
+  it('treats an empty container list as no containers to delete', async () => {
+    mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
+      const callback = rest[rest.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+
+      if (Array.isArray(args) && args[0] === 'list') {
+        callback(null, '', '');
+        return undefined as never;
+      }
+
+      callback(null, '', '');
+      return undefined as never;
+    });
+
+    await expect(cleanupOrphanedAppleContainers({ namePrefix: 'sandy-worker-' })).resolves.toEqual({
+      found: [],
+      deleted: [],
+      failed: [],
+    });
+
+    expect(
+      mockExecFile.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === 'delete'),
+    ).toHaveLength(0);
   });
 });
 

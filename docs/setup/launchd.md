@@ -26,9 +26,10 @@ pnpm -r build
 ## 2. Write the plist
 
 Create a **user** LaunchAgent at
-`~/Library/LaunchAgents/dev.sandy.worker.plist`. Replace every `__PLACEHOLDER__`
-with an absolute path for your host — launchd does not expand `~`, `$HOME`, or
-shell variables, so all paths must be absolute.
+`~/Library/LaunchAgents/dev.sandy.worker.plist`. You can start from the checked-in
+template at [`dev.sandy.worker.plist.template`](./dev.sandy.worker.plist.template).
+Replace every `__PLACEHOLDER__` with an absolute path for your host — launchd
+does not expand `~`, `$HOME`, or shell variables, so all paths must be absolute.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,14 +40,19 @@ shell variables, so all paths must be absolute.
     <key>Label</key>
     <string>dev.sandy.worker</string>
 
-    <!-- pnpm runs the worker's start script. Use the absolute path to the
-         pnpm binary (`which pnpm`) — launchd has a minimal PATH. -->
+    <!-- pnpm provides the workspace environment, while node runs the built
+         worker from the repo root. Use the absolute path to the pnpm binary
+         (`which pnpm`) — launchd has a minimal PATH. Do not use
+         `pnpm --filter @sandy/bot-worker start`: pnpm package scripts run from
+         the package directory, but the worker resolves .config/ from cwd. -->
     <key>ProgramArguments</key>
     <array>
         <string>__ABS_PATH_TO_PNPM__</string>
-        <string>--filter</string>
-        <string>@sandy/bot-worker</string>
-        <string>start</string>
+        <string>--dir</string>
+        <string>__ABS_PATH_TO_SANDY_REPO__</string>
+        <string>exec</string>
+        <string>node</string>
+        <string>packages/bot-worker/dist/main.js</string>
     </array>
 
     <!-- Run from the repo root so .config/ and workspace paths resolve. -->
@@ -148,8 +154,8 @@ launchctl bootout gui/$(id -u)/dev.sandy.worker
   signal handlers tear its containers down. `kill -9` sends SIGKILL, which is
   uncatchable — no handler runs, so any in-flight container is orphaned; cleanup
   then relies on launchd restarting the worker, which reconciles on startup and
-  tears down the orphans. Confirm with `container list` after the restart
-  settles (it may briefly show the orphan before the reaper clears it).
+  tears down `sandy-worker-*` orphans. Confirm with `container list` after the
+  restart settles (it may briefly show the orphan before the reaper clears it).
 - **Logs:** tail the files you configured —
 
   ```bash

@@ -1,7 +1,7 @@
 import type { AgentProvider, RunOptions, RunResult, SandboxProvider } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { SandcastleRunner } from './sandcastle-runner.js';
+import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './sandcastle-runner.js';
 
 const logicAgent: AgentDefinition = {
   key: 'logic',
@@ -58,6 +58,7 @@ describe('SandcastleRunner', () => {
     expect(createAppleContainerCalls).toEqual([
       expect.objectContaining({
         imageName: 'sandy-agent',
+        containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
         env: { ANTHROPIC_API_KEY: 'sk-test' },
         mounts: expect.arrayContaining([
           expect.objectContaining({ sandboxPath: '/home/agent/.opensrc' }),
