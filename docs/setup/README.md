@@ -14,6 +14,9 @@ You also need:
 - **Node 24+** and **pnpm 10+**
 - A **Convex** account (free tier is fine for solo workloads)
 - A **GitHub** account with admin access to the repositories you want reviewed
+- An **[Anthropic][anthropic]** account and an **`ANTHROPIC_API_KEY`** — the
+  Phase 1 `logic` Agent runs on claude-code (`vendor: claude`). You'll record the
+  key in `.config/.env` (see [`github-app.md`](./github-app.md))
 - **[Tailscale][tailscale]** for webhook ingress (recommended)
 - **[`opensrc`][opensrc]** installed globally (ADR [0008](../adr/0008-opensrc-for-framework-source-truth.md))
 
@@ -53,5 +56,6 @@ arrive in later phases — see [`docs/prds/`](../prds/). Where one of these docs
 mentions a not-yet-built feature, it says so.
 
 [apple-container]: https://github.com/apple/container
+[anthropic]: https://console.anthropic.com/
 [tailscale]: https://tailscale.com/
 [opensrc]: https://opensrc.run

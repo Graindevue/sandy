@@ -10,7 +10,9 @@ The worker is the `@sandy/bot-worker` package's entry point. Before installing
 the service, make sure the rest of setup is done: the agent image is built
 ([`sandcastle-image.md`](./sandcastle-image.md)), Convex is deployed
 ([`convex.md`](./convex.md)), `.config/.env` holds the GitHub App + Convex
-credentials ([`github-app.md`](./github-app.md)), and `.config/bot.yaml` exists
+credentials ([`github-app.md`](./github-app.md)), Tailscale Funnel is exposing a
+public webhook URL ([`tailscale.md`](./tailscale.md)) — the worker needs it to
+receive GitHub deliveries — and `.config/bot.yaml` exists
 ([`bot-yaml.md`](./bot-yaml.md)).
 
 ## 1. Build the worker
@@ -141,8 +143,13 @@ launchctl bootout gui/$(id -u)/dev.sandy.worker
 - **Crash recovery:** `kill -9` the worker PID; within `ThrottleInterval`
   seconds launchd restarts it with a new PID (`KeepAlive`). The acceptance test
   for Phase 1 expects exactly this — the worker comes back after `kill -9` with
-  no leaked Apple Containers (the provider tears containers down on the worker's
-  signal handlers; confirm with `container list` after a restart).
+  no leaked Apple Containers. Note the two different cleanup paths: on a
+  **graceful** stop (SIGINT/SIGTERM, e.g. `bootout`/`kickstart`) the worker's
+  signal handlers tear its containers down. `kill -9` sends SIGKILL, which is
+  uncatchable — no handler runs, so any in-flight container is orphaned; cleanup
+  then relies on launchd restarting the worker, which reconciles on startup and
+  tears down the orphans. Confirm with `container list` after the restart
+  settles (it may briefly show the orphan before the reaper clears it).
 - **Logs:** tail the files you configured —
 
   ```bash

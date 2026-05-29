@@ -27,12 +27,14 @@ watcher running while developing the backend.
 
 > **Where the URL goes.** `convex dev` records `CONVEX_DEPLOYMENT` in
 > `.env.local`. The worker reads its own `CONVEX_URL` from `.config/.env` — copy
-> the deployment URL Convex prints (the `https://<name>.convex.cloud` value) into
-> `.config/.env` alongside the GitHub App credentials from
-> [`github-app.md`](./github-app.md):
+> the deployment URL Convex prints (the `https://<name>.convex.cloud` value)
+> there. [`github-app.md`](./github-app.md) creates `.config/.env` with the full
+> set of keys (a `CONVEX_URL=` line included); set that line to the value here.
+> If you reached this doc first and the file doesn't exist yet, create it with
+> just this line and `github-app.md` will fill in the rest:
 >
 > ```bash
-> # .config/.env (append)
+> # .config/.env — set this line (github-app.md adds the GitHub + Anthropic keys)
 > CONVEX_URL=https://your-deployment.convex.cloud
 > ```
 
@@ -63,16 +65,17 @@ worker's `CONVEX_URL` at whichever deployment you intend to run against.
 
 ## 3. What gets deployed
 
-The Phase 1 schema defines six tables — `products`, `repos`, `pullRequests`,
-`reviewJobs`, `findings`, `agentRuns` — and the mutations/queries the worker
-uses to enqueue and claim a ReviewJob, flip a PR's `reviewActive` flag, and
-record Findings. The `reviewJobs.claim` mutation is OCC-protected so two worker
-subscribers can't claim the same `pending` job.
+The Phase 1 schema and the worker's mutations/queries — six tables, plus
+`enqueue`/`claim`/`record`-style functions — are inventoried in the package's own
+[`README.md`](../../packages/convex-backend/README.md) and
+[`convex/schema.ts`](../../packages/convex-backend/convex/schema.ts). This doc
+deploys them; it doesn't restate the list.
 
-Tables for Archetypes, Reactions, and SuggestedRules are **not** in this schema
-— they arrive in Phase 3 with the learning loop. The `reapStuckJobs` cron (marks
-long-`running` jobs `failed`) lands with operational hardening in a later issue,
-not here.
+Two scoping notes to set expectations: the Archetype, Reaction, and
+SuggestedRule tables are **not** in this schema — they arrive in Phase 3 with the
+learning loop. And the `reapStuckJobs` cron (which would mark long-`running` jobs
+`failed`) is **not** part of what ships today — there is no `crons.ts` yet; it
+lands with Operational hardening (issue #8), as the package README notes.
 
 ## 4. Verify
 

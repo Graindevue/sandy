@@ -44,6 +44,13 @@ products:
 
 ## Full example
 
+> **Phase 1 tests one Product, one Repo, one Agent.** The multi-Product,
+> multi-Repo file below is valid schema and shows every field, but Phase 1 only
+> exercises a single Product with a single Repo (and only the `logic` Agent — see
+> "Agent selection"). Multiple Products/Repos parse, yet cross-repo reasoning and
+> fan-out don't activate until later phases; the single-Product/single-Repo path
+> is the only one Phase 1 has been tested against.
+
 ```yaml
 products:
   # A Product that spans two Repos (one backend, one desktop app).

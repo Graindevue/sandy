@@ -12,10 +12,13 @@ a real reverse proxy), but the rest of these docs assume Funnel.
 
 ## 1. Install and authenticate Tailscale
 
-Install Tailscale on the host and bring it up:
+Install Tailscale on the host, start its daemon, then bring it up. The Homebrew
+formula does not auto-start the daemon, so `tailscale up` fails to reach it
+until `brew services start` has launched `tailscaled`:
 
 ```bash
 brew install tailscale
+brew services start tailscale
 sudo tailscale up
 ```
 
