@@ -7,6 +7,20 @@ import type { ReviewSink } from './sink.js';
 /** GitHub caps webhook payloads at 25 MB; reject anything larger to bound memory. */
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Raised by {@link readRawBody} only when the body exceeds {@link MAX_BODY_BYTES}.
+ * A dedicated class lets the handler answer 413 for the size guard while mapping
+ * every other read failure (a mid-body `'error'` such as a client disconnect /
+ * ECONNRESET) to 500 — 413 is permanent to GitHub (no redelivery), so a transient
+ * transport error must not be reported as one.
+ */
+class PayloadTooLargeError extends Error {
+  constructor() {
+    super('payload too large');
+    this.name = 'PayloadTooLargeError';
+  }
+}
+
 export interface WebhookServerOptions {
   /** The GitHub App webhook secret used to verify `X-Hub-Signature-256`. */
   webhookSecret: string;
@@ -16,18 +30,34 @@ export interface WebhookServerOptions {
   logger?: DispatchLogger;
   /** Path the server accepts deliveries on. Defaults to `/webhook`. */
   path?: string;
+  /** Max accepted body size in bytes. Defaults to {@link MAX_BODY_BYTES}. */
+  maxBodyBytes?: number;
 }
 
-/** Read the full request body as a raw Buffer, rejecting over-large payloads. */
-function readRawBody(req: IncomingMessage): Promise<Buffer> {
+/**
+ * Read the full request body as a raw Buffer. Rejects with {@link
+ * PayloadTooLargeError} once the body passes {@link MAX_BODY_BYTES}, and with the
+ * underlying error on a transport failure (`req` `'error'`). On over-size it stops
+ * buffering and pauses the stream — but deliberately does NOT `destroy()` the
+ * socket, which `req`/`res` share: tearing it down here would reset the connection
+ * before the handler's 413 could flush, so the client would see a connection reset
+ * rather than the 413. The half-read request is drained by the runtime after the
+ * response is sent (Node closes the keep-alive connection in that case).
+ */
+function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let aborted = false;
     req.on('data', (chunk: Buffer) => {
+      if (aborted) {
+        return;
+      }
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error('payload too large'));
-        req.destroy();
+      if (size > maxBytes) {
+        aborted = true;
+        req.pause();
+        reject(new PayloadTooLargeError());
         return;
       }
       chunks.push(chunk);
@@ -63,6 +93,7 @@ export function createWebhookHandler(
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const logger = options.logger ?? console;
   const path = options.path ?? '/webhook';
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
 
   return async (req, res) => {
     if (req.url !== path) {
@@ -76,9 +107,18 @@ export function createWebhookHandler(
 
     let rawBody: Buffer;
     try {
-      rawBody = await readRawBody(req);
-    } catch {
-      send(res, 413, 'payload too large');
+      rawBody = await readRawBody(req, maxBodyBytes);
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) {
+        send(res, 413, 'payload too large');
+        return;
+      }
+      // A transport failure (client disconnect / ECONNRESET mid-body) is transient;
+      // 500 lets GitHub redeliver. 413 would be treated as permanent and drop it.
+      logger.warn('failed to read webhook body', error);
+      if (!res.headersSent) {
+        send(res, 500, 'failed to read body');
+      }
       return;
     }
 

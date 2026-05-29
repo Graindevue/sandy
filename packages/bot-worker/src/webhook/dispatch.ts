@@ -1,3 +1,4 @@
+import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { ReviewSink } from './sink.js';
@@ -14,7 +15,7 @@ export type DispatchOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'cleared'; pullRequestId: string }
   | { action: 'declined-fork'; repo: string; number: number }
-  | { action: 'enqueued'; reviewJobId: string; trigger: string }
+  | { action: 'enqueued'; reviewJobId: string; trigger: ReviewTrigger }
   | { action: 'noop'; reason: string };
 
 /** A minimal logger; the server passes `console`, tests pass a spy or a no-op. */

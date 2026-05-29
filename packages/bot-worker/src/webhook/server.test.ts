@@ -1,8 +1,10 @@
 import { createHmac } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepoRef } from './events.js';
-import { startWebhookServer } from './server.js';
+import { createWebhookHandler, startWebhookServer } from './server.js';
 import type { EnqueueInput, ReviewSink, UpsertPullRequestInput } from './sink.js';
 
 const SECRET = 'server-test-secret';
@@ -127,5 +129,77 @@ describe('webhook server', () => {
   it('returns 405 for a non-POST method', async () => {
     const res = await fetch(`${baseUrl}/webhook`, { method: 'GET' });
     expect(res.status).toBe(405);
+  });
+});
+
+describe('webhook body size guard (#7)', () => {
+  // Finding #7: the over-size branch used to reject AND `req.destroy()` the shared
+  // socket synchronously, so the later 413 wrote to a dead socket and the client
+  // saw a connection reset instead. With a small maxBodyBytes an over-size POST
+  // must still receive an actual 413 response.
+  let smallServer: Awaited<ReturnType<typeof startWebhookServer>>;
+  let smallUrl: string;
+
+  beforeEach(async () => {
+    smallServer = await startWebhookServer(0, {
+      webhookSecret: SECRET,
+      sink: new RecordingSink(),
+      logger,
+      maxBodyBytes: 16,
+    });
+    const { port } = smallServer.address() as AddressInfo;
+    smallUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => smallServer.close(() => resolve()));
+  });
+
+  it('responds 413 (not a connection reset) to an over-size body', async () => {
+    const res = await fetch(`${smallUrl}/webhook`, {
+      method: 'POST',
+      body: 'x'.repeat(64),
+      headers: { 'x-github-event': 'pull_request' },
+    });
+    expect(res.status).toBe(413);
+    expect(await res.text()).toBe('payload too large');
+  });
+});
+
+describe('webhook body read error (#5)', () => {
+  // Finding #5: every readRawBody rejection used to map to 413. A 413 is permanent
+  // to GitHub (no redelivery), so a transient transport error (client disconnect /
+  // ECONNRESET mid-body, surfaced as `req` emitting 'error') must map to 500 — only
+  // the size guard is a 413.
+  function fakeRes(): ServerResponse & { statusCode?: number } {
+    const res = {
+      headersSent: false,
+      writeHead(status: number) {
+        res.statusCode = status;
+        res.headersSent = true;
+        return res;
+      },
+      end() {
+        return res;
+      },
+    } as unknown as ServerResponse & { statusCode?: number };
+    return res;
+  }
+
+  it('maps a mid-body transport error to 500, not 413', async () => {
+    const handler = createWebhookHandler({ webhookSecret: SECRET, sink: new RecordingSink() });
+    const req = new EventEmitter() as IncomingMessage;
+    req.url = '/webhook';
+    req.method = 'POST';
+    req.headers = {};
+    const res = fakeRes();
+
+    const done = handler(req, res);
+    // A chunk arrives, then the transport fails before 'end'.
+    req.emit('data', Buffer.from('{}'));
+    req.emit('error', new Error('ECONNRESET'));
+    await done;
+
+    expect(res.statusCode).toBe(500);
   });
 });

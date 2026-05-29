@@ -27,15 +27,26 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     throw new Error('CONVEX_URL is required');
   }
 
-  let port = DEFAULT_PORT;
-  if (env.PORT !== undefined && env.PORT !== '') {
-    port = Number.parseInt(env.PORT, 10);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new Error(`PORT must be a valid port number, got ${JSON.stringify(env.PORT)}`);
-    }
-  }
+  const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
 
   return { webhookSecret, convexUrl, port };
+}
+
+/**
+ * Parse a `PORT` string into a TCP port in `[1, 65535]`. The whole string must be
+ * decimal digits: `Number.parseInt` would silently accept trailing garbage and
+ * misread scientific notation (`'1e4'` → 1, `'3007abc'` → 3007), mis-binding the
+ * server instead of failing loudly. Throws on anything else.
+ */
+function parsePort(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`PORT must be a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  const port = Number(raw);
+  if (port < 1 || port > 65535) {
+    throw new Error(`PORT must be in the range 1-65535, got ${JSON.stringify(raw)}`);
+  }
+  return port;
 }
 
 /**
