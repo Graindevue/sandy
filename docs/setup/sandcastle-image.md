@@ -11,7 +11,7 @@ This doc covers the global `opensrc` install (a hard host dependency, ADR
 [0008](../adr/0008-opensrc-for-framework-source-truth.md)) and building the agent
 image.
 
-## 1. Install `opensrc` globally on the host
+## 1. Host tooling: `opensrc` and Codex
 
 [`opensrc`][opensrc] fetches actual source code for npm / PyPI / crates / GitHub
 dependencies on demand and caches it locally, so Agents can verify framework
@@ -34,6 +34,33 @@ package through it once to prime the cache and confirm it works:
 ```bash
 opensrc path convex
 ```
+
+### Codex (the default `logic` Agent vendor)
+
+The Phase 1 `logic` Agent runs on **Codex** (`vendor: codex`), so the host also
+needs the Codex CLI and a login. The agent image bakes the same CLI
+(`@openai/codex`, pinned to match the host); at review time the worker stages a
+read-only copy of the host's `~/.codex/auth.json` into each Agent container, so
+Codex authenticates inside the sandbox without exposing or mutating your real
+`~/.codex`.
+
+Install the CLI and log in — this uses your ChatGPT subscription and writes
+`~/.codex/auth.json`. Pin the version the image bakes (`images/agent/Dockerfile`)
+so the host login and the in-container `codex exec` share an `auth.json` format:
+
+```bash
+npm install -g @openai/codex@0.134.0
+codex login
+codex --version
+```
+
+If a Review later fails with a Codex auth error after a long idle period, run any
+`codex` command on the host to refresh the token.
+
+> **Prefer an API key, or want Claude instead?** Set `OPENAI_API_KEY` in
+> `.config/.env` for Codex API-key auth (no `codex login` needed), or switch the
+> `logic` Agent to `vendor: claude` and set `ANTHROPIC_API_KEY` (see
+> [`github-app.md`](./github-app.md) and [`bot-yaml.md`](./bot-yaml.md)).
 
 ## 2. Confirm Apple Container is installed
 
@@ -81,6 +108,7 @@ pass the tool's own flags after the image name:
 ```bash
 container run --rm --entrypoint opensrc sandy-agent --version
 container run --rm --entrypoint rg sandy-agent --version
+container run --rm --entrypoint codex sandy-agent --version
 ```
 
 The worker mounts the per-Review worktree and the host `~/.opensrc` cache into a

@@ -26,7 +26,7 @@ describe('shipped agents/', () => {
     expect(agents.size).toBe(onDisk.length);
     // Phase 1's active Agent is present and well-formed.
     const logic = agents.get('logic');
-    expect(logic?.vendor).toBe('claude');
+    expect(logic?.vendor).toBe('codex');
     expect(logic?.tools.length).toBeGreaterThan(0);
     expect(logic?.systemPrompt.length).toBeGreaterThan(0);
     // Each definition carries the required fields.

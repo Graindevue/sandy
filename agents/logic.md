@@ -1,8 +1,8 @@
 ---
 name: logic
 description: Reviews diffs for logic bugs, broken invariants, and cross-file/cross-repo correctness issues.
-vendor: claude
-model: opus
+vendor: codex
+model: gpt-5.5
 maxIterations: 30
 completionSignal: "</findings>"
 tools: [read_file, rg, tree_sitter_query, git_diff, gh]
