@@ -16,14 +16,19 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
+    "sandcastle": "tsx .sandcastle/main.mts",
     "sandcastle:build-image": "container build --build-arg AGENT_UID=$(id -u) --build-arg AGENT_GID=$(id -g) -t sandy-agent images/agent",
+    "sandcastle:build-agent-image": "container build --dns 1.1.1.1 --dns 8.8.8.8 --build-arg AGENT_UID=$(id -u) --build-arg AGENT_GID=$(id -g) -t sandcastle:sandy -f .sandcastle/Dockerfile .sandcastle",
     "type-check": "pnpm -r type-check",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@ai-hero/sandcastle": "^0.6.4",
     "@biomejs/biome": "^2.0.0",
+    "@sandy/apple-container-provider": "workspace:*",
     "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
     "typescript": "^6.0.0",
     "vitest": "^4.0.0"
   }
