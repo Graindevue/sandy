@@ -143,13 +143,18 @@ function parseRepo(
   const defaultBranch = requireString(repo.defaultBranch, `${where}.defaultBranch`);
   const fullName = `${owner}/${name}`;
 
-  const existingOwner = seenRepos.get(fullName);
+  // Dedup on a case-insensitive key to match the loader's index, which lowercases
+  // owner/name (GitHub slugs are case-insensitive). Two repos differing only in
+  // case would otherwise pass this check and then collide in the index, where one
+  // silently overwrites the other and gets misrouted to the wrong Product.
+  const dedupKey = fullName.toLowerCase();
+  const existingOwner = seenRepos.get(dedupKey);
   if (existingOwner !== undefined) {
     throw new Error(
       `bot.yaml: repo ${fullName} is declared under both product ${JSON.stringify(existingOwner)} and ${JSON.stringify(productSlug)}; a Repo belongs to exactly one Product`,
     );
   }
-  seenRepos.set(fullName, productSlug);
+  seenRepos.set(dedupKey, productSlug);
 
   return { owner, name, fullName, defaultBranch };
 }
@@ -168,5 +173,8 @@ function requireString(value: unknown, where: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`bot.yaml: ${where} is required and must be a non-empty string`);
   }
-  return value;
+  // Return the trimmed value: surrounding whitespace would otherwise flow into
+  // `fullName`, the repo index key, and `git clone --branch <value>`, breaking
+  // matching and cloning.
+  return value.trim();
 }

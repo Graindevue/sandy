@@ -166,6 +166,44 @@ products:
     expect(() => parseBotConfig(yaml)).toThrow(/tony-co\/shared/);
   });
 
+  it('treats Repos that differ only in case as the same (case-insensitive dedup)', () => {
+    // GitHub slugs are case-insensitive and the loader's index lowercases them,
+    // so these must collide here rather than silently overwriting in the index.
+    const yaml = `
+products:
+  - slug: one
+    name: One
+    repos:
+      - owner: Tony-Co
+        name: Shared
+        defaultBranch: main
+  - slug: two
+    name: Two
+    repos:
+      - owner: tony-co
+        name: shared
+        defaultBranch: main
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(/declared under both/i);
+  });
+
+  it('trims surrounding whitespace from Repo fields', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: "  tony-co  "
+        name: "  acme-backend  "
+        defaultBranch: "  main  "
+`;
+    const repo = parseBotConfig(yaml).products[0]?.repos[0];
+    expect(repo?.owner).toBe('tony-co');
+    expect(repo?.name).toBe('acme-backend');
+    expect(repo?.defaultBranch).toBe('main');
+    expect(repo?.fullName).toBe('tony-co/acme-backend');
+  });
+
   it('throws when `agents` is not a list of strings', () => {
     const yaml = `
 products:

@@ -45,15 +45,15 @@ export async function loadAgentDefinitions(
   const agents = new Map<string, AgentDefinition>();
 
   // Defaults must exist — they ship with Sandy.
-  for (const file of await listMarkdownFiles(defaultsDir, { required: true })) {
-    const definition = parseAgentFile(file.path, await readFile(file.path, 'utf8'));
+  for (const path of await listMarkdownFiles(defaultsDir, { required: true })) {
+    const definition = parseAgentFile(path, await readFile(path, 'utf8'));
     agents.set(definition.key, definition);
   }
 
   // The override directory is optional: a fresh instance need not have one.
   if (overridesDir !== undefined) {
-    for (const file of await listMarkdownFiles(overridesDir, { required: false })) {
-      const definition = parseAgentFile(file.path, await readFile(file.path, 'utf8'));
+    for (const path of await listMarkdownFiles(overridesDir, { required: false })) {
+      const definition = parseAgentFile(path, await readFile(path, 'utf8'));
       agents.set(definition.key, definition);
     }
   }
@@ -61,22 +61,17 @@ export async function loadAgentDefinitions(
   return agents;
 }
 
-interface MarkdownFile {
-  /** Agent key: the file name without its `.md` extension. */
-  key: string;
-  /** Absolute path to the file. */
-  path: string;
-}
-
 /**
- * List the `*.md` files directly in `dir`, sorted by name for deterministic
- * loading. A missing `required` directory throws a clear error; a missing
- * optional directory yields an empty list (the instance simply has no overrides).
+ * List the absolute paths of the `*.md` files directly in `dir`, sorted by name
+ * for deterministic loading. A missing `required` directory throws a clear
+ * error; a missing optional directory yields an empty list (the instance simply
+ * has no overrides). The Agent key is derived later, in {@link parseAgentFile},
+ * so it has a single source of truth.
  */
 async function listMarkdownFiles(
   dir: string,
   { required }: { required: boolean },
-): Promise<MarkdownFile[]> {
+): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -89,7 +84,7 @@ async function listMarkdownFiles(
   return entries
     .filter((name) => name.toLowerCase().endsWith('.md'))
     .sort()
-    .map((name) => ({ key: basename(name, '.md'), path: join(dir, name) }));
+    .map((name) => join(dir, name));
 }
 
 /**
@@ -115,7 +110,10 @@ export function parseAgentFile(path: string, contents: string): AgentDefinition 
   }
   const fm = parsed as RawFrontmatter;
 
-  const key = basename(path, '.md');
+  // Strip `.md` case-insensitively to match the case-insensitive directory
+  // filter, so a `.config/agents/` override replaces a default by key regardless
+  // of extension case (ADR 0006's override-by-file-name rule).
+  const key = basename(path).replace(/\.md$/i, '');
 
   return {
     key,
@@ -133,10 +131,10 @@ export function parseAgentFile(path: string, contents: string): AgentDefinition 
 }
 
 function requireString(value: unknown, field: string, path: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`agent file ${path}: \`${field}\` is required and must be a non-empty string`);
   }
-  return value;
+  return value.trim();
 }
 
 function optionalString(value: unknown, field: string, path: string): string | undefined {

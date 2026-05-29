@@ -172,4 +172,25 @@ describe('loadAgentDefinitions', () => {
 
     expect(agents.get('logic')?.model).toBe('sonnet');
   });
+
+  it('derives the key case-insensitively, so a `.MD` override replaces a default', async () => {
+    write(defaultsDir, 'logic.md', LOGIC_MD);
+    // The directory filter accepts `.md` case-insensitively, so the key strip
+    // must too — otherwise this override would add a second Agent instead of
+    // replacing `logic` by key (ADR 0006 override-by-file-name).
+    write(overridesDir, 'logic.MD', LOGIC_MD.replace('model: opus', 'model: haiku'));
+
+    const agents = await loadAgentDefinitions(defaultsDir, overridesDir);
+
+    expect(agents.size).toBe(1);
+    expect(agents.get('logic')?.model).toBe('haiku');
+  });
+
+  it('trims surrounding whitespace from frontmatter string fields', async () => {
+    write(defaultsDir, 'logic.md', LOGIC_MD.replace('model: opus', 'model: "  opus  "'));
+
+    const agents = await loadAgentDefinitions(defaultsDir);
+
+    expect(agents.get('logic')?.model).toBe('opus');
+  });
 });
