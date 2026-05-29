@@ -43,9 +43,10 @@ function loadDotenv(filePath: string) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
     if (!match) continue;
     const [, key, rawValue] = match;
-    if (process.env[key!] !== undefined) continue;
-    const value = rawValue!.replace(/^['"]|['"]$/g, '');
-    process.env[key!] = value;
+    if (key === undefined || rawValue === undefined) continue;
+    if (process.env[key] !== undefined) continue;
+    const value = rawValue.replace(/^['"]|['"]$/g, '');
+    process.env[key] = value;
   }
 }
 loadDotenv('.sandcastle/.env');

@@ -7,7 +7,7 @@
       "!**/build",
       "!**/node_modules",
       "!**/.pnpm-store",
-      "!**/.sandcastle",
+      "!**/.sandcastle/worktrees",
       "!**/.config",
       "!**/.convex",
       "!**/.turbo",
