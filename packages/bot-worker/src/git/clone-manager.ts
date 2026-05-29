@@ -54,12 +54,12 @@ export interface CloneManagerOptions {
    * Resolve the git URL to clone a Repo from. Injected so production can build an
    * authenticated GitHub App URL (issue #6) while tests point at a local origin.
    */
-  cloneUrl: (repo: RepoIdentity) => string;
+  cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
 }
 
 export class CloneManager {
   readonly #baseDir: string;
-  readonly #cloneUrl: (repo: RepoIdentity) => string;
+  readonly #cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
 
   constructor(options: CloneManagerOptions) {
     this.#baseDir = options.baseDir;
@@ -91,7 +91,7 @@ export class CloneManager {
       'clone',
       '--branch',
       repo.defaultBranch,
-      this.#cloneUrl(repo),
+      await this.#cloneUrl(repo),
       dest,
     ]);
     return dest;

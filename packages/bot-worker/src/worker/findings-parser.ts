@@ -1,0 +1,114 @@
+import type { Confidence, Finding, FindingsPayload, Severity } from '@sandy/shared-types';
+
+const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/i;
+const SEVERITIES = new Set<Severity>(['P0', 'P1', 'P2']);
+const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
+
+/**
+ * Extract and validate the structured payload an Agent emits. This intentionally
+ * uses small runtime checks instead of trusting TypeScript types: the input is
+ * model-generated text.
+ */
+export function parseFindingsPayload(stdout: string): FindingsPayload {
+  const match = FINDINGS_BLOCK.exec(stdout);
+  if (match === null) {
+    throw new Error('Agent output did not contain a <findings>...</findings> block');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1] ?? '');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Agent <findings> block is not valid JSON: ${detail}`);
+  }
+
+  return validatePayload(parsed);
+}
+
+function validatePayload(value: unknown): FindingsPayload {
+  const object = requireObject(value, 'FindingsPayload');
+  if (!Array.isArray(object.findings)) {
+    throw new Error('FindingsPayload.findings must be an array');
+  }
+
+  const payload: FindingsPayload = {
+    findings: object.findings.map((finding, index) => validateFinding(finding, index)),
+  };
+
+  if (object.summary !== undefined) {
+    if (typeof object.summary !== 'string') {
+      throw new Error('FindingsPayload.summary must be a string when provided');
+    }
+    payload.summary = object.summary;
+  }
+
+  return payload;
+}
+
+function validateFinding(value: unknown, index: number): Finding {
+  const where = `findings[${index}]`;
+  const object = requireObject(value, where);
+  const location = requireObject(object.location, `${where}.location`);
+
+  const lineStart = requirePositiveInteger(location.lineStart, `${where}.location.lineStart`);
+  const lineEnd = requirePositiveInteger(location.lineEnd, `${where}.location.lineEnd`);
+  if (lineEnd < lineStart) {
+    throw new Error(`${where}.location.lineEnd must be greater than or equal to lineStart`);
+  }
+
+  const finding: Finding = {
+    severity: requireSeverity(object.severity, `${where}.severity`),
+    confidence: requireConfidence(object.confidence, `${where}.confidence`),
+    location: {
+      repo: requireString(location.repo, `${where}.location.repo`),
+      path: requireString(location.path, `${where}.location.path`),
+      lineStart,
+      lineEnd,
+    },
+    summary: requireString(object.summary, `${where}.summary`),
+    evidence: requireString(object.evidence, `${where}.evidence`),
+    category: requireString(object.category, `${where}.category`),
+  };
+
+  if (object.suggestedFix !== undefined) {
+    finding.suggestedFix = requireString(object.suggestedFix, `${where}.suggestedFix`);
+  }
+
+  return finding;
+}
+
+function requireObject(value: unknown, where: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${where} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, where: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${where} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(value: unknown, where: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${where} must be a positive integer`);
+  }
+  return value;
+}
+
+function requireSeverity(value: unknown, where: string): Severity {
+  if (!SEVERITIES.has(value as Severity)) {
+    throw new Error(`${where} must be one of P0, P1, P2`);
+  }
+  return value as Severity;
+}
+
+function requireConfidence(value: unknown, where: string): Confidence {
+  if (!CONFIDENCES.has(value as Confidence)) {
+    throw new Error(`${where} must be an integer from 0 to 5`);
+  }
+  return value as Confidence;
+}

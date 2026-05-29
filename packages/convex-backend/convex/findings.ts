@@ -25,6 +25,19 @@ export const recordFinding = mutation({
   },
 });
 
+/** Attach the GitHub inline comment id after a persisted Finding is posted. */
+export const markPosted = mutation({
+  args: {
+    findingId: v.id('findings'),
+    githubCommentId: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { findingId, githubCommentId }) => {
+    await ctx.db.patch(findingId, { githubCommentId });
+    return null;
+  },
+});
+
 /** All Findings recorded for a PR, newest first. */
 export const listForPr = query({
   args: { pullRequestId: v.id('pullRequests') },

@@ -1,16 +1,35 @@
+import { readFile, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ConvexHttpClient } from 'convex/browser';
+import { ConvexClient, ConvexHttpClient } from 'convex/browser';
+import { ConfigLoader } from './config/loader.js';
+import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
+import { CloneManager } from './git/clone-manager.js';
+import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
+import { ReviewClaimant } from './worker/claimant.js';
+import { ConvexExecutionStore } from './worker/execution-store.js';
+import { PullRequestPoster } from './worker/poster.js';
+import { ReviewExecutor } from './worker/review-executor.js';
+import { SandcastleRunner } from './worker/sandcastle-runner.js';
 
 /** Resolved worker configuration, read once from the environment at startup. */
 export interface WorkerConfig {
   webhookSecret: string;
   convexUrl: string;
+  githubAppId: string;
+  githubPrivateKeyPath: string;
   port: number;
+  agentImage: string;
+  maxChangedLines: number;
+  agentEnv: Record<string, string>;
 }
 
 const DEFAULT_PORT = 3007;
+const DEFAULT_AGENT_IMAGE = 'sandy-agent';
+const DEFAULT_MAX_CHANGED_LINES = 5000;
+const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
 
 /**
  * Read and validate the worker's configuration from `env`. Throws with a clear
@@ -26,10 +45,35 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   if (!convexUrl) {
     throw new Error('CONVEX_URL is required');
   }
+  const githubAppId = env.GITHUB_APP_ID;
+  if (!githubAppId) {
+    throw new Error('GITHUB_APP_ID is required');
+  }
+  const githubPrivateKeyPath = env.GITHUB_APP_PRIVATE_KEY_PATH;
+  if (!githubPrivateKeyPath) {
+    throw new Error('GITHUB_APP_PRIVATE_KEY_PATH is required');
+  }
 
   const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
+  const maxChangedLines =
+    env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
+      ? DEFAULT_MAX_CHANGED_LINES
+      : parsePositiveInt(env.SANDY_REVIEW_MAX_CHANGED_LINES, 'SANDY_REVIEW_MAX_CHANGED_LINES');
+  const agentImage =
+    env.SANDY_AGENT_IMAGE === undefined || env.SANDY_AGENT_IMAGE.trim().length === 0
+      ? DEFAULT_AGENT_IMAGE
+      : env.SANDY_AGENT_IMAGE.trim();
 
-  return { webhookSecret, convexUrl, port };
+  return {
+    webhookSecret,
+    convexUrl,
+    githubAppId,
+    githubPrivateKeyPath,
+    port,
+    agentImage,
+    maxChangedLines,
+    agentEnv: pickAgentEnv(env),
+  };
 }
 
 /**
@@ -49,18 +93,130 @@ function parsePort(raw: string): number {
   return port;
 }
 
-/**
- * Worker entry point: load config, build the Convex client + sink, and start the
- * webhook server. The job claimant and Sandcastle Agent run are issue #6 and are
- * intentionally not started here — this process is only the webhook front door.
- */
+function parsePositiveInt(raw: string, name: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name} must be a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  const value = Number(raw);
+  if (value < 1) {
+    throw new Error(`${name} must be greater than 0, got ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
+
+function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const key of AGENT_ENV_KEYS) {
+    const value = env[key];
+    if (value !== undefined) {
+      picked[key] = value;
+    }
+  }
+  return picked;
+}
+
+/** Worker entry point: start the webhook front door and the ReviewJob execution loop. */
 export async function main(): Promise<void> {
+  loadInstanceEnv(process.cwd(), process.env);
   const config = loadConfig(process.env);
-  const client = new ConvexHttpClient(config.convexUrl);
-  const sink = new ConvexSink(client);
+  const httpClient = new ConvexHttpClient(config.convexUrl);
+  const reactiveClient = new ConvexClient(config.convexUrl);
+  const sink = new ConvexSink(httpClient);
+  const repoRoot = process.cwd();
+  const configLoader = await ConfigLoader.create(defaultConfigLoaderOptions(repoRoot));
+  configLoader.installSignalHandler();
+  const github = new GitHubAppClient({
+    appId: config.githubAppId,
+    privateKey: await readPrivateKey(repoRoot, config.githubPrivateKeyPath),
+  });
+  const cloneManager = new CloneManager({
+    baseDir: defaultCloneBaseDir(process.env),
+    cloneUrl: (repo) => github.cloneUrlForRepo(repo),
+  });
+  const poster = new PullRequestPoster(github);
+  const executor = new ReviewExecutor({
+    store: new ConvexExecutionStore(reactiveClient),
+    cloneManager,
+    diffInspector: github,
+    runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
+    poster,
+    maxChangedLines: config.maxChangedLines,
+    resolveAgent: (repo, agentKey) => {
+      const resolved = configLoader.resolveForRepo(repo.owner, repo.name);
+      if (resolved === null) {
+        return null;
+      }
+      return configLoader.config.agents.get(agentKey) ?? null;
+    },
+  });
+  const claimant = new ReviewClaimant({
+    client: reactiveClient,
+    handleClaimedJob: (jobId) => executor.executeClaimedJob(jobId),
+  });
+  claimant.start();
 
   await startWebhookServer(config.port, { webhookSecret: config.webhookSecret, sink });
   console.info(`Sandy webhook server listening on :${config.port}`);
+}
+
+function loadInstanceEnv(repoRoot: string, env: NodeJS.ProcessEnv): void {
+  const path = join(repoRoot, '.config', '.env');
+  let contents: string;
+  try {
+    contents = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (isNotFound(error)) {
+      return;
+    }
+    throw error;
+  }
+
+  for (const line of contents.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+    const equals = trimmed.indexOf('=');
+    if (equals === -1) {
+      continue;
+    }
+    const key = trimmed.slice(0, equals).trim();
+    const value = unquoteEnvValue(trimmed.slice(equals + 1).trim());
+    if (key.length > 0 && env[key] === undefined) {
+      env[key] = value;
+    }
+  }
+}
+
+function unquoteEnvValue(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function readPrivateKey(repoRoot: string, path: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    readFile(resolve(repoRoot, path), 'utf8', (error, contents) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolvePromise(contents);
+      }
+    });
+  });
+}
+
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'ENOENT'
+  );
 }
 
 /**

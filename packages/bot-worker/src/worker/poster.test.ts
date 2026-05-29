@@ -1,0 +1,124 @@
+import type { Finding } from '@sandy/shared-types';
+import { describe, expect, it } from 'vitest';
+import { PullRequestPoster } from './poster.js';
+
+const baseFinding: Finding = {
+  severity: 'P1',
+  confidence: 4,
+  location: {
+    repo: 'acme/widget',
+    path: 'src/cache.ts',
+    lineStart: 22,
+    lineEnd: 24,
+  },
+  summary: 'The cache key ignores the tenant id.',
+  evidence: 'The lookup only uses userId, so two tenants can collide.',
+  suggestedFix: 'Include tenantId in the key.',
+  category: 'logic',
+};
+
+describe('PullRequestPoster', () => {
+  it('posts inline comments with the load-bearing finding trailer', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    const posted = await poster.postReviewResult({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      agentKey: 'logic',
+      summary: 'One issue found.',
+      findings: [{ id: 'finding-1', finding: baseFinding }],
+    });
+
+    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(github.reviewComments).toEqual([
+      {
+        owner: 'acme',
+        repo: 'widget',
+        pullNumber: 12,
+        commitId: 'abc123',
+        path: 'src/cache.ts',
+        body: expect.stringContaining('<!-- bot:finding=finding-1 -->'),
+        line: 24,
+        side: 'RIGHT',
+        startLine: 22,
+        startSide: 'RIGHT',
+      },
+    ]);
+    expect(github.reviewComments[0]?.body).toContain('The cache key ignores the tenant id.');
+    expect(github.issueComments[0]?.body).toContain('Sandy logic review posted 1 finding.');
+  });
+
+  it('posts a clean no-issues summary when there are no findings', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    const posted = await poster.postReviewResult({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      agentKey: 'logic',
+      summary: 'No correctness issues were found.',
+      findings: [],
+    });
+
+    expect(posted).toEqual([]);
+    expect(github.reviewComments).toEqual([]);
+    expect(github.issueComments).toEqual([
+      {
+        owner: 'acme',
+        repo: 'widget',
+        issueNumber: 12,
+        body: 'Sandy logic review: no issues found.\n\nNo correctness issues were found.',
+      },
+    ]);
+  });
+
+  it('posts a scope-decline summary for oversized diffs', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    await poster.postScopeDeclined({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      changedLines: 5001,
+      maxChangedLines: 5000,
+    });
+
+    expect(github.reviewComments).toEqual([]);
+    expect(github.issueComments[0]?.body).toContain('request a smaller scope');
+    expect(github.issueComments[0]?.body).toContain('5,001 changed lines');
+  });
+});
+
+class FakeGitHubReviewPoster {
+  reviewComments: ReviewCommentInput[] = [];
+  issueComments: IssueCommentInput[] = [];
+  #nextCommentId = 101;
+
+  async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
+    this.reviewComments.push(input);
+    return { id: this.#nextCommentId++ };
+  }
+
+  async createIssueComment(input: IssueCommentInput): Promise<{ id: number }> {
+    this.issueComments.push(input);
+    return { id: this.#nextCommentId++ };
+  }
+}
+
+interface ReviewCommentInput {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  commitId: string;
+  path: string;
+  body: string;
+  line: number;
+  side: 'RIGHT';
+  startLine?: number;
+  startSide?: 'RIGHT';
+}
+
+interface IssueCommentInput {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  body: string;
+}
