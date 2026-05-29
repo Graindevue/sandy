@@ -48,11 +48,15 @@ export class ReviewCancellationCoordinator implements ReviewCancellationRegistry
 
   cancelReviewJobs(jobIds: readonly string[]): void {
     for (const jobId of jobIds) {
-      this.#superseded.add(jobId);
-      const controller = this.#controllers.get(jobId);
-      if (controller !== undefined && !controller.signal.aborted) {
-        controller.abort(new ReviewSupersededError(jobId));
-      }
+      this.#cancelReviewJob(jobId);
+    }
+  }
+
+  #cancelReviewJob(jobId: string): void {
+    this.#superseded.add(jobId);
+    const controller = this.#controllers.get(jobId);
+    if (controller !== undefined && !controller.signal.aborted) {
+      controller.abort(new ReviewSupersededError(jobId));
     }
   }
 }

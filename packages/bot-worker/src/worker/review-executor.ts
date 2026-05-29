@@ -168,21 +168,21 @@ export class ReviewExecutor {
       const agent = this.#requiredAgent(repo, agentKey);
       const target = pullRequestTarget(context);
       const changedLines = await this.#diffInspector.changedLineCount(target);
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       if (changedLines > this.#maxChangedLines) {
-        await this.#throwIfSuperseded(jobId, cancellationSignal);
+        await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
         await this.#completeScopeDecline(jobId, target, changedLines);
         return;
       }
 
       await this.#cloneManager.ensureCloned(repo);
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       worktree = await this.#cloneManager.createWorktree(repo, {
         reviewJobId: context.job.id,
         sha: context.job.headSha,
       });
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
@@ -194,7 +194,7 @@ export class ReviewExecutor {
         runInput.signal = cancellationSignal;
       }
       const stdout = await this.#runner.runLogicAgent(runInput);
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const payload = parseFindingsPayload(stdout);
       const agentFinishedAt = this.#now();
 
@@ -208,9 +208,9 @@ export class ReviewExecutor {
       });
       agentRunRecorded = true;
 
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const persistedFindings = await this.#recordFindings(context, agentKey, payload.findings);
-      await this.#throwIfSuperseded(jobId, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#postReviewResult(target, agentKey, persistedFindings, payload.summary);
 
       await this.#store.markCompleted(jobId, this.#now());
@@ -319,7 +319,7 @@ export class ReviewExecutor {
     });
   }
 
-  async #throwIfSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
+  async #throwIfCancelledOrSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const status = await this.#store.getReviewJobStatus(jobId);
     signal?.throwIfAborted();

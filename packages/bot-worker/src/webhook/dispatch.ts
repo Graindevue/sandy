@@ -2,7 +2,7 @@ import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
-import type { ReviewSink } from './sink.js';
+import type { EnqueueInput, ReviewSink } from './sink.js';
 import { evaluateTrigger } from './trigger-evaluator.js';
 
 /** The message Sandy surfaces when it declines a fork PR (PRD documented limitation). */
@@ -116,26 +116,48 @@ export async function dispatchEvent(
     agentKeys: ['logic'],
   };
 
-  if (trigger === 'push') {
-    const result = await sink.enqueueSupersedingReviewJob(enqueueInput);
-    options.reviewCanceller?.cancelReviewJobs(result.supersededJobIds);
-    logger.info(
-      `enqueued ReviewJob ${result.reviewJobId} for ${fullName(repo)}#${pr.number} ` +
-        `(trigger=${trigger}, superseded=${result.supersededJobIds.length})`,
-    );
+  const enqueueResult = await enqueueReviewForTrigger(sink, enqueueInput, options.reviewCanceller);
+  logger.info(enqueueLogMessage(repo, pr, trigger, enqueueResult));
+  if (enqueueResult.supersededJobIds !== undefined) {
     return {
       action: 'enqueued',
-      reviewJobId: result.reviewJobId,
+      reviewJobId: enqueueResult.reviewJobId,
       trigger,
-      supersededJobIds: result.supersededJobIds,
+      supersededJobIds: enqueueResult.supersededJobIds,
     };
   }
 
-  const reviewJobId = await sink.enqueueReviewJob(enqueueInput);
-  logger.info(
-    `enqueued ReviewJob ${reviewJobId} for ${fullName(repo)}#${pr.number} (trigger=${trigger})`,
-  );
-  return { action: 'enqueued', reviewJobId, trigger };
+  return { action: 'enqueued', reviewJobId: enqueueResult.reviewJobId, trigger };
+}
+
+async function enqueueReviewForTrigger(
+  sink: ReviewSink,
+  input: EnqueueInput,
+  reviewCanceller: ReviewCanceller | undefined,
+): Promise<{ reviewJobId: string; supersededJobIds?: string[] }> {
+  if (input.trigger !== 'push') {
+    return { reviewJobId: await sink.enqueueReviewJob(input) };
+  }
+
+  const result = await sink.enqueueSupersedingReviewJob(input);
+  reviewCanceller?.cancelReviewJobs(result.supersededJobIds);
+  return {
+    reviewJobId: result.reviewJobId,
+    supersededJobIds: result.supersededJobIds,
+  };
+}
+
+function enqueueLogMessage(
+  repo: RepoRef,
+  pr: PullRequestFacts,
+  trigger: ReviewTrigger,
+  result: { reviewJobId: string; supersededJobIds?: string[] },
+): string {
+  const prefix = `enqueued ReviewJob ${result.reviewJobId} for ${fullName(repo)}#${pr.number}`;
+  if (result.supersededJobIds === undefined) {
+    return `${prefix} (trigger=${trigger})`;
+  }
+  return `${prefix} (trigger=${trigger}, superseded=${result.supersededJobIds.length})`;
 }
 
 function upsertPr(
