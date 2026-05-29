@@ -39,9 +39,10 @@ function loadDotenv(filePath: string) {
     const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
     if (!match) continue;
     const [, key, rawValue] = match;
-    if (process.env[key!] !== undefined) continue;
-    const value = rawValue!.replace(/^['"]|['"]$/g, '');
-    process.env[key!] = value;
+    if (key === undefined || rawValue === undefined) continue;
+    if (process.env[key] !== undefined) continue;
+    const value = rawValue.replace(/^['"]|['"]$/g, '');
+    process.env[key] = value;
   }
 }
 loadDotenv('.sandcastle/.env');
@@ -138,6 +139,20 @@ const hooks = {
 
 const copyToWorktree: string[] = [];
 
+type PlannedIssue = {
+  readonly id: string;
+  readonly title: string;
+  readonly branch: string;
+};
+
+function issueAt(issues: readonly PlannedIssue[], index: number): PlannedIssue {
+  const issue = issues[index];
+  if (issue === undefined) {
+    throw new Error(`Missing planned issue for settled outcome at index ${index}.`);
+  }
+  return issue;
+}
+
 // Repository branching policy (AGENTS.md): work targets staging only.
 // Never target or merge into main.
 //
@@ -174,7 +189,7 @@ function cleanReusedWorktree(branch: string) {
   const sanitized = branch.replace(/[/\\:*?"<>|]/g, '-');
   const worktreePath = path.join('.sandcastle', 'worktrees', sanitized);
   if (!existsSync(worktreePath)) return;
-  console.log(`Cleaning reused worktree at ${worktreePath}`);
+  console.info(`Cleaning reused worktree at ${worktreePath}`);
   try {
     execFileSync('git', ['-C', worktreePath, 'reset', '--hard', 'HEAD'], {
       stdio: 'inherit',
@@ -208,7 +223,7 @@ if (currentBranch !== TARGET_BRANCH) {
 // ---------------------------------------------------------------------------
 
 for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
-  console.log(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
+  console.info(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
 
   // -------------------------------------------------------------------------
   // Phase 1: Plan
@@ -242,23 +257,27 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // Extract the <plan>…</plan> block from the agent's stdout.
   const planMatch = plan.stdout.match(/<plan>([\s\S]*?)<\/plan>/);
   if (!planMatch) {
-    throw new Error('Planning agent did not produce a <plan> tag.\n\n' + plan.stdout);
+    throw new Error(`Planning agent did not produce a <plan> tag.\n\n${plan.stdout}`);
+  }
+  const planJson = planMatch[1];
+  if (planJson === undefined) {
+    throw new Error(`Planning agent produced an empty <plan> capture.\n\n${plan.stdout}`);
   }
 
   // The plan JSON contains an array of issues, each with id, title, branch.
-  const { issues } = JSON.parse(planMatch[1]!) as {
-    issues: { id: string; title: string; branch: string }[];
+  const { issues } = JSON.parse(planJson) as {
+    issues: PlannedIssue[];
   };
 
   if (issues.length === 0) {
     // No unblocked work — either everything is done or everything is blocked.
-    console.log('No unblocked issues to work on. Exiting.');
+    console.info('No unblocked issues to work on. Exiting.');
     break;
   }
 
-  console.log(`Planning complete. ${issues.length} issue(s) to work in parallel:`);
+  console.info(`Planning complete. ${issues.length} issue(s) to work in parallel:`);
   for (const issue of issues) {
-    console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
+    console.info(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
   }
 
   // -------------------------------------------------------------------------
@@ -341,7 +360,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             `Publisher did not produce a <pr_url> tag for ${issue.branch}.\n\n${publish.stdout}`,
           );
         }
-        const prUrl = prUrlMatch[1]!.trim();
+        const prUrlText = prUrlMatch[1];
+        if (prUrlText === undefined) {
+          throw new Error(
+            `Publisher produced an empty <pr_url> capture for ${issue.branch}.\n\n${publish.stdout}`,
+          );
+        }
+        const prUrl = prUrlText.trim();
 
         const reviewGate = await sandbox.run({
           name: 'review-gate',
@@ -383,23 +408,24 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // Log any agents that threw (network error, sandbox crash, etc.).
   for (const [i, outcome] of settled.entries()) {
     if (outcome.status === 'rejected') {
-      console.error(`  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`);
+      const issue = issueAt(issues, i);
+      console.error(`  ✗ ${issue.id} (${issue.branch}) failed: ${outcome.reason}`);
     }
   }
 
   const completedBranches = settled
-    .map((outcome, i) => ({ outcome, issue: issues[i]! }))
+    .map((outcome, i) => ({ outcome, issue: issueAt(issues, i) }))
     .filter(
       (entry) => entry.outcome.status === 'fulfilled' && entry.outcome.value.commits.length > 0,
     )
     .map((entry) => entry.issue.branch);
 
-  console.log(
+  console.info(
     `\nIteration complete. ${completedBranches.length} branch(es) ready for human review:`,
   );
   for (const branch of completedBranches) {
-    console.log(`  ${branch}`);
+    console.info(`  ${branch}`);
   }
 }
 
-console.log('\nAll done.');
+console.info('\nAll done.');

@@ -8,28 +8,30 @@ import {
   stuckReviewJobCutoff,
 } from './reviewJobReaper.js';
 
+type ReapStuckJobsReference = FunctionReference<'mutation', 'internal', { now?: number }, number>;
+
 export const reapStuckJobs = internalMutation({
   args: { now: v.optional(v.number()) },
   returns: v.number(),
   handler: async (ctx, { now }) => {
-    const finishedAt = now ?? Date.now();
-    const cutoff = stuckReviewJobCutoff(finishedAt);
-    const stuckJobs = await ctx.db
+    const reapedAt = now ?? Date.now();
+    const cutoff = stuckReviewJobCutoff(reapedAt);
+    const jobsToReap = await ctx.db
       .query('reviewJobs')
       .withIndex('by_status_and_claimed_at', (q) =>
         q.eq('status', 'running').lt('claimedAt', cutoff),
       )
       .take(REAP_STUCK_REVIEW_JOBS_BATCH_SIZE);
 
-    for (const job of stuckJobs) {
+    for (const job of jobsToReap) {
       await ctx.db.patch(job._id, {
         status: 'failed',
-        finishedAt,
+        finishedAt: reapedAt,
         error: STUCK_REVIEW_JOB_ERROR,
       });
     }
 
-    return stuckJobs.length;
+    return jobsToReap.length;
   },
 });
 
@@ -37,7 +39,7 @@ const crons = cronJobs();
 
 const internalRefs = internal as unknown as {
   crons: {
-    reapStuckJobs: FunctionReference<'mutation'>;
+    reapStuckJobs: ReapStuckJobsReference;
   };
 };
 

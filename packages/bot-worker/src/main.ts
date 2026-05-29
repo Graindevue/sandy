@@ -35,6 +35,14 @@ const DEFAULT_MAX_CHANGED_LINES = 5000;
 const DEFAULT_MAX_CONCURRENT_JOBS = 1;
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
 
+type AppleContainerProviderModule = {
+  cleanupOrphanedAppleContainers: (options: { namePrefix: string }) => Promise<{
+    found: string[];
+    deleted: string[];
+    failed: readonly { name: string; error: string }[];
+  }>;
+};
+
 /**
  * Read and validate the worker's configuration from `env`. Throws with a clear
  * message if a required variable is missing or `PORT` is not a valid port, so a
@@ -180,13 +188,9 @@ export async function main(): Promise<void> {
 
 async function cleanupWorkerAppleContainers(): Promise<void> {
   const packageName = '@sandy/apple-container-provider';
-  const { cleanupOrphanedAppleContainers } = (await import(packageName)) as {
-    cleanupOrphanedAppleContainers: (options: { namePrefix: string }) => Promise<{
-      found: string[];
-      deleted: string[];
-      failed: readonly { name: string; error: string }[];
-    }>;
-  };
+  const { cleanupOrphanedAppleContainers } = (await import(
+    packageName
+  )) as AppleContainerProviderModule;
 
   try {
     const result = await cleanupOrphanedAppleContainers({
@@ -201,12 +205,12 @@ async function cleanupWorkerAppleContainers(): Promise<void> {
       );
     }
   } catch (error) {
-    console.warn(
-      `Skipping Sandy worker container startup cleanup: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    console.warn(`Skipping Sandy worker container startup cleanup: ${errorMessage(error)}`);
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function loadInstanceEnv(repoRoot: string, env: NodeJS.ProcessEnv): void {

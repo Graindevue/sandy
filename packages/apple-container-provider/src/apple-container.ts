@@ -439,6 +439,10 @@ export interface CleanupOrphanedAppleContainersResult {
   readonly failed: readonly { name: string; error: string }[];
 }
 
+type OrphanedContainerDeleteResult =
+  | { readonly deleted: true; readonly name: string }
+  | { readonly deleted: false; readonly name: string; readonly error: string };
+
 /**
  * Reconcile containers left behind by an uncatchable worker crash, such as
  * SIGKILL from `kill -9`. Call this once during worker startup before new jobs
@@ -452,25 +456,36 @@ export async function cleanupOrphanedAppleContainers(
 
   const { stdout } = await execFileAsync('container', ['list', '--format', 'json', '--all']);
   const found = parseContainerListNames(stdout).filter((name) => name.startsWith(namePrefix));
-  const settled = await Promise.all(
-    found.map(async (name) => {
-      try {
-        await execFileAsync('container', ['delete', '-f', name]);
-        return { name };
-      } catch (error) {
-        return {
-          name,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }),
-  );
+  const deleteResults = await Promise.all(found.map(deleteOrphanedContainer));
+
+  const deleted: string[] = [];
+  const failed: { name: string; error: string }[] = [];
+  for (const result of deleteResults) {
+    if (result.deleted) {
+      deleted.push(result.name);
+    } else {
+      failed.push({ name: result.name, error: result.error });
+    }
+  }
 
   return {
     found,
-    deleted: settled.filter((item) => !('error' in item)).map((item) => item.name),
-    failed: settled.filter((item): item is { name: string; error: string } => 'error' in item),
+    deleted,
+    failed,
   };
+}
+
+async function deleteOrphanedContainer(name: string): Promise<OrphanedContainerDeleteResult> {
+  try {
+    await execFileAsync('container', ['delete', '-f', name]);
+    return { deleted: true, name };
+  } catch (error) {
+    return { deleted: false, name, error: errorMessage(error) };
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseContainerListNames(stdout: string): string[] {

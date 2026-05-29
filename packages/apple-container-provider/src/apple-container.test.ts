@@ -48,6 +48,8 @@ type FakeProcOptions = {
   exitCode?: number | null;
   /** POSIX signal name, or null for a normal exit. */
   signal?: NodeJS.Signals | null;
+  /** Whether to emit the close event automatically. */
+  autoClose?: boolean;
 };
 
 /**
@@ -76,12 +78,14 @@ const fakeProc = (opts: FakeProcOptions = {}): ChildProcess => {
     proc.stderr.end(opts.stderr ?? '');
   });
 
-  setImmediate(() => {
-    // Use `in` so callers can pass exitCode: null to model a signal kill —
-    // `?? 0` would coerce explicit null back to 0 and mask the bug we test.
-    const code = 'exitCode' in opts ? opts.exitCode : 0;
-    proc.emit('close', code, opts.signal ?? null);
-  });
+  if (opts.autoClose !== false) {
+    setImmediate(() => {
+      // Use `in` so callers can pass exitCode: null to model a signal kill —
+      // `?? 0` would coerce explicit null back to 0 and mask the bug we test.
+      const code = 'exitCode' in opts ? opts.exitCode : 0;
+      proc.emit('close', code, opts.signal ?? null);
+    });
+  }
 
   return proc;
 };
@@ -596,7 +600,10 @@ describe('appleContainer()', () => {
     const runCall = mockExecFile.mock.calls.find(
       ([, args]) => Array.isArray(args) && args[0] === 'run',
     );
-    const runArgs = runCall![1] as string[];
+    if (runCall === undefined) {
+      throw new Error('Expected `container run` to be called');
+    }
+    const runArgs = runCall[1] as string[];
     expect(runArgs).toContain('--dns');
     expect(runArgs).toContain('1.1.1.1');
     expect(runArgs).toContain('8.8.8.8');
@@ -643,8 +650,10 @@ describe('appleContainer()', () => {
       if (cmd !== 'container' || !Array.isArray(args)) return false;
       return args[0] === 'exec' && args.includes('-i') && args.includes('cat > "$1"');
     });
-    expect(copySpawn).toBeDefined();
-    const spawnArgs = copySpawn![1] as string[];
+    if (copySpawn === undefined) {
+      throw new Error('Expected copyFileIn to spawn `container exec`');
+    }
+    const spawnArgs = copySpawn[1] as string[];
     expect(spawnArgs).toEqual(
       expect.arrayContaining([
         'exec',
@@ -691,8 +700,10 @@ describe('appleContainer()', () => {
       if (cmd !== 'container' || !Array.isArray(args)) return false;
       return args[0] === 'exec' && args.includes('cat -- "$1"');
     });
-    expect(copySpawn).toBeDefined();
-    const spawnArgs = copySpawn![1] as string[];
+    if (copySpawn === undefined) {
+      throw new Error('Expected copyFileOut to spawn `container exec`');
+    }
+    const spawnArgs = copySpawn[1] as string[];
     expect(spawnArgs).toContain('/sandbox/output.txt');
     expect(spawnArgs).not.toContain('-i');
 
@@ -758,8 +769,10 @@ describe('appleContainer()', () => {
           (a: string) => typeof a === 'string' && a.includes('mkdir') && a.includes('chown'),
         ),
     );
-    expect(mkdirCall).toBeDefined();
-    const mkdirArgs = mkdirCall![1] as string[];
+    if (mkdirCall === undefined) {
+      throw new Error('Expected parent directory creation to run in the container');
+    }
+    const mkdirArgs = mkdirCall[1] as string[];
     expect(mkdirArgs).toContain('--user');
     expect(mkdirArgs[mkdirArgs.indexOf('--user') + 1]).toBe('0:0');
     expect(mkdirArgs).toContain('/home/agent/.codex');
@@ -824,7 +837,7 @@ describe('appleContainer()', () => {
 
   it('copyFileIn rejects when the host file cannot be read', async () => {
     mockCreateFlow();
-    mockSpawn.mockImplementation(() => fakeProc({ exitCode: 0 }));
+    mockSpawn.mockImplementation(() => fakeProc({ autoClose: false }));
 
     const provider = appleContainer();
     const handle = await provider.create({
