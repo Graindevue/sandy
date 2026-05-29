@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CommentEvent, ParsedEvent, PullRequestEvent } from './events.js';
+import type { CommentEvent, ParsedEvent, PullRequestEvent, PushEvent } from './events.js';
 import { parseEvent, parseEventForDispatch, prStateForEvent } from './parse.js';
 
 /**
@@ -65,6 +65,14 @@ function issueCommentPayload(action: string, body: string) {
   };
 }
 
+function pushPayload(ref = 'refs/heads/feature') {
+  return {
+    repository: REPO,
+    ref,
+    after: 'abc123',
+  };
+}
+
 function expectComment(event: ParsedEvent): CommentEvent {
   expect(event.kind).toBe('comment');
   return event as CommentEvent;
@@ -73,6 +81,11 @@ function expectComment(event: ParsedEvent): CommentEvent {
 function expectPullRequest(event: ParsedEvent): PullRequestEvent {
   expect(event.kind).toBe('pull_request');
   return event as PullRequestEvent;
+}
+
+function expectPush(event: ParsedEvent): PushEvent {
+  expect(event.kind).toBe('push');
+  return event as PushEvent;
 }
 
 describe('parseEvent — pull_request_review_comment action (finding #2)', () => {
@@ -163,6 +176,44 @@ describe('parseEventForDispatch — issue_comment hydration', () => {
       kind: 'ignored',
       reason: 'issue_comment: pull_request resolution failed: GitHub is unavailable',
     });
+  });
+});
+
+describe('parseEventForDispatch — push hydration', () => {
+  it('resolves a branch push to the matching open PR facts', async () => {
+    const resolved: Array<{
+      repo: { owner: string; name: string };
+      branch: string;
+      headSha: string;
+    }> = [];
+    const event = await parseEventForDispatch('push', pushPayload(), {
+      async resolvePullRequest() {
+        return null;
+      },
+      async resolvePullRequestForPush(repo, branch, headSha) {
+        resolved.push({ repo, branch, headSha });
+        return expectPullRequest(parseEvent('pull_request', pullRequestPayload('synchronize'))).pr;
+      },
+    });
+
+    const push = expectPush(event);
+    expect(push.pr.headSha).toBe('abc123');
+    expect(resolved).toEqual([
+      { repo: { owner: 'tony-co', name: 'sandy' }, branch: 'feature', headSha: 'abc123' },
+    ]);
+  });
+
+  it('ignores a push when no open PR maps to the branch head', async () => {
+    const event = await parseEventForDispatch('push', pushPayload(), {
+      async resolvePullRequest() {
+        return null;
+      },
+      async resolvePullRequestForPush() {
+        return null;
+      },
+    });
+
+    expect(event).toEqual({ kind: 'ignored', reason: 'push: no open pull request for head' });
   });
 });
 

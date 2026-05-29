@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel.js';
 import { mutation, query } from './_generated/server.js';
-import { reviewTrigger } from './validators.js';
+import { reviewJobStatus, reviewTrigger } from './validators.js';
 
 /** Enqueue a new `pending` ReviewJob and return its id. */
 export const enqueue = mutation({
@@ -14,6 +15,63 @@ export const enqueue = mutation({
   returns: v.id('reviewJobs'),
   handler: async (ctx, args) => {
     return await ctx.db.insert('reviewJobs', { ...args, status: 'pending' });
+  },
+});
+
+/**
+ * Push-triggered enqueue with Cancel-on-Supersede semantics. In one transaction:
+ * mark pending/running jobs for older heads as `superseded`, then enqueue the
+ * new head unless a pending/running job for that same head already exists
+ * (covers GitHub delivering both `push` and `pull_request.synchronize`).
+ */
+export const enqueueSuperseding = mutation({
+  args: {
+    pullRequestId: v.id('pullRequests'),
+    repoId: v.id('repos'),
+    headSha: v.string(),
+    trigger: reviewTrigger,
+    agentKeys: v.array(v.string()),
+    supersededAt: v.number(),
+  },
+  returns: v.object({
+    reviewJobId: v.id('reviewJobs'),
+    supersededJobIds: v.array(v.id('reviewJobs')),
+    enqueued: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const supersededJobIds: Array<Id<'reviewJobs'>> = [];
+    let activeSameHeadJobId: Id<'reviewJobs'> | null = null;
+
+    for (const status of ['pending', 'running'] as const) {
+      const activeJobs = ctx.db
+        .query('reviewJobs')
+        .withIndex('by_pull_request_and_status', (q) =>
+          q.eq('pullRequestId', args.pullRequestId).eq('status', status),
+        );
+
+      for await (const job of activeJobs) {
+        if (job.headSha === args.headSha) {
+          activeSameHeadJobId ??= job._id;
+          continue;
+        }
+        await ctx.db.patch(job._id, { status: 'superseded', finishedAt: args.supersededAt });
+        supersededJobIds.push(job._id);
+      }
+    }
+
+    if (activeSameHeadJobId !== null) {
+      return { reviewJobId: activeSameHeadJobId, supersededJobIds, enqueued: false };
+    }
+
+    const reviewJobId = await ctx.db.insert('reviewJobs', {
+      pullRequestId: args.pullRequestId,
+      repoId: args.repoId,
+      headSha: args.headSha,
+      trigger: args.trigger,
+      agentKeys: args.agentKeys,
+      status: 'pending',
+    });
+    return { reviewJobId, supersededJobIds, enqueued: true };
   },
 });
 
@@ -69,6 +127,16 @@ export const getForWorker = query({
         url: pullRequest.url,
       },
     };
+  },
+});
+
+/** Current status for a worker-side stale-result check before posting comments. */
+export const getStatus = query({
+  args: { jobId: v.id('reviewJobs') },
+  returns: v.union(reviewJobStatus, v.null()),
+  handler: async (ctx, { jobId }) => {
+    const job = await ctx.db.get(jobId);
+    return job?.status ?? null;
   },
 });
 

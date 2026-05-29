@@ -37,6 +37,7 @@ export interface RunLogicAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
+  signal?: AbortSignal;
 }
 
 type SandcastleRun = (options: RunOptions) => Promise<Pick<RunResult, 'stdout'>>;
@@ -80,7 +81,7 @@ export class SandcastleRunner {
       );
     }
 
-    const result = await this.#run({
+    const runOptions: RunOptions = {
       agent: this.#createAgentProvider(input.agent, this.#env),
       sandbox: await this.#createAppleContainer({
         imageName: this.#imageName,
@@ -98,7 +99,10 @@ export class SandcastleRunner {
       completionSignal: input.agent.completionSignal,
       branchStrategy: { type: 'head' },
       name: input.agent.key,
-    });
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    };
+
+    const result = await this.#run(runOptions);
 
     return result.stdout;
   }

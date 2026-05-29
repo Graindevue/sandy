@@ -104,6 +104,69 @@ describe('GitHubAppClient', () => {
     );
     expect(requests).toContain('GET https://api.github.com/repos/acme/widget/pulls/12');
   });
+
+  it('resolves a push branch and head SHA to its open pull request', async () => {
+    const requests: string[] = [];
+    const client = new GitHubAppClient({
+      appId: '123',
+      privateKey: 'unused',
+      createJwt: () => 'app-jwt',
+      fetch: async (url, init) => {
+        requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+        if (String(url).endsWith('/repos/acme/widget/installation')) {
+          return jsonResponse({ id: 42 });
+        }
+        if (String(url).endsWith('/app/installations/42/access_tokens')) {
+          return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+        }
+        return jsonResponse([
+          {
+            number: 12,
+            draft: false,
+            title: 'Fix cache key',
+            html_url: 'https://github.com/acme/widget/pull/12',
+            state: 'open',
+            merged: false,
+            user: { login: 'octocat' },
+            head: {
+              sha: 'old-sha',
+              repo: { owner: { login: 'acme' }, name: 'widget' },
+            },
+            base: { ref: 'main' },
+          },
+          {
+            number: 13,
+            draft: false,
+            title: 'Fix cache key again',
+            html_url: 'https://github.com/acme/widget/pull/13',
+            state: 'open',
+            merged: false,
+            user: { login: 'octocat' },
+            head: {
+              sha: 'abc123',
+              repo: { owner: { login: 'acme' }, name: 'widget' },
+            },
+            base: { ref: 'main' },
+          },
+        ]);
+      },
+    });
+
+    await expect(
+      client.resolvePullRequestForPush(
+        { owner: 'acme', name: 'widget' },
+        'feature/cache',
+        'abc123',
+      ),
+    ).resolves.toMatchObject({
+      number: 13,
+      headSha: 'abc123',
+      headRepo: { owner: 'acme', name: 'widget' },
+    });
+    expect(requests).toContain(
+      'GET https://api.github.com/repos/acme/widget/pulls?state=open&head=acme%3Afeature%2Fcache',
+    );
+  });
 });
 
 function jsonResponse(body: unknown): Response {

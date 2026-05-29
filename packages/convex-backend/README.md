@@ -11,10 +11,11 @@ tables arrive in Phase 3. Convex adds `_id` and `_creationTime` to every row.
 
 ## Functions
 
-- **reviewJobs** — `enqueue`, `claim` (OCC-protected: claims a `pending` job and
+- **reviewJobs** — `enqueue`, `enqueueSuperseding` (push-triggered
+  Cancel-on-Supersede), `claim` (OCC-protected: claims a `pending` job and
   transitions it to `running`; the loser of a race returns `false`),
-  `markCompleted`, `markFailed`, `markSuperseded`, and the `subscribePending`
-  query the worker subscribes to.
+  `markCompleted`, `markFailed`, `markSuperseded`, `getStatus`, and the
+  `subscribePending` query the worker subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
 - **findings** — `recordFinding`, `listForPr`.
 

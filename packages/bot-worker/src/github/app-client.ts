@@ -114,6 +114,27 @@ export class GitHubAppClient
     return parsePullRequestFacts(raw);
   }
 
+  async resolvePullRequestForPush(
+    repo: RepoRef,
+    branch: string,
+    headSha: string,
+  ): Promise<PullRequestFacts | null> {
+    const head = encodeURIComponent(`${repo.owner}:${branch}`);
+    const pulls = await this.#installationRequest<unknown[]>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/pulls?state=open&head=${head}`,
+    );
+
+    for (const raw of pulls) {
+      const pr = parsePullRequestFacts(raw);
+      if (pr?.headSha === headSha) {
+        return pr;
+      }
+    }
+    return null;
+  }
+
   async cloneUrlForRepo(repo: RepoForWorktree): Promise<string> {
     const token = await this.#installationToken(repo.owner, repo.name);
     return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repo.owner}/${repo.name}.git`;

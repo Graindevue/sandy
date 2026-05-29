@@ -1,4 +1,5 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
+import type { ReviewCanceller } from '../worker/cancellation.js';
 import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { ReviewSink } from './sink.js';
@@ -15,7 +16,12 @@ export type DispatchOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'cleared'; pullRequestId: string }
   | { action: 'declined-fork'; repo: string; number: number }
-  | { action: 'enqueued'; reviewJobId: string; trigger: ReviewTrigger }
+  | {
+      action: 'enqueued';
+      reviewJobId: string;
+      trigger: ReviewTrigger;
+      supersededJobIds?: string[];
+    }
   | { action: 'noop'; reason: string };
 
 /** A minimal logger; the server passes `console`, tests pass a spy or a no-op. */
@@ -30,6 +36,7 @@ export interface ForkDeclineCommenter {
 
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
+  reviewCanceller?: ReviewCanceller;
 }
 
 function fullName(repo: RepoRef): string {
@@ -47,8 +54,10 @@ function fullName(repo: RepoRef): string {
  *   4. flip / clear the flag, then enqueue — so an enqueued job always points at
  *      a PR row whose flag already reflects the opt-in.
  *
- * In-flight teardown / supersede on a new push is issue #7 and is not done here;
- * this only enqueues per the evaluator's decision.
+ * Push-triggered reviews use a single Convex mutation that supersedes active
+ * stale jobs and enqueues (or reuses) the new-head job atomically; any local
+ * running jobs returned by that mutation are then aborted through the optional
+ * cancellation registry.
  */
 export async function dispatchEvent(
   event: ParsedEvent,
@@ -97,14 +106,31 @@ export async function dispatchEvent(
     return { action: 'noop', reason: 'no trigger' };
   }
 
-  const reviewJobId = await sink.enqueueReviewJob({
+  const enqueueInput = {
     pullRequestId,
     repoId,
     headSha: pr.headSha,
     trigger: decision.trigger,
     // Phase 1 runs only the logic Agent (PRD).
     agentKeys: ['logic'],
-  });
+  };
+
+  if (decision.trigger === 'push') {
+    const result = await sink.enqueueSupersedingReviewJob(enqueueInput);
+    options.reviewCanceller?.cancelReviewJobs(result.supersededJobIds);
+    logger.info(
+      `enqueued ReviewJob ${result.reviewJobId} for ${fullName(repo)}#${pr.number} ` +
+        `(trigger=${decision.trigger}, superseded=${result.supersededJobIds.length})`,
+    );
+    return {
+      action: 'enqueued',
+      reviewJobId: result.reviewJobId,
+      trigger: decision.trigger,
+      supersededJobIds: result.supersededJobIds,
+    };
+  }
+
+  const reviewJobId = await sink.enqueueReviewJob(enqueueInput);
   logger.info(
     `enqueued ReviewJob ${reviewJobId} for ${fullName(repo)}#${pr.number} (trigger=${decision.trigger})`,
   );

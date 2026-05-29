@@ -1,5 +1,6 @@
 import type { AgentDefinition, Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
+import { ReviewCancellationCoordinator } from './cancellation.js';
 import { ReviewExecutor, type ReviewJobContext } from './review-executor.js';
 
 const logicAgent: AgentDefinition = {
@@ -137,6 +138,71 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 100 }]);
     expect(store.failed).toEqual([]);
   });
+
+  it('aborts a superseded in-flight Agent, removes the worktree, and posts nothing', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const cancellations = new ReviewCancellationCoordinator();
+    const runnerStarted = deferred<void>();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      cancellationRegistry: cancellations,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runLogicAgent: async ({ signal }) =>
+          new Promise<string>((_resolve, reject) => {
+            runnerStarted.resolve();
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    const execution = executor.executeClaimedJob('job-1');
+    await runnerStarted.promise;
+    cancellations.cancelReviewJobs(['job-1']);
+    await execution;
+
+    expect(poster.results).toEqual([]);
+    expect(poster.scopeDeclines).toEqual([]);
+    expect(store.recordedFindings).toEqual([]);
+    expect(store.agentRuns).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(cloneManager.removed).toEqual(['job-1']);
+  });
+
+  it('checks job status before posting so stale findings are not commented', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runLogicAgent: async () => {
+          store.status = 'superseded';
+          return `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`;
+        },
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(store.recordedFindings).toEqual([]);
+    expect(poster.results).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(cloneManager.removed).toEqual(['job-1']);
+  });
 });
 
 function makeContext(): ReviewJobContext {
@@ -176,11 +242,16 @@ class FakeExecutionStore {
   agentRuns: unknown[] = [];
   completed: { jobId: string; finishedAt: number }[] = [];
   failed: { jobId: string; finishedAt: number; error: string }[] = [];
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'superseded' | null = 'running';
 
   constructor(private readonly context: ReviewJobContext | null) {}
 
   async getReviewJobContext(): Promise<ReviewJobContext | null> {
     return this.context;
+  }
+
+  async getReviewJobStatus(): Promise<typeof this.status> {
+    return this.status;
   }
 
   async recordFinding(input: unknown): Promise<string> {
@@ -203,6 +274,20 @@ class FakeExecutionStore {
   async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
     this.failed.push({ jobId, finishedAt, error });
   }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 class FakeCloneManager {

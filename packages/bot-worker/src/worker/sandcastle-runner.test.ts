@@ -23,6 +23,7 @@ describe('SandcastleRunner', () => {
     const createAppleContainerCalls: unknown[] = [];
     const sandbox = fakeSandbox();
     const provider = fakeAgentProvider('claude');
+    const abortController = new AbortController();
 
     const runner = new SandcastleRunner({
       imageName: 'sandy-agent',
@@ -41,6 +42,7 @@ describe('SandcastleRunner', () => {
     const stdout = await runner.runLogicAgent({
       agent: logicAgent,
       worktreePath: '/tmp/sandy/worktrees/job-1',
+      signal: abortController.signal,
       pullRequest: {
         owner: 'acme',
         repo: 'widget',
@@ -71,6 +73,7 @@ describe('SandcastleRunner', () => {
       maxIterations: 7,
       completionSignal: '</findings>',
       name: 'logic',
+      signal: abortController.signal,
     });
     expect(runCalls[0]?.prompt).toContain('PR #12: Fix cache key');
     expect(runCalls[0]?.prompt).toContain('<findings>');
