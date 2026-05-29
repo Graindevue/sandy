@@ -17,7 +17,7 @@ vi.mock('node:child_process', async () => {
   };
 });
 
-import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -219,6 +219,57 @@ describe('appleContainer()', () => {
       ) as { timeout?: number } | undefined;
       expect(typeof options?.timeout).toBe('number');
     }
+  });
+
+  it('bounds the synchronous exit-path cleanup with a timeout', async () => {
+    const mockExecFileSync = vi.mocked(execFileSync);
+    mockExecFileSync.mockReset();
+    const tmpDir = mkdtempSync(join(tmpdir(), 'apple-container-test-'));
+    const tmpFile = join(tmpDir, 'config.json');
+    writeFileSync(tmpFile, '{}');
+
+    // A file mount under home forces a parent-dir `mkdir` exec; failing it drives
+    // create() down the setup-error path, which runs the synchronous cleanup.
+    mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
+      const callback = rest[rest.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      if (!Array.isArray(args)) {
+        callback(null, '', '');
+        return undefined as never;
+      }
+      if (args[0] === 'image' && args[1] === 'inspect') {
+        const uid = process.getuid?.() ?? 1000;
+        const gid = process.getgid?.() ?? 1000;
+        callback(null, imageInspectJson(`${uid}:${gid}`), '');
+      } else if (args[0] === 'exec') {
+        callback(new Error('mkdir failed'), '', '');
+      } else {
+        callback(null, '', '');
+      }
+      return undefined as never;
+    });
+
+    const provider = appleContainer({
+      mounts: [{ hostPath: tmpFile, sandboxPath: '/home/agent/cfg/config.json' }],
+    });
+    await expect(
+      provider.create({
+        worktreePath: '/tmp/worktree',
+        hostRepoPath: '/tmp/repo',
+        mounts: [{ hostPath: '/tmp/worktree', sandboxPath: '/home/agent/workspace' }],
+        env: {},
+      }),
+    ).rejects.toThrow();
+
+    expect(mockExecFileSync).toHaveBeenCalled();
+    const opts = mockExecFileSync.mock.calls.at(-1)?.[2] as { timeout?: number } | undefined;
+    expect(typeof opts?.timeout).toBe('number');
+
+    unlinkSync(tmpFile);
+    rmdirSync(tmpDir);
   });
 
   it('runs pre-flight system status then image inspect then run', async () => {

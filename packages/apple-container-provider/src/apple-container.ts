@@ -369,7 +369,13 @@ const CONTAINER_CLEANUP_TIMEOUT_MS = 5000;
 
 const deleteContainerSync = (name: string): void => {
   try {
-    execFileSync('container', ['delete', '-f', name], { stdio: 'ignore' });
+    execFileSync('container', ['delete', '-f', name], {
+      stdio: 'ignore',
+      // Bound the synchronous exit-path cleanup too — a wedged daemon must not
+      // hang `process.exit` (the async path already uses this timeout).
+      timeout: CONTAINER_CLEANUP_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
   } catch {
     /* best-effort */
   }
