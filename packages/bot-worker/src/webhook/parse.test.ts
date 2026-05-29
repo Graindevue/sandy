@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CommentEvent, ParsedEvent, PullRequestEvent } from './events.js';
-import { parseEvent, prStateForEvent } from './parse.js';
+import { parseEvent, parseEventForDispatch, prStateForEvent } from './parse.js';
 
 /**
  * Raw-payload fixtures shaped like the GitHub webhook deliveries Sandy reads (a
@@ -53,6 +53,18 @@ function pullRequestPayload(action: string, rawPr: RawPrOptions = {}) {
   return { action, repository: REPO, pull_request: rawPullRequest(rawPr) };
 }
 
+function issueCommentPayload(action: string, body: string) {
+  return {
+    action,
+    repository: REPO,
+    issue: {
+      number: 42,
+      pull_request: { url: 'https://api.github.com/repos/tony-co/sandy/pulls/42' },
+    },
+    comment: { body },
+  };
+}
+
 function expectComment(event: ParsedEvent): CommentEvent {
   expect(event.kind).toBe('comment');
   return event as CommentEvent;
@@ -92,6 +104,48 @@ describe('parseEvent — pull_request_review_comment action (finding #2)', () =>
       reviewCommentPayload('edited', '@bot review'),
     );
     expect(event.kind).toBe('ignored');
+  });
+});
+
+describe('parseEventForDispatch — issue_comment hydration', () => {
+  it('resolves PR facts for a created PR Conversation comment', async () => {
+    const event = await parseEventForDispatch(
+      'issue_comment',
+      issueCommentPayload('created', '@bot review'),
+      {
+        async resolvePullRequest(repo, number) {
+          expect(repo).toEqual({ owner: 'tony-co', name: 'sandy' });
+          expect(number).toBe(42);
+          return expectComment(
+            parseEvent(
+              'pull_request_review_comment',
+              reviewCommentPayload('created', '@bot review'),
+            ),
+          ).pr;
+        },
+      },
+    );
+
+    const comment = expectComment(event);
+    expect(comment.body).toBe('@bot review');
+    expect(comment.pr.headSha).toBe('abc123');
+  });
+
+  it('ignores an edited PR Conversation comment without resolving PR details', async () => {
+    let resolved = false;
+    const event = await parseEventForDispatch(
+      'issue_comment',
+      issueCommentPayload('edited', '@bot review'),
+      {
+        async resolvePullRequest() {
+          resolved = true;
+          return null;
+        },
+      },
+    );
+
+    expect(event.kind).toBe('ignored');
+    expect(resolved).toBe(false);
   });
 });
 

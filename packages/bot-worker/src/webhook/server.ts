@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { type DispatchLogger, dispatchEvent, type ForkDeclineCommenter } from './dispatch.js';
-import { isSupportedEvent, parseEvent } from './parse.js';
+import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
 import type { ReviewSink } from './sink.js';
 
@@ -26,6 +26,8 @@ export interface WebhookServerOptions {
   webhookSecret: string;
   /** Convex side-effect sink the dispatcher writes through. */
   sink: ReviewSink;
+  /** Optional GitHub lookup for issue_comment payloads that carry only an issue number. */
+  pullRequestResolver?: PullRequestResolver;
   /** Optional GitHub side-effect used to surface documented v1 fork declines. */
   forkDeclineCommenter?: ForkDeclineCommenter;
   /** Logger; defaults to `console`. */
@@ -148,7 +150,7 @@ export function createWebhookHandler(
     }
 
     try {
-      const parsed = parseEvent(eventName, payload);
+      const parsed = await parseEventForDispatch(eventName, payload, options.pullRequestResolver);
       const outcome =
         options.forkDeclineCommenter === undefined
           ? await dispatchEvent(parsed, options.sink, logger)

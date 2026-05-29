@@ -1,4 +1,6 @@
 import { createSign } from 'node:crypto';
+import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
+import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
   GitHubReviewPoster,
   IssueCommentInput,
@@ -25,7 +27,9 @@ interface InstallationToken {
 const GITHUB_API_BASE = 'https://api.github.com';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 
-export class GitHubAppClient implements GitHubReviewPoster, ReviewDiffInspector {
+export class GitHubAppClient
+  implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver
+{
   readonly #appId: string;
   readonly #privateKey: string;
   readonly #fetch: Fetch;
@@ -98,6 +102,15 @@ export class GitHubAppClient implements GitHubReviewPoster, ReviewDiffInspector 
       `/repos/${input.owner}/${input.repo}/issues/${input.issueNumber}/comments`,
       { method: 'POST', body: { body: input.body } },
     );
+  }
+
+  async resolvePullRequest(repo: RepoRef, number: number): Promise<PullRequestFacts | null> {
+    const raw = await this.#installationRequest<unknown>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/pulls/${number}`,
+    );
+    return parsePullRequestFacts(raw);
   }
 
   async cloneUrlForRepo(repo: RepoForWorktree): Promise<string> {
@@ -201,4 +214,48 @@ function base64urlJson(value: unknown): string {
 
 function normalizePrivateKey(privateKey: string): string {
   return privateKey.replace(/\\n/g, '\n');
+}
+
+function parsePullRequestFacts(raw: unknown): PullRequestFacts | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const object = raw as {
+    number?: unknown;
+    draft?: unknown;
+    title?: unknown;
+    html_url?: unknown;
+    state?: unknown;
+    merged?: unknown;
+    user?: { login?: unknown };
+    head?: { sha?: unknown; repo?: unknown };
+    base?: { ref?: unknown };
+  };
+  const number = object.number;
+  const headSha = object.head?.sha;
+  const baseRef = object.base?.ref;
+  if (typeof number !== 'number' || typeof headSha !== 'string' || typeof baseRef !== 'string') {
+    return null;
+  }
+  return {
+    number,
+    draft: object.draft === true,
+    headSha,
+    baseRef,
+    title: typeof object.title === 'string' ? object.title : '',
+    author: typeof object.user?.login === 'string' ? object.user.login : '',
+    url: typeof object.html_url === 'string' ? object.html_url : '',
+    state: object.merged === true ? 'merged' : object.state === 'closed' ? 'closed' : 'open',
+    headRepo: parseRepoRef(object.head?.repo),
+  };
+}
+
+function parseRepoRef(raw: unknown): RepoRef | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const object = raw as { owner?: { login?: unknown }; name?: unknown };
+  return typeof object.owner?.login === 'string' && typeof object.name === 'string'
+    ? { owner: object.owner.login, name: object.name }
+    : null;
 }

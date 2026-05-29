@@ -153,6 +153,7 @@ export async function main(): Promise<void> {
   await startWebhookServer(config.port, {
     webhookSecret: config.webhookSecret,
     sink,
+    pullRequestResolver: github,
     forkDeclineCommenter: {
       async postForkDeclined({ repo, pullNumber, body }) {
         await github.createIssueComment({

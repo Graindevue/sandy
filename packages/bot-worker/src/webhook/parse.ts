@@ -84,8 +84,8 @@ function parsePullRequestState(raw: RawPullRequest): PullRequestState {
  * not resolve it (missing or `null` `head.repo`, e.g. a deleted fork) rather than
  * being defaulted to the base Repo, so the fork-decline guard is not bypassed.
  */
-function parsePullRequestFacts(raw: RawPullRequest | undefined): PullRequestFacts | null {
-  if (raw === undefined) {
+function parsePullRequestFacts(raw: RawPullRequest | null | undefined): PullRequestFacts | null {
+  if (raw == null) {
     return null;
   }
   const { number, head, base } = raw;
@@ -140,15 +140,11 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
     return ignored('issue_comment: not on a pull request');
   }
   // Only a newly *created* comment can be an `@bot review` mention. A `deleted`
-  // or `edited` `pull_request_review_comment` still carries the body and the full
-  // `pull_request`, so without this guard deleting the opt-in comment would start
-  // a review and editing it would re-fire one. (The `issue_comment` path needs no
-  // such guard: its payload lacks `pull_request`, so it already parses to
-  // `ignored` below.)
-  if (isReviewComment && payload.action !== 'created') {
-    return ignored(
-      `pull_request_review_comment: action ${payload.action ?? 'missing'} is not created`,
-    );
+  // or `edited` comment can still carry the original body, so without this guard
+  // deletion/edit events could start or re-fire a review.
+  if (payload.action !== 'created') {
+    const event = isReviewComment ? 'pull_request_review_comment' : 'issue_comment';
+    return ignored(`${event}: action ${payload.action ?? 'missing'} is not created`);
   }
   const repo = parseRepoRef(payload.repository);
   if (repo === null) {
@@ -161,10 +157,42 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
   const pr = parsePullRequestFacts(payload.pull_request);
   if (pr === null) {
     // `issue_comment` payloads carry only `issue`, not the full `pull_request`.
-    // Resolving the PR's head SHA / fork status then needs a GitHub API lookup,
-    // which lands with the API client in #6. Until then, opt-in via mention is
-    // driven through `pull_request_review_comment`, whose payload includes the PR.
-    return ignored('comment: pull_request details unavailable (resolve via API in #6)');
+    // The dispatch path uses parseEventForDispatch() to resolve those through
+    // the GitHub API; the pure parser fails closed when called without one.
+    return ignored('comment: pull_request details unavailable');
+  }
+  return { kind: 'comment', repo, body, pr } satisfies CommentEvent;
+}
+
+export interface PullRequestResolver {
+  resolvePullRequest(repo: RepoRef, number: number): Promise<PullRequestFacts | null>;
+}
+
+async function parseResolvableIssueCommentEvent(
+  payload: RawCommentPayload,
+  resolver: PullRequestResolver,
+): Promise<ParsedEvent> {
+  if (payload.issue?.pull_request === undefined) {
+    return ignored('issue_comment: not on a pull request');
+  }
+  if (payload.action !== 'created') {
+    return ignored(`issue_comment: action ${payload.action ?? 'missing'} is not created`);
+  }
+  const repo = parseRepoRef(payload.repository);
+  if (repo === null) {
+    return ignored('comment: missing repository');
+  }
+  const body = payload.comment?.body;
+  if (typeof body !== 'string') {
+    return ignored('comment: missing body');
+  }
+  const number = payload.issue.number;
+  if (typeof number !== 'number') {
+    return ignored('issue_comment: missing issue number');
+  }
+  const pr = await resolver.resolvePullRequest(repo, number);
+  if (pr === null) {
+    return ignored('issue_comment: pull_request details unavailable');
   }
   return { kind: 'comment', repo, body, pr } satisfies CommentEvent;
 }
@@ -182,18 +210,15 @@ function parsePushEvent(payload: RawPushPayload): ParsedEvent {
   if (typeof headSha !== 'string' || typeof ref !== 'string') {
     return ignored('push: missing after/ref');
   }
-  // A push payload names a branch, not a PR. Mapping the branch to its open PR
-  // (and the PR's number / base / fork status) requires a GitHub API lookup,
-  // which arrives with the API client in #6. The dedicated `pull_request`
-  // `synchronize` delivery already covers re-review of opted-in PRs in the
-  // meantime, so a bare push is recorded and ignored here.
-  return ignored('push: PR resolution deferred to #6 (covered by pull_request synchronize)');
+  // A push payload names a branch, not a PR. The dedicated `pull_request`
+  // `synchronize` delivery already covers re-review of opted-in PRs in Phase 1,
+  // so bare push-to-PR mapping is deferred to the supersede/teardown work.
+  return ignored('push: PR resolution deferred (covered by pull_request synchronize)');
 }
 
 /**
  * Normalize a raw GitHub webhook payload into a {@link ParsedEvent}. Unknown or
- * malformed deliveries — and the event kinds whose PR resolution needs a GitHub
- * API lookup (#6) — fail closed to an `ignored` event so the dispatcher never
+ * malformed deliveries fail closed to an `ignored` event so the dispatcher never
  * acts on incomplete data.
  */
 export function parseEvent(eventName: SupportedEventName, payload: unknown): ParsedEvent {
@@ -210,6 +235,29 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
     case 'push':
       return parsePushEvent(payload as RawPushPayload);
   }
+}
+
+/**
+ * Normalize a delivery for dispatch, using the GitHub API for payloads that are
+ * valid review signals but do not embed full PR facts. In Phase 1 this is needed
+ * for normal PR Conversation comments (`issue_comment`): GitHub includes only an
+ * issue number there, so Sandy resolves the PR before Sticky Opt-In evaluation.
+ */
+export async function parseEventForDispatch(
+  eventName: SupportedEventName,
+  payload: unknown,
+  resolver?: PullRequestResolver,
+): Promise<ParsedEvent> {
+  if (
+    eventName === 'issue_comment' &&
+    resolver !== undefined &&
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as RawCommentPayload).pull_request == null
+  ) {
+    return await parseResolvableIssueCommentEvent(payload as RawCommentPayload, resolver);
+  }
+  return parseEvent(eventName, payload);
 }
 
 /** Whether a string is one of the webhook events Sandy subscribes to. */
