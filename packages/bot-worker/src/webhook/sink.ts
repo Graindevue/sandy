@@ -22,6 +22,11 @@ export interface ReviewSink {
   clearOnClose(pullRequestId: string): Promise<void>;
   /** Enqueue a pending ReviewJob and return its id. */
   enqueueReviewJob(input: EnqueueInput): Promise<string>;
+  /**
+   * For a new push head, supersede active stale ReviewJobs and enqueue (or reuse)
+   * the pending/running job for the new head in one Convex transaction.
+   */
+  enqueueSupersedingReviewJob(input: EnqueueInput): Promise<EnqueueSupersedingResult>;
 }
 
 export interface UpsertPullRequestInput {
@@ -42,6 +47,12 @@ export interface EnqueueInput {
   headSha: string;
   trigger: ReviewTrigger;
   agentKeys: string[];
+}
+
+export interface EnqueueSupersedingResult {
+  reviewJobId: string;
+  supersededJobIds: string[];
+  enqueued: boolean;
 }
 
 /**
@@ -109,5 +120,16 @@ export class ConvexSink implements ReviewSink {
       trigger: input.trigger,
       agentKeys: input.agentKeys,
     });
+  }
+
+  async enqueueSupersedingReviewJob(input: EnqueueInput): Promise<EnqueueSupersedingResult> {
+    return (await this.#client.mutation(api.reviewJobs.enqueueSuperseding, {
+      pullRequestId: input.pullRequestId as never,
+      repoId: input.repoId as never,
+      headSha: input.headSha,
+      trigger: input.trigger,
+      agentKeys: input.agentKeys,
+      supersededAt: Date.now(),
+    })) as EnqueueSupersedingResult;
   }
 }

@@ -1,3 +1,4 @@
+import type { ReviewJobStatus } from '@sandy/shared-types';
 import { type FunctionReference, makeFunctionReference } from 'convex/server';
 import type {
   RecordAgentRunInput,
@@ -17,6 +18,7 @@ export interface ConvexExecutionClient {
 const refs = {
   reviewJobs: {
     getForWorker: makeFunctionReference<'query'>('reviewJobs:getForWorker'),
+    getStatus: makeFunctionReference<'query'>('reviewJobs:getStatus'),
     markCompleted: makeFunctionReference<'mutation'>('reviewJobs:markCompleted'),
     markFailed: makeFunctionReference<'mutation'>('reviewJobs:markFailed'),
   },
@@ -40,6 +42,12 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     return (await this.#client.query(refs.reviewJobs.getForWorker, {
       jobId,
     })) as ReviewJobContext | null;
+  }
+
+  async getReviewJobStatus(jobId: string): Promise<ReviewJobStatus | null> {
+    return (await this.#client.query(refs.reviewJobs.getStatus, {
+      jobId,
+    })) as ReviewJobStatus | null;
   }
 
   async recordFinding(input: RecordFindingInput): Promise<string> {

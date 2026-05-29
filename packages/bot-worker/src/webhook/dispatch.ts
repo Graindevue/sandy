@@ -1,7 +1,8 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
+import type { ReviewCanceller } from '../worker/cancellation.js';
 import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
-import type { ReviewSink } from './sink.js';
+import type { EnqueueInput, ReviewSink } from './sink.js';
 import { evaluateTrigger } from './trigger-evaluator.js';
 
 /** The message Sandy surfaces when it declines a fork PR (PRD documented limitation). */
@@ -15,7 +16,12 @@ export type DispatchOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'cleared'; pullRequestId: string }
   | { action: 'declined-fork'; repo: string; number: number }
-  | { action: 'enqueued'; reviewJobId: string; trigger: ReviewTrigger }
+  | {
+      action: 'enqueued';
+      reviewJobId: string;
+      trigger: ReviewTrigger;
+      supersededJobIds?: string[];
+    }
   | { action: 'noop'; reason: string };
 
 /** A minimal logger; the server passes `console`, tests pass a spy or a no-op. */
@@ -30,6 +36,7 @@ export interface ForkDeclineCommenter {
 
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
+  reviewCanceller?: ReviewCanceller;
 }
 
 function fullName(repo: RepoRef): string {
@@ -47,8 +54,10 @@ function fullName(repo: RepoRef): string {
  *   4. flip / clear the flag, then enqueue — so an enqueued job always points at
  *      a PR row whose flag already reflects the opt-in.
  *
- * In-flight teardown / supersede on a new push is issue #7 and is not done here;
- * this only enqueues per the evaluator's decision.
+ * Push-triggered reviews use a single Convex mutation that supersedes active
+ * stale jobs and enqueues (or reuses) the new-head job atomically; any local
+ * running jobs returned by that mutation are then aborted through the optional
+ * cancellation registry.
  */
 export async function dispatchEvent(
   event: ParsedEvent,
@@ -97,18 +106,58 @@ export async function dispatchEvent(
     return { action: 'noop', reason: 'no trigger' };
   }
 
-  const reviewJobId = await sink.enqueueReviewJob({
+  const trigger = decision.trigger;
+  const enqueueInput = {
     pullRequestId,
     repoId,
     headSha: pr.headSha,
-    trigger: decision.trigger,
+    trigger,
     // Phase 1 runs only the logic Agent (PRD).
     agentKeys: ['logic'],
-  });
-  logger.info(
-    `enqueued ReviewJob ${reviewJobId} for ${fullName(repo)}#${pr.number} (trigger=${decision.trigger})`,
-  );
-  return { action: 'enqueued', reviewJobId, trigger: decision.trigger };
+  };
+
+  const enqueueResult = await enqueueReviewForTrigger(sink, enqueueInput, options.reviewCanceller);
+  logger.info(enqueueLogMessage(repo, pr, trigger, enqueueResult));
+  if (enqueueResult.supersededJobIds !== undefined) {
+    return {
+      action: 'enqueued',
+      reviewJobId: enqueueResult.reviewJobId,
+      trigger,
+      supersededJobIds: enqueueResult.supersededJobIds,
+    };
+  }
+
+  return { action: 'enqueued', reviewJobId: enqueueResult.reviewJobId, trigger };
+}
+
+async function enqueueReviewForTrigger(
+  sink: ReviewSink,
+  input: EnqueueInput,
+  reviewCanceller: ReviewCanceller | undefined,
+): Promise<{ reviewJobId: string; supersededJobIds?: string[] }> {
+  if (input.trigger !== 'push') {
+    return { reviewJobId: await sink.enqueueReviewJob(input) };
+  }
+
+  const result = await sink.enqueueSupersedingReviewJob(input);
+  reviewCanceller?.cancelReviewJobs(result.supersededJobIds);
+  return {
+    reviewJobId: result.reviewJobId,
+    supersededJobIds: result.supersededJobIds,
+  };
+}
+
+function enqueueLogMessage(
+  repo: RepoRef,
+  pr: PullRequestFacts,
+  trigger: ReviewTrigger,
+  result: { reviewJobId: string; supersededJobIds?: string[] },
+): string {
+  const prefix = `enqueued ReviewJob ${result.reviewJobId} for ${fullName(repo)}#${pr.number}`;
+  if (result.supersededJobIds === undefined) {
+    return `${prefix} (trigger=${trigger})`;
+  }
+  return `${prefix} (trigger=${trigger}, superseded=${result.supersededJobIds.length})`;
 }
 
 function upsertPr(

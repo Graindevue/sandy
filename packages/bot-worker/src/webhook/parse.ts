@@ -53,6 +53,12 @@ interface RawPushPayload {
   deleted?: boolean;
 }
 
+interface PushFacts {
+  repo: RepoRef;
+  branch: string;
+  headSha: string;
+}
+
 function ignored(reason: string): ParsedEvent {
   return { kind: 'ignored', reason };
 }
@@ -166,6 +172,11 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
 
 export interface PullRequestResolver {
   resolvePullRequest(repo: RepoRef, number: number): Promise<PullRequestFacts | null>;
+  resolvePullRequestForPush?(
+    repo: RepoRef,
+    branch: string,
+    headSha: string,
+  ): Promise<PullRequestFacts | null>;
 }
 
 async function parseResolvableIssueCommentEvent(
@@ -203,23 +214,61 @@ async function parseResolvableIssueCommentEvent(
   return { kind: 'comment', repo, body, pr } satisfies CommentEvent;
 }
 
+async function parseResolvablePushEvent(
+  payload: RawPushPayload,
+  resolver: PullRequestResolver,
+): Promise<ParsedEvent> {
+  const facts = parsePushFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+  const resolvePullRequestForPush = resolver.resolvePullRequestForPush;
+  if (resolvePullRequestForPush === undefined) {
+    return ignored('push: pull_request details unavailable');
+  }
+
+  let pr: PullRequestFacts | null;
+  try {
+    pr = await resolvePullRequestForPush(facts.repo, facts.branch, facts.headSha);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return ignored(`push: pull_request resolution failed: ${detail}`);
+  }
+  if (pr === null) {
+    return ignored('push: no open pull request for head');
+  }
+  return { kind: 'push', repo: facts.repo, pr } satisfies PushEvent;
+}
+
 function parsePushEvent(payload: RawPushPayload): ParsedEvent {
+  const facts = parsePushFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+  // A push payload names a branch, not a PR. parseEventForDispatch() resolves
+  // this through GitHub before dispatch; the pure parser fails closed without
+  // that network dependency.
+  return ignored('push: pull_request details unavailable');
+}
+
+function parsePushFacts(payload: RawPushPayload): PushFacts | { reason: string } {
   if (payload.deleted === true) {
-    return ignored('push: branch deleted');
+    return { reason: 'push: branch deleted' };
   }
   const repo = parseRepoRef(payload.repository);
   if (repo === null) {
-    return ignored('push: missing repository');
+    return { reason: 'push: missing repository' };
   }
   const headSha = payload.after;
   const ref = payload.ref;
   if (typeof headSha !== 'string' || typeof ref !== 'string') {
-    return ignored('push: missing after/ref');
+    return { reason: 'push: missing after/ref' };
   }
-  // A push payload names a branch, not a PR. The dedicated `pull_request`
-  // `synchronize` delivery already covers re-review of opted-in PRs in Phase 1,
-  // so bare push-to-PR mapping is deferred to the supersede/teardown work.
-  return ignored('push: PR resolution deferred (covered by pull_request synchronize)');
+  const prefix = 'refs/heads/';
+  if (!ref.startsWith(prefix) || ref.length === prefix.length) {
+    return { reason: 'push: ref is not a branch' };
+  }
+  return { repo, branch: ref.slice(prefix.length), headSha };
 }
 
 /**
@@ -245,9 +294,10 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
 
 /**
  * Normalize a delivery for dispatch, using the GitHub API for payloads that are
- * valid review signals but do not embed full PR facts. In Phase 1 this is needed
- * for normal PR Conversation comments (`issue_comment`): GitHub includes only an
- * issue number there, so Sandy resolves the PR before Sticky Opt-In evaluation.
+ * valid review signals but do not embed full PR facts. PR Conversation comments
+ * (`issue_comment`) carry only an issue number, and `push` deliveries carry a
+ * branch ref rather than a PR, so Sandy resolves the PR before Sticky Opt-In
+ * evaluation.
  */
 export async function parseEventForDispatch(
   eventName: SupportedEventName,
@@ -256,6 +306,9 @@ export async function parseEventForDispatch(
 ): Promise<ParsedEvent> {
   if (resolver !== undefined && isResolvableIssueCommentPayload(eventName, payload)) {
     return await parseResolvableIssueCommentEvent(payload, resolver);
+  }
+  if (resolver !== undefined && isResolvablePushPayload(eventName, payload)) {
+    return await parseResolvablePushEvent(payload, resolver);
   }
   return parseEvent(eventName, payload);
 }
@@ -270,6 +323,13 @@ function isResolvableIssueCommentPayload(
     payload !== null &&
     (payload as RawCommentPayload).pull_request == null
   );
+}
+
+function isResolvablePushPayload(
+  eventName: SupportedEventName,
+  payload: unknown,
+): payload is RawPushPayload {
+  return eventName === 'push' && typeof payload === 'object' && payload !== null;
 }
 
 /** Whether a string is one of the webhook events Sandy subscribes to. */

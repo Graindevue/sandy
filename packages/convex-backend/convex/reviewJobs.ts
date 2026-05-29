@@ -1,6 +1,21 @@
+import type { ReviewJobStatus, ReviewTrigger } from '@sandy/shared-types';
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server.js';
-import { reviewTrigger } from './validators.js';
+import type { Id } from './_generated/dataModel.js';
+import { type MutationCtx, mutation, query } from './_generated/server.js';
+import { reviewJobStatus, reviewTrigger } from './validators.js';
+
+const ACTIVE_REVIEW_JOB_STATUSES = [
+  'pending',
+  'running',
+] as const satisfies readonly ReviewJobStatus[];
+
+interface PendingReviewJobInput {
+  pullRequestId: Id<'pullRequests'>;
+  repoId: Id<'repos'>;
+  headSha: string;
+  trigger: ReviewTrigger;
+  agentKeys: string[];
+}
 
 /** Enqueue a new `pending` ReviewJob and return its id. */
 export const enqueue = mutation({
@@ -13,9 +28,73 @@ export const enqueue = mutation({
   },
   returns: v.id('reviewJobs'),
   handler: async (ctx, args) => {
-    return await ctx.db.insert('reviewJobs', { ...args, status: 'pending' });
+    return await insertPendingReviewJob(ctx, args);
   },
 });
+
+/**
+ * Push-triggered enqueue with Cancel-on-Supersede semantics. In one transaction:
+ * mark pending/running jobs for older heads as `superseded`, then enqueue the
+ * new head unless a pending/running job for that same head already exists
+ * (covers GitHub delivering both `push` and `pull_request.synchronize`).
+ */
+export const enqueueSuperseding = mutation({
+  args: {
+    pullRequestId: v.id('pullRequests'),
+    repoId: v.id('repos'),
+    headSha: v.string(),
+    trigger: reviewTrigger,
+    agentKeys: v.array(v.string()),
+    supersededAt: v.number(),
+  },
+  returns: v.object({
+    reviewJobId: v.id('reviewJobs'),
+    supersededJobIds: v.array(v.id('reviewJobs')),
+    enqueued: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const supersededJobIds: Array<Id<'reviewJobs'>> = [];
+    let existingSameHeadJobId: Id<'reviewJobs'> | null = null;
+
+    for (const status of ACTIVE_REVIEW_JOB_STATUSES) {
+      const activeJobs = ctx.db
+        .query('reviewJobs')
+        .withIndex('by_pull_request_and_status', (q) =>
+          q.eq('pullRequestId', args.pullRequestId).eq('status', status),
+        );
+
+      for await (const job of activeJobs) {
+        if (job.headSha === args.headSha) {
+          existingSameHeadJobId ??= job._id;
+          continue;
+        }
+        await ctx.db.patch(job._id, { status: 'superseded', finishedAt: args.supersededAt });
+        supersededJobIds.push(job._id);
+      }
+    }
+
+    if (existingSameHeadJobId !== null) {
+      return { reviewJobId: existingSameHeadJobId, supersededJobIds, enqueued: false };
+    }
+
+    const reviewJobId = await insertPendingReviewJob(ctx, args);
+    return { reviewJobId, supersededJobIds, enqueued: true };
+  },
+});
+
+function insertPendingReviewJob(
+  ctx: MutationCtx,
+  input: PendingReviewJobInput,
+): Promise<Id<'reviewJobs'>> {
+  return ctx.db.insert('reviewJobs', {
+    pullRequestId: input.pullRequestId,
+    repoId: input.repoId,
+    headSha: input.headSha,
+    trigger: input.trigger,
+    agentKeys: input.agentKeys,
+    status: 'pending',
+  });
+}
 
 /**
  * All currently `pending` ReviewJobs. The worker reactively subscribes to this
@@ -69,6 +148,16 @@ export const getForWorker = query({
         url: pullRequest.url,
       },
     };
+  },
+});
+
+/** Current status for a worker-side stale-result check before posting comments. */
+export const getStatus = query({
+  args: { jobId: v.id('reviewJobs') },
+  returns: v.union(reviewJobStatus, v.null()),
+  handler: async (ctx, { jobId }) => {
+    const job = await ctx.db.get(jobId);
+    return job?.status ?? null;
   },
 });
 

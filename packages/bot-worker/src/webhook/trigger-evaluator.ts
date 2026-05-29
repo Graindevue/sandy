@@ -78,8 +78,8 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  * - fork PR (head Repo ≠ base Repo) → decline (`decline: 'fork'`); v1 declines
  *   forks (PRD open question) and never enqueues them.
  *
- * In-flight teardown / supersede on push is issue #7 — out of scope here; this
- * only emits the *decision* to enqueue.
+ * Cancel-on-Supersede is applied by the dispatcher/Convex enqueue path after
+ * this pure decision; the evaluator only emits the trigger.
  */
 export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean): TriggerDecision {
   switch (event.kind) {
@@ -135,9 +135,9 @@ export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean
         }
 
         case 'synchronize': {
-          // A push to a PR also arrives as `synchronize`; the dedicated `push`
-          // event drives re-review, so here we only re-review an already
-          // opted-in PR and otherwise stay quiet.
+          // A push to a PR can arrive as both `push` and `synchronize`.
+          // The dispatcher uses an idempotent push enqueue, so both normalized
+          // events can safely request the same new-head review for opted-in PRs.
           if (isTerminal(event.pr)) {
             // A synchronize on a closed/merged PR with a stale `reviewActive`
             // must not enqueue against a dead head SHA.

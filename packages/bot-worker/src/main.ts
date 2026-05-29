@@ -10,6 +10,7 @@ import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
+import { ReviewCancellationCoordinator } from './worker/cancellation.js';
 import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
@@ -142,6 +143,7 @@ export async function main(): Promise<void> {
     baseDir: defaultCloneBaseDir(process.env),
     cloneUrl: (repo) => github.cloneUrlForRepo(repo),
   });
+  const cancellations = new ReviewCancellationCoordinator();
   const poster = new PullRequestPoster(github);
   const executor = new ReviewExecutor({
     store: new ConvexExecutionStore(reactiveClient),
@@ -149,6 +151,7 @@ export async function main(): Promise<void> {
     diffInspector: github,
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
+    cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
@@ -163,6 +166,7 @@ export async function main(): Promise<void> {
     webhookSecret: config.webhookSecret,
     sink,
     pullRequestResolver: github,
+    reviewCanceller: cancellations,
     forkDeclineCommenter: {
       async postForkDeclined({ repo, pullNumber, body }) {
         await github.createIssueComment({

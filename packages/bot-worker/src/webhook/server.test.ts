@@ -5,7 +5,12 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PullRequestFacts, RepoRef } from './events.js';
 import { createWebhookHandler, startWebhookServer } from './server.js';
-import type { EnqueueInput, ReviewSink, UpsertPullRequestInput } from './sink.js';
+import type {
+  EnqueueInput,
+  EnqueueSupersedingResult,
+  ReviewSink,
+  UpsertPullRequestInput,
+} from './sink.js';
 
 const SECRET = 'server-test-secret';
 
@@ -29,6 +34,10 @@ class RecordingSink implements ReviewSink {
   async enqueueReviewJob(input: EnqueueInput): Promise<string> {
     this.enqueued.push(input);
     return 'job:1';
+  }
+  async enqueueSupersedingReviewJob(input: EnqueueInput): Promise<EnqueueSupersedingResult> {
+    this.enqueued.push(input);
+    return { reviewJobId: 'job:1', supersededJobIds: [], enqueued: true };
   }
 }
 

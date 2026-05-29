@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ReviewCanceller } from '../worker/cancellation.js';
 import {
   type DispatchLogger,
   type DispatchOptions,
@@ -35,6 +36,8 @@ export interface WebhookServerOptions {
   pullRequestResolver?: PullRequestResolver;
   /** Optional GitHub side-effect used to surface documented v1 fork declines. */
   forkDeclineCommenter?: ForkDeclineCommenter;
+  /** Optional local cancellation registry for jobs superseded by push deliveries. */
+  reviewCanceller?: ReviewCanceller;
   /** Logger; defaults to `console`. */
   logger?: DispatchLogger;
   /** Path the server accepts deliveries on. Defaults to `/`. */
@@ -156,12 +159,7 @@ export function createWebhookHandler(
 
     try {
       const parsed = await parseEventForDispatch(eventName, payload, options.pullRequestResolver);
-      const outcome = await dispatchEvent(
-        parsed,
-        options.sink,
-        logger,
-        dispatchOptions(options.forkDeclineCommenter),
-      );
+      const outcome = await dispatchEvent(parsed, options.sink, logger, dispatchOptions(options));
       send(res, 200, outcome.action);
     } catch (error) {
       // A side-effect failure (e.g. Convex unreachable) is a server error; 500
@@ -172,13 +170,18 @@ export function createWebhookHandler(
   };
 }
 
-function dispatchOptions(
-  forkDeclineCommenter: ForkDeclineCommenter | undefined,
-): DispatchOptions | undefined {
-  if (forkDeclineCommenter === undefined) {
+function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undefined {
+  if (options.forkDeclineCommenter === undefined && options.reviewCanceller === undefined) {
     return undefined;
   }
-  return { forkDeclineCommenter };
+  const dispatch: DispatchOptions = {};
+  if (options.forkDeclineCommenter !== undefined) {
+    dispatch.forkDeclineCommenter = options.forkDeclineCommenter;
+  }
+  if (options.reviewCanceller !== undefined) {
+    dispatch.reviewCanceller = options.reviewCanceller;
+  }
+  return dispatch;
 }
 
 /** Create and start the webhook HTTP server, resolving once it is listening. */

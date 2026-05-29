@@ -7,7 +7,12 @@ import type {
   PushEvent,
   RepoRef,
 } from './events.js';
-import type { EnqueueInput, ReviewSink, UpsertPullRequestInput } from './sink.js';
+import type {
+  EnqueueInput,
+  EnqueueSupersedingResult,
+  ReviewSink,
+  UpsertPullRequestInput,
+} from './sink.js';
 
 const BASE_REPO: RepoRef = { owner: 'tony-co', name: 'sandy' };
 
@@ -37,8 +42,10 @@ class FakeSink implements ReviewSink {
   reviewActive: boolean;
   readonly upserts: UpsertPullRequestInput[] = [];
   readonly enqueued: EnqueueInput[] = [];
+  readonly supersedingEnqueues: EnqueueInput[] = [];
   setActiveCalls: Array<{ id: string; active: boolean }> = [];
   clearCalls: string[] = [];
+  supersededJobIds: string[] = [];
   jobCounter = 0;
 
   constructor(reviewActive = false) {
@@ -72,6 +79,16 @@ class FakeSink implements ReviewSink {
     this.enqueued.push(input);
     this.jobCounter += 1;
     return `job:${this.jobCounter}`;
+  }
+
+  async enqueueSupersedingReviewJob(input: EnqueueInput): Promise<EnqueueSupersedingResult> {
+    this.supersedingEnqueues.push(input);
+    this.jobCounter += 1;
+    return {
+      reviewJobId: `job:${this.jobCounter}`,
+      supersededJobIds: this.supersededJobIds,
+      enqueued: true,
+    };
   }
 }
 
@@ -147,7 +164,10 @@ describe('dispatchEvent', () => {
     const outcome = await dispatchEvent(pr('synchronize'), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
     expect(sink.setActiveCalls).toHaveLength(0);
-    expect(sink.enqueued[0]).toMatchObject({ trigger: 'push', agentKeys: ['logic'] });
+    expect(sink.supersedingEnqueues[0]).toMatchObject({
+      trigger: 'push',
+      agentKeys: ['logic'],
+    });
   });
 
   it('synchronize on an opted-out PR does nothing', async () => {
@@ -219,7 +239,39 @@ describe('dispatchEvent', () => {
     const sink = new FakeSink(true);
     const outcome = await dispatchEvent(push(), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
-    expect(sink.enqueued[0]).toMatchObject({ headSha: 'sha-7', trigger: 'push' });
+    expect(sink.supersedingEnqueues[0]).toMatchObject({ headSha: 'sha-7', trigger: 'push' });
+  });
+
+  it('supersedes active stale jobs and requests cancellation before returning a push enqueue', async () => {
+    const sink = new FakeSink(true);
+    sink.supersededJobIds = ['job:old-running', 'job:old-pending'];
+    const cancelled: string[][] = [];
+
+    const outcome = await dispatchEvent(push(), sink, silentLogger, {
+      reviewCanceller: {
+        cancelReviewJobs(jobIds) {
+          cancelled.push(jobIds);
+        },
+      },
+    });
+
+    expect(outcome).toEqual({
+      action: 'enqueued',
+      reviewJobId: 'job:1',
+      trigger: 'push',
+      supersededJobIds: ['job:old-running', 'job:old-pending'],
+    });
+    expect(sink.enqueued).toEqual([]);
+    expect(sink.supersedingEnqueues).toEqual([
+      {
+        pullRequestId: 'pr:repo:tony-co/sandy#7',
+        repoId: 'repo:tony-co/sandy',
+        headSha: 'sha-7',
+        trigger: 'push',
+        agentKeys: ['logic'],
+      },
+    ]);
+    expect(cancelled).toEqual([['job:old-running', 'job:old-pending']]);
   });
 
   // Finding #3: a mention on a closed PR must not enqueue, must not flip
