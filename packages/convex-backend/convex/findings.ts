@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server';
-import { severity } from './validators';
+import { mutation, query } from './_generated/server.js';
+import { severity } from './validators.js';
 
 /** Record a single Finding produced by an Agent during a Review. */
 export const recordFinding = mutation({

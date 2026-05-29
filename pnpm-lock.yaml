@@ -31,6 +31,22 @@ importers:
         specifier: ^24.0.0
         version: 24.12.4
 
+  packages/bot-worker:
+    dependencies:
+      '@sandy/convex-backend':
+        specifier: workspace:*
+        version: link:../convex-backend
+      '@sandy/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      convex:
+        specifier: ^1.39.0
+        version: 1.39.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.12.4
+
   packages/convex-backend:
     dependencies:
       convex:

@@ -6,7 +6,7 @@ import {
   reviewJobStatus,
   reviewTrigger,
   severity,
-} from './validators';
+} from './validators.js';
 
 /**
  * Phase 1 schema. Archetype / reaction / suggestedRules tables land in Phase 3.
