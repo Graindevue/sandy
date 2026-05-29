@@ -40,14 +40,19 @@ does not expand `~`, `$HOME`, or shell variables, so all paths must be absolute.
     <key>Label</key>
     <string>dev.sandy.worker</string>
 
-    <!-- pnpm runs the worker's start script. Use the absolute path to the
-         pnpm binary (`which pnpm`) — launchd has a minimal PATH. -->
+    <!-- pnpm provides the workspace environment, while node runs the built
+         worker from the repo root. Use the absolute path to the pnpm binary
+         (`which pnpm`) — launchd has a minimal PATH. Do not use
+         `pnpm --filter @sandy/bot-worker start`: pnpm package scripts run from
+         the package directory, but the worker resolves .config/ from cwd. -->
     <key>ProgramArguments</key>
     <array>
         <string>__ABS_PATH_TO_PNPM__</string>
-        <string>--filter</string>
-        <string>@sandy/bot-worker</string>
-        <string>start</string>
+        <string>--dir</string>
+        <string>__ABS_PATH_TO_SANDY_REPO__</string>
+        <string>exec</string>
+        <string>node</string>
+        <string>packages/bot-worker/dist/main.js</string>
     </array>
 
     <!-- Run from the repo root so .config/ and workspace paths resolve. -->

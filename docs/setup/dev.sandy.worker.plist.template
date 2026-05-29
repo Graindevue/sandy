@@ -9,9 +9,11 @@
     <key>ProgramArguments</key>
     <array>
         <string>__ABS_PATH_TO_PNPM__</string>
-        <string>--filter</string>
-        <string>@sandy/bot-worker</string>
-        <string>start</string>
+        <string>--dir</string>
+        <string>__ABS_PATH_TO_SANDY_REPO__</string>
+        <string>exec</string>
+        <string>node</string>
+        <string>packages/bot-worker/dist/main.js</string>
     </array>
 
     <key>WorkingDirectory</key>
