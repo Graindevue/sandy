@@ -46,7 +46,7 @@ async function post(
   body: string,
   headers: Record<string, string>,
 ): Promise<{ status: number; text: string }> {
-  const res = await fetch(`${baseUrl}/webhook`, { method: 'POST', body, headers });
+  const res = await fetch(`${baseUrl}/`, { method: 'POST', body, headers });
   return { status: res.status, text: await res.text() };
 }
 
@@ -121,13 +121,13 @@ describe('webhook server', () => {
     expect(sink.enqueued).toHaveLength(0);
   });
 
-  it('returns 404 for a non-webhook path', async () => {
+  it('returns 404 for a non-matching path', async () => {
     const res = await fetch(`${baseUrl}/other`, { method: 'POST', body: '{}' });
     expect(res.status).toBe(404);
   });
 
   it('returns 405 for a non-POST method', async () => {
-    const res = await fetch(`${baseUrl}/webhook`, { method: 'GET' });
+    const res = await fetch(`${baseUrl}/`, { method: 'GET' });
     expect(res.status).toBe(405);
   });
 });
@@ -156,7 +156,7 @@ describe('webhook body size guard (#7)', () => {
   });
 
   it('responds 413 (not a connection reset) to an over-size body', async () => {
-    const res = await fetch(`${smallUrl}/webhook`, {
+    const res = await fetch(`${smallUrl}/`, {
       method: 'POST',
       body: 'x'.repeat(64),
       headers: { 'x-github-event': 'pull_request' },
@@ -189,7 +189,7 @@ describe('webhook body read error (#5)', () => {
   it('maps a mid-body transport error to 500, not 413', async () => {
     const handler = createWebhookHandler({ webhookSecret: SECRET, sink: new RecordingSink() });
     const req = new EventEmitter() as IncomingMessage;
-    req.url = '/webhook';
+    req.url = '/';
     req.method = 'POST';
     req.headers = {};
     const res = fakeRes();

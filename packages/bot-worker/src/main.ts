@@ -18,9 +18,9 @@ const DEFAULT_PORT = 3007;
  * misconfigured deploy fails loudly at boot rather than silently mis-routing.
  */
 export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
-  const webhookSecret = env.WEBHOOK_SECRET;
+  const webhookSecret = env.GITHUB_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    throw new Error('WEBHOOK_SECRET is required');
+    throw new Error('GITHUB_WEBHOOK_SECRET is required');
   }
   const convexUrl = env.CONVEX_URL;
   if (!convexUrl) {
