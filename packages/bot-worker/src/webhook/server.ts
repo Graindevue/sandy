@@ -1,5 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { type DispatchLogger, dispatchEvent, type ForkDeclineCommenter } from './dispatch.js';
+import {
+  type DispatchLogger,
+  type DispatchOptions,
+  dispatchEvent,
+  type ForkDeclineCommenter,
+} from './dispatch.js';
 import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
 import type { ReviewSink } from './sink.js';
@@ -151,12 +156,12 @@ export function createWebhookHandler(
 
     try {
       const parsed = await parseEventForDispatch(eventName, payload, options.pullRequestResolver);
-      const outcome =
-        options.forkDeclineCommenter === undefined
-          ? await dispatchEvent(parsed, options.sink, logger)
-          : await dispatchEvent(parsed, options.sink, logger, {
-              forkDeclineCommenter: options.forkDeclineCommenter,
-            });
+      const outcome = await dispatchEvent(
+        parsed,
+        options.sink,
+        logger,
+        dispatchOptions(options.forkDeclineCommenter),
+      );
       send(res, 200, outcome.action);
     } catch (error) {
       // A side-effect failure (e.g. Convex unreachable) is a server error; 500
@@ -165,6 +170,15 @@ export function createWebhookHandler(
       send(res, 500, 'dispatch failed');
     }
   };
+}
+
+function dispatchOptions(
+  forkDeclineCommenter: ForkDeclineCommenter | undefined,
+): DispatchOptions | undefined {
+  if (forkDeclineCommenter === undefined) {
+    return undefined;
+  }
+  return { forkDeclineCommenter };
 }
 
 /** Create and start the webhook HTTP server, resolving once it is listening. */

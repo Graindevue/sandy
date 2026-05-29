@@ -1,4 +1,5 @@
-import { readFile, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AgentDefinition } from '@sandy/shared-types';
@@ -38,32 +39,15 @@ const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
  * misconfigured deploy fails loudly at boot rather than silently mis-routing.
  */
 export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
-  const webhookSecret = env.GITHUB_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    throw new Error('GITHUB_WEBHOOK_SECRET is required');
-  }
-  const convexUrl = env.CONVEX_URL;
-  if (!convexUrl) {
-    throw new Error('CONVEX_URL is required');
-  }
-  const githubAppId = env.GITHUB_APP_ID;
-  if (!githubAppId) {
-    throw new Error('GITHUB_APP_ID is required');
-  }
-  const githubPrivateKeyPath = env.GITHUB_APP_PRIVATE_KEY_PATH;
-  if (!githubPrivateKeyPath) {
-    throw new Error('GITHUB_APP_PRIVATE_KEY_PATH is required');
-  }
-
+  const webhookSecret = requireEnv(env, 'GITHUB_WEBHOOK_SECRET');
+  const convexUrl = requireEnv(env, 'CONVEX_URL');
+  const githubAppId = requireEnv(env, 'GITHUB_APP_ID');
+  const githubPrivateKeyPath = requireEnv(env, 'GITHUB_APP_PRIVATE_KEY_PATH');
   const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
   const maxChangedLines =
     env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
       ? DEFAULT_MAX_CHANGED_LINES
       : parsePositiveInt(env.SANDY_REVIEW_MAX_CHANGED_LINES, 'SANDY_REVIEW_MAX_CHANGED_LINES');
-  const agentImage =
-    env.SANDY_AGENT_IMAGE === undefined || env.SANDY_AGENT_IMAGE.trim().length === 0
-      ? DEFAULT_AGENT_IMAGE
-      : env.SANDY_AGENT_IMAGE.trim();
 
   return {
     webhookSecret,
@@ -71,10 +55,18 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     githubAppId,
     githubPrivateKeyPath,
     port,
-    agentImage,
+    agentImage: parseAgentImage(env.SANDY_AGENT_IMAGE),
     maxChangedLines,
     agentEnv: pickAgentEnv(env),
   };
+}
+
+function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+  return value;
 }
 
 /**
@@ -103,6 +95,15 @@ function parsePositiveInt(raw: string, name: string): number {
     throw new Error(`${name} must be greater than 0, got ${JSON.stringify(raw)}`);
   }
   return value;
+}
+
+function parseAgentImage(raw: string | undefined): string {
+  if (raw === undefined) {
+    return DEFAULT_AGENT_IMAGE;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length === 0 ? DEFAULT_AGENT_IMAGE : trimmed;
 }
 
 function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -169,10 +170,10 @@ export async function main(): Promise<void> {
 }
 
 function loadInstanceEnv(repoRoot: string, env: NodeJS.ProcessEnv): void {
-  const path = join(repoRoot, '.config', '.env');
+  const envPath = join(repoRoot, '.config', '.env');
   let contents: string;
   try {
-    contents = readFileSync(path, 'utf8');
+    contents = readFileSync(envPath, 'utf8');
   } catch (error) {
     if (isNotFound(error)) {
       return;
@@ -207,16 +208,8 @@ function unquoteEnvValue(value: string): string {
   return value;
 }
 
-function readPrivateKey(repoRoot: string, path: string): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    readFile(resolve(repoRoot, path), 'utf8', (error, contents) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolvePromise(contents);
-      }
-    });
-  });
+function readPrivateKey(repoRoot: string, privateKeyPath: string): Promise<string> {
+  return readFile(resolve(repoRoot, privateKeyPath), 'utf8');
 }
 
 function isNotFound(error: unknown): boolean {

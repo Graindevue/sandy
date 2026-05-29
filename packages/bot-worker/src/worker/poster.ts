@@ -138,13 +138,21 @@ function buildSummaryBody(
   findingCount: number,
   summary: string | undefined,
 ): string {
-  const headline =
-    findingCount === 0
-      ? `Sandy ${agentKey} review: no issues found.`
-      : `Sandy ${agentKey} review posted ${findingCount} ${findingCount === 1 ? 'finding' : 'findings'}.`;
-  return summary === undefined || summary.trim().length === 0
-    ? headline
-    : `${headline}\n\n${summary.trim()}`;
+  const headline = buildSummaryHeadline(agentKey, findingCount);
+  const trimmedSummary = summary?.trim();
+  if (trimmedSummary === undefined || trimmedSummary.length === 0) {
+    return headline;
+  }
+  return `${headline}\n\n${trimmedSummary}`;
+}
+
+function buildSummaryHeadline(agentKey: string, findingCount: number): string {
+  if (findingCount === 0) {
+    return `Sandy ${agentKey} review: no issues found.`;
+  }
+
+  const noun = findingCount === 1 ? 'finding' : 'findings';
+  return `Sandy ${agentKey} review posted ${findingCount} ${noun}.`;
 }
 
 function formatCount(value: number): string {

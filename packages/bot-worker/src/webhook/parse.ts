@@ -248,16 +248,22 @@ export async function parseEventForDispatch(
   payload: unknown,
   resolver?: PullRequestResolver,
 ): Promise<ParsedEvent> {
-  if (
+  if (resolver !== undefined && isResolvableIssueCommentPayload(eventName, payload)) {
+    return await parseResolvableIssueCommentEvent(payload, resolver);
+  }
+  return parseEvent(eventName, payload);
+}
+
+function isResolvableIssueCommentPayload(
+  eventName: SupportedEventName,
+  payload: unknown,
+): payload is RawCommentPayload {
+  return (
     eventName === 'issue_comment' &&
-    resolver !== undefined &&
     typeof payload === 'object' &&
     payload !== null &&
     (payload as RawCommentPayload).pull_request == null
-  ) {
-    return await parseResolvableIssueCommentEvent(payload as RawCommentPayload, resolver);
-  }
-  return parseEvent(eventName, payload);
+  );
 }
 
 /** Whether a string is one of the webhook events Sandy subscribes to. */

@@ -150,12 +150,7 @@ export class ReviewExecutor {
       const changedLines = await this.#diffInspector.changedLineCount(target);
 
       if (changedLines > this.#maxChangedLines) {
-        await this.#poster.postScopeDeclined({
-          target,
-          changedLines,
-          maxChangedLines: this.#maxChangedLines,
-        });
-        await this.#store.markCompleted(jobId, this.#now());
+        await this.#completeScopeDecline(jobId, target, changedLines);
         return;
       }
 
@@ -184,48 +179,14 @@ export class ReviewExecutor {
       });
       agentRunRecorded = true;
 
-      const persistedFindings: PersistedFinding[] = [];
-      for (const finding of payload.findings) {
-        const id = await this.#store.recordFinding({
-          reviewJobId: context.job.id,
-          pullRequestId: context.pullRequest.id,
-          agentKey,
-          finding,
-        });
-        persistedFindings.push({ id, finding });
-      }
-
-      const postInput: {
-        target: PullRequestTarget;
-        agentKey: string;
-        findings: PersistedFinding[];
-        summary?: string;
-      } = {
-        target,
-        agentKey,
-        findings: persistedFindings,
-      };
-      if (payload.summary !== undefined) {
-        postInput.summary = payload.summary;
-      }
-      const posted = await this.#poster.postReviewResult(postInput);
-      for (const postedFinding of posted) {
-        await this.#store.markFindingPosted(postedFinding.findingId, postedFinding.commentId);
-      }
+      const persistedFindings = await this.#recordFindings(context, agentKey, payload.findings);
+      await this.#postReviewResult(target, agentKey, persistedFindings, payload.summary);
 
       await this.#store.markCompleted(jobId, this.#now());
     } catch (error) {
       const message = describeError(error);
       if (context !== null && agentKey !== null && agentStartedAt !== null && !agentRunRecorded) {
-        await this.#store.recordAgentRun({
-          reviewJobId: context.job.id,
-          agentKey,
-          status: 'failed',
-          startedAt: agentStartedAt,
-          finishedAt: this.#now(),
-          findingCount: 0,
-          error: message,
-        });
+        await this.#recordFailedAgentRun(context, agentKey, agentStartedAt, message);
       }
       await this.#store.markFailed(jobId, this.#now(), message);
     } finally {
@@ -251,6 +212,76 @@ export class ReviewExecutor {
       );
     }
     return agent;
+  }
+
+  async #completeScopeDecline(
+    jobId: string,
+    target: PullRequestTarget,
+    changedLines: number,
+  ): Promise<void> {
+    await this.#poster.postScopeDeclined({
+      target,
+      changedLines,
+      maxChangedLines: this.#maxChangedLines,
+    });
+    await this.#store.markCompleted(jobId, this.#now());
+  }
+
+  async #recordFindings(
+    context: ReviewJobContext,
+    agentKey: string,
+    findings: Finding[],
+  ): Promise<PersistedFinding[]> {
+    const persistedFindings: PersistedFinding[] = [];
+    for (const finding of findings) {
+      const id = await this.#store.recordFinding({
+        reviewJobId: context.job.id,
+        pullRequestId: context.pullRequest.id,
+        agentKey,
+        finding,
+      });
+      persistedFindings.push({ id, finding });
+    }
+    return persistedFindings;
+  }
+
+  async #postReviewResult(
+    target: PullRequestTarget,
+    agentKey: string,
+    findings: PersistedFinding[],
+    summary: string | undefined,
+  ): Promise<void> {
+    const input: {
+      target: PullRequestTarget;
+      agentKey: string;
+      findings: PersistedFinding[];
+      summary?: string;
+    } = { target, agentKey, findings };
+    if (summary !== undefined) {
+      input.summary = summary;
+    }
+
+    const posted = await this.#poster.postReviewResult(input);
+    for (const postedFinding of posted) {
+      await this.#store.markFindingPosted(postedFinding.findingId, postedFinding.commentId);
+    }
+  }
+
+  async #recordFailedAgentRun(
+    context: ReviewJobContext,
+    agentKey: string,
+    startedAt: number,
+    error: string,
+  ): Promise<void> {
+    await this.#store.recordAgentRun({
+      reviewJobId: context.job.id,
+      agentKey,
+      status: 'failed',
+      startedAt,
+      finishedAt: this.#now(),
+      findingCount: 0,
+      error,
+    });
   }
 }
 

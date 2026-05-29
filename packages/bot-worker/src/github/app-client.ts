@@ -245,9 +245,22 @@ function parsePullRequestFacts(raw: unknown): PullRequestFacts | null {
     title: typeof object.title === 'string' ? object.title : '',
     author: typeof object.user?.login === 'string' ? object.user.login : '',
     url: typeof object.html_url === 'string' ? object.html_url : '',
-    state: object.merged === true ? 'merged' : object.state === 'closed' ? 'closed' : 'open',
+    state: parsePullRequestState(object),
     headRepo: parseRepoRef(object.head?.repo),
   };
+}
+
+function parsePullRequestState(raw: {
+  merged?: unknown;
+  state?: unknown;
+}): PullRequestFacts['state'] {
+  if (raw.merged === true) {
+    return 'merged';
+  }
+  if (raw.state === 'closed') {
+    return 'closed';
+  }
+  return 'open';
 }
 
 function parseRepoRef(raw: unknown): RepoRef | null {
