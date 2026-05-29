@@ -1,6 +1,7 @@
 import { readFile, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { ConfigLoader } from './config/loader.js';
 import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
@@ -11,7 +12,7 @@ import { ConvexSink } from './webhook/sink.js';
 import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
-import { ReviewExecutor } from './worker/review-executor.js';
+import { type RepoForWorktree, ReviewExecutor } from './worker/review-executor.js';
 import { SandcastleRunner } from './worker/sandcastle-runner.js';
 
 /** Resolved worker configuration, read once from the environment at startup. */
@@ -141,13 +142,7 @@ export async function main(): Promise<void> {
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
     maxChangedLines: config.maxChangedLines,
-    resolveAgent: (repo, agentKey) => {
-      const resolved = configLoader.resolveForRepo(repo.owner, repo.name);
-      if (resolved === null) {
-        return null;
-      }
-      return configLoader.config.agents.get(agentKey) ?? null;
-    },
+    resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
   const claimant = new ReviewClaimant({
     client: reactiveClient,
@@ -232,6 +227,27 @@ export function isMainModule(importMetaUrl: string, argv1: string | undefined): 
     return false;
   }
   return importMetaUrl === pathToFileURL(argv1).href;
+}
+
+interface AgentResolutionLoader {
+  resolveForRepo(
+    owner: string,
+    name: string,
+  ): {
+    agents: AgentDefinition[];
+  } | null;
+}
+
+export function resolveConfiguredAgent(
+  loader: AgentResolutionLoader,
+  repo: RepoForWorktree,
+  agentKey: string,
+): AgentDefinition | null {
+  const resolved = loader.resolveForRepo(repo.owner, repo.name);
+  if (resolved === null) {
+    return null;
+  }
+  return resolved.agents.find((agent) => agent.key === agentKey) ?? null;
 }
 
 // Run only when executed directly, not when imported by tests.

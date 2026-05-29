@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
+import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { isMainModule, loadConfig } from './main.js';
+import { isMainModule, loadConfig, resolveConfiguredAgent } from './main.js';
 
 describe('loadConfig PORT validation', () => {
   // Finding #8: PORT was parsed with Number.parseInt, which silently accepts
@@ -97,6 +98,47 @@ describe('loadConfig GitHub App credentials', () => {
   });
 });
 
+describe('resolveConfiguredAgent', () => {
+  it('returns only Agents that apply to the repo', () => {
+    const logicAgent = agent('logic');
+    const securityAgent = agent('security');
+    const loader = {
+      resolveForRepo: () => ({
+        agents: [logicAgent],
+      }),
+    };
+
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+        'logic',
+      ),
+    ).toBe(logicAgent);
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+        securityAgent.key,
+      ),
+    ).toBeNull();
+  });
+
+  it('returns null when the repo is not registered', () => {
+    const loader = {
+      resolveForRepo: () => null,
+    };
+
+    expect(
+      resolveConfiguredAgent(
+        loader,
+        { owner: 'acme', name: 'unknown', defaultBranch: 'main' },
+        'logic',
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('isMainModule', () => {
   // Finding #1: the run-when-direct guard must encode the script path the same
   // way `import.meta.url` is encoded. A raw `file://${argv1}` concat fails on any
@@ -133,3 +175,19 @@ describe('isMainModule', () => {
     expect(isMainModule(pathToFileURL(argv1).href, undefined)).toBe(false);
   });
 });
+
+function agent(key: string): AgentDefinition {
+  return {
+    key,
+    name: key,
+    description: `${key} agent`,
+    category: key,
+    vendor: 'claude',
+    model: 'opus',
+    tools: [],
+    maxIterations: 1,
+    completionSignal: '</findings>',
+    defaultEnabled: true,
+    systemPrompt: `# ${key}`,
+  };
+}
