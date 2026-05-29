@@ -203,6 +203,80 @@ describe('ReviewExecutor', () => {
     expect(store.failed).toEqual([]);
     expect(cloneManager.removed).toEqual(['job-1']);
   });
+
+  it('honors cancellation that arrives during the final stale-result check before posting', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const cancellations = new ReviewCancellationCoordinator();
+    let statusChecks = 0;
+    store.getReviewJobStatus = async () => {
+      statusChecks += 1;
+      if (statusChecks === 4) {
+        cancellations.cancelReviewJobs(['job-1']);
+      }
+      return store.status;
+    };
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      cancellationRegistry: cancellations,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runLogicAgent: async () =>
+          `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(poster.results).toEqual([]);
+    expect(store.postedFindings).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(cloneManager.removed).toEqual(['job-1']);
+  });
+
+  it('does not start an Agent when superseded after creating the worktree', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const cancellations = new ReviewCancellationCoordinator();
+    const originalCreateWorktree = cloneManager.createWorktree.bind(cloneManager);
+    cloneManager.createWorktree = async (repo, request) => {
+      const worktree = await originalCreateWorktree(repo, request);
+      cancellations.cancelReviewJobs(['job-1']);
+      return worktree;
+    };
+    let runnerCalls = 0;
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      cancellationRegistry: cancellations,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runLogicAgent: async () => {
+          runnerCalls += 1;
+          return '<findings>{"findings":[]}</findings>';
+        },
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(runnerCalls).toBe(0);
+    expect(poster.results).toEqual([]);
+    expect(store.recordedFindings).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(cloneManager.removed).toEqual(['job-1']);
+  });
 });
 
 function makeContext(): ReviewJobContext {

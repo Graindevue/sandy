@@ -177,10 +177,12 @@ export class ReviewExecutor {
       }
 
       await this.#cloneManager.ensureCloned(repo);
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
       worktree = await this.#cloneManager.createWorktree(repo, {
         reviewJobId: context.job.id,
         sha: context.job.headSha,
       });
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
@@ -320,6 +322,7 @@ export class ReviewExecutor {
   async #throwIfSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const status = await this.#store.getReviewJobStatus(jobId);
+    signal?.throwIfAborted();
     if (status === 'superseded') {
       throw new ReviewSupersededError(jobId);
     }
