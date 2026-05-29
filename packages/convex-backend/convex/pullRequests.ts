@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server';
-import { pullRequestState } from './validators';
+import { mutation, query } from './_generated/server.js';
+import { pullRequestState } from './validators.js';
 
 /**
  * Resolve a Repo by `owner/name`, creating it — and a default Product to hold it

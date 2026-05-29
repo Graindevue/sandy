@@ -3,15 +3,7 @@
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist",
-    "types": ["node"],
-    // Redirect only the *type* of `@sandy/convex-backend/api` to a local stub so
-    // the backend's source `.ts` (authored for its own looser tsconfig) is not
-    // pulled into this package's stricter type-check. Runtime resolution is
-    // unaffected — Node loads the real package export, which is `anyApi`. See
-    // src/types/convex-backend-api.d.ts.
-    "paths": {
-      "@sandy/convex-backend/api": ["./src/types/convex-backend-api.d.ts"]
-    }
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "src/**/*.test.ts"]

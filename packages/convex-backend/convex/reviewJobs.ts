@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server';
-import { reviewTrigger } from './validators';
+import { mutation, query } from './_generated/server.js';
+import { reviewTrigger } from './validators.js';
 
 /** Enqueue a new `pending` ReviewJob and return its id. */
 export const enqueue = mutation({
