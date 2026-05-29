@@ -19,7 +19,15 @@ vi.mock('node:child_process', async () => {
 
 import { type ChildProcess, execFile, execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -689,6 +697,36 @@ describe('appleContainer()', () => {
     expect(spawnArgs).not.toContain('-i');
 
     expect(readFileSync(dstFile)).toEqual(payload);
+
+    rmSync(tmpDir, { recursive: true, force: true });
+    await handle.close();
+  });
+
+  it('copyFileOut leaves an existing host file intact when the copy fails', async () => {
+    mockCreateFlow();
+    // Non-zero exit after streaming begins — the copy fails mid-flight.
+    mockSpawn.mockImplementation(() => fakeProc({ stdout: Buffer.from('partial'), exitCode: 1 }));
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'apple-container-copy-out-'));
+    const dstFile = join(tmpDir, 'dst.bin');
+    const original = Buffer.from('original host contents\n');
+    writeFileSync(dstFile, original);
+
+    const provider = appleContainer();
+    const handle = await provider.create({
+      worktreePath: '/tmp/worktree',
+      hostRepoPath: '/tmp/repo',
+      mounts: [{ hostPath: '/tmp/worktree', sandboxPath: '/home/agent/workspace' }],
+      env: {},
+    });
+    const bmHandle = handle as BindMountSandboxHandle;
+
+    await expect(bmHandle.copyFileOut('/sandbox/output.txt', dstFile)).rejects.toThrow(
+      /copyFileOut/,
+    );
+    // The pre-existing file is untouched, and no temp file is left behind.
+    expect(readFileSync(dstFile)).toEqual(original);
+    expect(readdirSync(tmpDir)).toEqual(['dst.bin']);
 
     rmSync(tmpDir, { recursive: true, force: true });
     await handle.close();

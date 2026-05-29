@@ -9,7 +9,7 @@
 
 import { execFile, execFileSync, type StdioOptions, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, renameSync, rmSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { createInterface } from 'node:readline';
 import type { MountConfig } from '@ai-hero/sandcastle';
@@ -272,7 +272,11 @@ const streamCopyFileOut = (
       stderrChunks.push(chunk);
     });
 
-    const output = createWriteStream(hostPath);
+    // Stream into a sibling temp file and only rename it into place on a clean
+    // exit, so a failed or interrupted copy never truncates or partially
+    // overwrites an existing host file.
+    const tmpPath = `${hostPath}.${randomUUID()}.tmp`;
+    const output = createWriteStream(tmpPath);
 
     let outputFinished = false;
     let exitInfo: {
@@ -280,6 +284,14 @@ const streamCopyFileOut = (
       signal: NodeJS.Signals | null;
     } | null = null;
     let settled = false;
+
+    const cleanupTmp = () => {
+      try {
+        rmSync(tmpPath, { force: true });
+      } catch {
+        /* best-effort */
+      }
+    };
 
     const fail = (err: Error) => {
       if (settled) return;
@@ -290,6 +302,7 @@ const streamCopyFileOut = (
         /* best-effort */
       }
       output.destroy();
+      cleanupTmp();
       reject(err);
     };
 
@@ -297,6 +310,19 @@ const streamCopyFileOut = (
       if (settled || !exitInfo || !outputFinished) return;
       if (exitInfo.code === 0 && exitInfo.signal === null) {
         settled = true;
+        try {
+          renameSync(tmpPath, hostPath);
+        } catch (err) {
+          cleanupTmp();
+          reject(
+            new Error(
+              `copyFileOut: failed to move temp file into '${hostPath}': ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            ),
+          );
+          return;
+        }
         resolve();
         return;
       }
@@ -632,9 +658,12 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
             containerArgs.push(containerName, ...args);
 
             const proc = spawn('container', containerArgs, {
-              // sandcastle types these as web streams; Apple's `container exec`
-              // takes them as Node stdio. Cast via `unknown` (@types/node 24's
-              // Stream no longer overlaps web ReadableStream/WritableStream).
+              // sandcastle types stdin/stdout/stderr as NodeJS.Readable/Writable;
+              // @types/node 24's StdioOptions no longer structurally overlaps
+              // them, hence the cast. spawn ultimately needs fd-backed streams,
+              // which sandcastle's interactive path supplies.
+              // TODO(#9): assert the streams are fd-backed once the e2e harness
+              // exercises a real interactive session.
               stdio: [opts.stdin, opts.stdout, opts.stderr] as unknown as StdioOptions,
             });
 

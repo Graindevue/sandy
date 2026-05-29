@@ -43,13 +43,13 @@ RUN set -eux; \
 
 # Global tooling: pnpm, opensrc (framework-source lookup), tree-sitter (the
 # `tree_sitter_query` Agent tool), and the Claude agent CLI (Phase 1 `logic`
-# Agent → vendor: claude). Pin exact versions once the e2e setup (issue #9)
-# confirms the CLIs sandcastle's providers invoke.
+# Agent → vendor: claude). Pinned for reproducible builds; bump as needed once
+# the e2e setup (issue #9) confirms the exact CLIs sandcastle's providers invoke.
 RUN npm install -g \
-  pnpm@10 \
-  opensrc \
-  tree-sitter-cli \
-  @anthropic-ai/claude-code
+  pnpm@10.0.0 \
+  opensrc@0.7.2 \
+  tree-sitter-cli@0.26.8 \
+  @anthropic-ai/claude-code@2.1.153
 
 # A numeric USER is mandatory: the provider refuses an image whose USER is
 # missing or non-numeric, and checks that it matches the expected UID.
