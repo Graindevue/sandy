@@ -106,35 +106,36 @@ export async function dispatchEvent(
     return { action: 'noop', reason: 'no trigger' };
   }
 
+  const trigger = decision.trigger;
   const enqueueInput = {
     pullRequestId,
     repoId,
     headSha: pr.headSha,
-    trigger: decision.trigger,
+    trigger,
     // Phase 1 runs only the logic Agent (PRD).
     agentKeys: ['logic'],
   };
 
-  if (decision.trigger === 'push') {
+  if (trigger === 'push') {
     const result = await sink.enqueueSupersedingReviewJob(enqueueInput);
     options.reviewCanceller?.cancelReviewJobs(result.supersededJobIds);
     logger.info(
       `enqueued ReviewJob ${result.reviewJobId} for ${fullName(repo)}#${pr.number} ` +
-        `(trigger=${decision.trigger}, superseded=${result.supersededJobIds.length})`,
+        `(trigger=${trigger}, superseded=${result.supersededJobIds.length})`,
     );
     return {
       action: 'enqueued',
       reviewJobId: result.reviewJobId,
-      trigger: decision.trigger,
+      trigger,
       supersededJobIds: result.supersededJobIds,
     };
   }
 
   const reviewJobId = await sink.enqueueReviewJob(enqueueInput);
   logger.info(
-    `enqueued ReviewJob ${reviewJobId} for ${fullName(repo)}#${pr.number} (trigger=${decision.trigger})`,
+    `enqueued ReviewJob ${reviewJobId} for ${fullName(repo)}#${pr.number} (trigger=${trigger})`,
   );
-  return { action: 'enqueued', reviewJobId, trigger: decision.trigger };
+  return { action: 'enqueued', reviewJobId, trigger };
 }
 
 function upsertPr(

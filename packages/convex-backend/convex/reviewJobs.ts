@@ -3,6 +3,8 @@ import type { Id } from './_generated/dataModel.js';
 import { mutation, query } from './_generated/server.js';
 import { reviewJobStatus, reviewTrigger } from './validators.js';
 
+const ACTIVE_REVIEW_JOB_STATUSES = ['pending', 'running'] as const;
+
 /** Enqueue a new `pending` ReviewJob and return its id. */
 export const enqueue = mutation({
   args: {
@@ -40,9 +42,9 @@ export const enqueueSuperseding = mutation({
   }),
   handler: async (ctx, args) => {
     const supersededJobIds: Array<Id<'reviewJobs'>> = [];
-    let activeSameHeadJobId: Id<'reviewJobs'> | null = null;
+    let existingSameHeadJobId: Id<'reviewJobs'> | null = null;
 
-    for (const status of ['pending', 'running'] as const) {
+    for (const status of ACTIVE_REVIEW_JOB_STATUSES) {
       const activeJobs = ctx.db
         .query('reviewJobs')
         .withIndex('by_pull_request_and_status', (q) =>
@@ -51,7 +53,7 @@ export const enqueueSuperseding = mutation({
 
       for await (const job of activeJobs) {
         if (job.headSha === args.headSha) {
-          activeSameHeadJobId ??= job._id;
+          existingSameHeadJobId ??= job._id;
           continue;
         }
         await ctx.db.patch(job._id, { status: 'superseded', finishedAt: args.supersededAt });
@@ -59,8 +61,8 @@ export const enqueueSuperseding = mutation({
       }
     }
 
-    if (activeSameHeadJobId !== null) {
-      return { reviewJobId: activeSameHeadJobId, supersededJobIds, enqueued: false };
+    if (existingSameHeadJobId !== null) {
+      return { reviewJobId: existingSameHeadJobId, supersededJobIds, enqueued: false };
     }
 
     const reviewJobId = await ctx.db.insert('reviewJobs', {

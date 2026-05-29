@@ -98,6 +98,8 @@ export interface ReviewAgentRunner {
   }): Promise<string>;
 }
 
+type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runLogicAgent']>[0];
+
 export interface ReviewPoster {
   postReviewResult(input: {
     target: PullRequestTarget;
@@ -156,19 +158,20 @@ export class ReviewExecutor {
     let agentStartedAt: number | null = null;
     let agentRunRecorded = false;
     const cancellation = this.#cancellationRegistry?.register(jobId);
+    const cancellationSignal = cancellation?.signal;
 
     try {
-      cancellation?.signal.throwIfAborted();
+      cancellationSignal?.throwIfAborted();
       context = await this.#requiredContext(jobId);
       agentKey = requireLogicAgentKey(context);
       const repo = repoForWorktree(context);
       const agent = this.#requiredAgent(repo, agentKey);
       const target = pullRequestTarget(context);
       const changedLines = await this.#diffInspector.changedLineCount(target);
-      await this.#throwIfSuperseded(jobId, cancellation?.signal);
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
 
       if (changedLines > this.#maxChangedLines) {
-        await this.#throwIfSuperseded(jobId, cancellation?.signal);
+        await this.#throwIfSuperseded(jobId, cancellationSignal);
         await this.#completeScopeDecline(jobId, target, changedLines);
         return;
       }
@@ -180,21 +183,16 @@ export class ReviewExecutor {
       });
 
       agentStartedAt = this.#now();
-      const runInput: {
-        agent: AgentDefinition;
-        worktreePath: string;
-        pullRequest: RunnerPullRequest;
-        signal?: AbortSignal;
-      } = {
+      const runInput: ReviewAgentRunInput = {
         agent,
         worktreePath: worktree.path,
         pullRequest: runnerPullRequest(context),
       };
-      if (cancellation !== undefined) {
-        runInput.signal = cancellation.signal;
+      if (cancellationSignal !== undefined) {
+        runInput.signal = cancellationSignal;
       }
       const stdout = await this.#runner.runLogicAgent(runInput);
-      await this.#throwIfSuperseded(jobId, cancellation?.signal);
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
       const payload = parseFindingsPayload(stdout);
       const agentFinishedAt = this.#now();
 
@@ -208,9 +206,9 @@ export class ReviewExecutor {
       });
       agentRunRecorded = true;
 
-      await this.#throwIfSuperseded(jobId, cancellation?.signal);
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
       const persistedFindings = await this.#recordFindings(context, agentKey, payload.findings);
-      await this.#throwIfSuperseded(jobId, cancellation?.signal);
+      await this.#throwIfSuperseded(jobId, cancellationSignal);
       await this.#postReviewResult(target, agentKey, persistedFindings, payload.summary);
 
       await this.#store.markCompleted(jobId, this.#now());
@@ -319,7 +317,7 @@ export class ReviewExecutor {
     });
   }
 
-  async #throwIfSuperseded(jobId: string, signal: AbortSignal | undefined): Promise<void> {
+  async #throwIfSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const status = await this.#store.getReviewJobStatus(jobId);
     if (status === 'superseded') {

@@ -222,13 +222,14 @@ async function parseResolvablePushEvent(
   if ('reason' in facts) {
     return ignored(facts.reason);
   }
-  if (resolver.resolvePullRequestForPush === undefined) {
+  const resolvePullRequestForPush = resolver.resolvePullRequestForPush;
+  if (resolvePullRequestForPush === undefined) {
     return ignored('push: pull_request details unavailable');
   }
 
   let pr: PullRequestFacts | null;
   try {
-    pr = await resolver.resolvePullRequestForPush(facts.repo, facts.branch, facts.headSha);
+    pr = await resolvePullRequestForPush(facts.repo, facts.branch, facts.headSha);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return ignored(`push: pull_request resolution failed: ${detail}`);
@@ -293,9 +294,10 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
 
 /**
  * Normalize a delivery for dispatch, using the GitHub API for payloads that are
- * valid review signals but do not embed full PR facts. In Phase 1 this is needed
- * for normal PR Conversation comments (`issue_comment`): GitHub includes only an
- * issue number there, so Sandy resolves the PR before Sticky Opt-In evaluation.
+ * valid review signals but do not embed full PR facts. PR Conversation comments
+ * (`issue_comment`) carry only an issue number, and `push` deliveries carry a
+ * branch ref rather than a PR, so Sandy resolves the PR before Sticky Opt-In
+ * evaluation.
  */
 export async function parseEventForDispatch(
   eventName: SupportedEventName,
