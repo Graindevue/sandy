@@ -4,23 +4,41 @@ import type { ReviewJobId } from './review-job.js';
 export type AgentVendor = 'claude' | 'codex' | 'cursor' | 'copilot';
 
 /**
+ * Whether an Agent runs by default. `true`/`false` are explicit; `'auto'` lets
+ * Sandy decide per Product (e.g. enable the `convex` Agent only when the Repo
+ * uses Convex). The shipped Agent files declare this in their frontmatter.
+ */
+export type AgentDefaultEnabled = boolean | 'auto';
+
+/**
  * A reviewer persona: a system prompt plus a vendor/model selection, a tool
  * allowlist, and a completion signal. Sourced from a markdown file in `agents/`
  * (defaults) or `.config/agents/` (per-instance). Agents are configuration
  * data, not code — adding one requires no changes to Sandy.
+ *
+ * Built by the config loader from an Agent file's YAML frontmatter (the metadata
+ * fields) plus its markdown body (`systemPrompt`).
  */
 export interface AgentDefinition {
   /** Stable key derived from the definition's file name, e.g. `"logic"`. */
   key: string;
-  /** Human-readable name. */
+  /** Human-readable name (frontmatter `name`). */
   name: string;
-  /** Default Finding category this Agent emits, e.g. `"logic"`. */
+  /** One-line summary of what the Agent reviews (frontmatter `description`). */
+  description: string;
+  /** Default Finding category this Agent emits; defaults to {@link key}. */
   category: string;
   vendor: AgentVendor;
-  /** Vendor-specific model identifier, e.g. `"claude-opus-4-8"`. */
+  /** Vendor-specific model identifier, e.g. `"opus"`. */
   model: string;
   /** Allowed tool names inside the Agent's sandbox. */
   tools: string[];
+  /** Maximum agent loop iterations before Sandcastle stops the run. */
+  maxIterations: number;
+  /** String whose appearance in Agent output marks the run complete. */
+  completionSignal: string;
+  /** Whether this Agent runs by default (frontmatter `defaultEnabled`). */
+  defaultEnabled: AgentDefaultEnabled;
   /** The Agent's system prompt (the markdown body of its definition file). */
   systemPrompt: string;
 }
