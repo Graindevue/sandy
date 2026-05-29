@@ -150,7 +150,20 @@ export async function main(): Promise<void> {
   });
   claimant.start();
 
-  await startWebhookServer(config.port, { webhookSecret: config.webhookSecret, sink });
+  await startWebhookServer(config.port, {
+    webhookSecret: config.webhookSecret,
+    sink,
+    forkDeclineCommenter: {
+      async postForkDeclined({ repo, pullNumber, body }) {
+        await github.createIssueComment({
+          owner: repo.owner,
+          repo: repo.name,
+          issueNumber: pullNumber,
+          body,
+        });
+      },
+    },
+  });
   console.info(`Sandy webhook server listening on :${config.port}`);
 }
 

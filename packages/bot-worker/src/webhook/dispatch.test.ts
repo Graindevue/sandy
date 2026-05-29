@@ -75,6 +75,18 @@ class FakeSink implements ReviewSink {
   }
 }
 
+class FakeForkDeclineCommenter {
+  readonly comments: Array<{ repo: RepoRef; pullNumber: number; body: string }> = [];
+
+  async postForkDeclined(input: {
+    repo: RepoRef;
+    pullNumber: number;
+    body: string;
+  }): Promise<void> {
+    this.comments.push(input);
+  }
+}
+
 function comment(body: string, prOverrides: Partial<PullRequestFacts> = {}): CommentEvent {
   return { kind: 'comment', repo: BASE_REPO, body, pr: prFacts(prOverrides) };
 }
@@ -160,15 +172,20 @@ describe('dispatchEvent', () => {
   it('declines a fork PR on mention without upserting or enqueuing', async () => {
     const warn = vi.fn();
     const sink = new FakeSink(false);
+    const commenter = new FakeForkDeclineCommenter();
     const outcome = await dispatchEvent(
       comment('@bot review', { headRepo: { owner: 'forker', name: 'sandy' } }),
       sink,
       { info: vi.fn(), warn },
+      { forkDeclineCommenter: commenter },
     );
     expect(outcome).toEqual({ action: 'declined-fork', repo: 'tony-co/sandy', number: 7 });
     expect(sink.upserts).toHaveLength(0);
     expect(sink.enqueued).toHaveLength(0);
     expect(sink.setActiveCalls).toHaveLength(0);
+    expect(commenter.comments).toEqual([
+      { repo: BASE_REPO, pullNumber: 7, body: FORK_DECLINE_MESSAGE },
+    ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(FORK_DECLINE_MESSAGE));
   });
 

@@ -24,6 +24,14 @@ export interface DispatchLogger {
   warn(message: string, ...args: unknown[]): void;
 }
 
+export interface ForkDeclineCommenter {
+  postForkDeclined(input: { repo: RepoRef; pullNumber: number; body: string }): Promise<void>;
+}
+
+export interface DispatchOptions {
+  forkDeclineCommenter?: ForkDeclineCommenter;
+}
+
 function fullName(repo: RepoRef): string {
   return `${repo.owner}/${repo.name}`;
 }
@@ -46,6 +54,7 @@ export async function dispatchEvent(
   event: ParsedEvent,
   sink: ReviewSink,
   logger: DispatchLogger,
+  options: DispatchOptions = {},
 ): Promise<DispatchOutcome> {
   if (event.kind === 'ignored') {
     logger.info(`webhook ignored: ${event.reason}`);
@@ -59,8 +68,11 @@ export async function dispatchEvent(
   const decision = evaluateTrigger(event, currentReviewActive);
 
   if (decision.decline === 'fork') {
-    // TODO(#6): post FORK_DECLINE_MESSAGE as a PR comment via Octokit. For now it
-    // is logged so the limitation is observable without the GitHub API client.
+    await options.forkDeclineCommenter?.postForkDeclined({
+      repo,
+      pullNumber: pr.number,
+      body: FORK_DECLINE_MESSAGE,
+    });
     logger.warn(`declining fork PR ${fullName(repo)}#${pr.number}: ${FORK_DECLINE_MESSAGE}`);
     return { action: 'declined-fork', repo: fullName(repo), number: pr.number };
   }
