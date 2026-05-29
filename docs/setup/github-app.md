@@ -39,13 +39,14 @@ worker config.
 
 ## 2. Set permissions
 
-Under **Permissions → Repository permissions**, set exactly these three. Leave
+Under **Permissions → Repository permissions**, set exactly these four. Leave
 everything else at **No access** — Sandy needs nothing more in Phase 1.
 
 | Permission | Access | Why |
 |------------|--------|-----|
 | **Pull requests** | **Read & write** | Read PR metadata and diffs; post inline comments + the summary comment. |
 | **Contents** | **Read-only** | Clone and fetch registered Repos to local disk. |
+| **Issues** | **Read-only** | Required to subscribe to the **Issue comment** event in step 3 — GitHub gates that event on the Issues permission, even though `@bot review` arrives as a comment on a PR. Without it, "Issue comment" won't appear in the events list. Read-only suffices; Sandy never writes to Issues. |
 | **Metadata** | **Read-only** | Mandatory baseline; GitHub auto-selects it. |
 
 ## 3. Subscribe to webhook events
@@ -55,7 +56,7 @@ Under **Subscribe to events**, check exactly these four:
 | Event | Drives |
 |-------|--------|
 | **Pull request** | PR opened / closed / `draft → ready` transitions. Close clears `reviewActive`; ready-for-review is a Review trigger (Sticky Opt-In). |
-| **Issue comment** | `@bot review` mention on a PR conversation (the opt-in trigger). |
+| **Issue comment** | `@bot review` mention on a PR conversation (the opt-in trigger). Gated on the **Issues** permission from step 2 — if you don't see this event in the list, you haven't granted Issues (Read-only) yet. |
 | **Pull request review comment** | Reactions/replies on Sandy's inline Findings (the trailer-driven reaction loop). Subscribe now so deliveries arrive from day one, but Phase 1 has no Reactions table — persisting reactions and feeding the learning loop is Phase 3. |
 | **Push** | New commits on an opted-in PR retrigger a Review automatically (Cancel-on-Supersede if one is already in flight). |
 
