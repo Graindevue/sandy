@@ -34,6 +34,7 @@ const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const DEFAULT_MAX_CHANGED_LINES = 5000;
 const DEFAULT_MAX_CONCURRENT_JOBS = 1;
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
+const APPLE_CONTAINER_PROVIDER_PACKAGE = '@sandy/apple-container-provider';
 
 type AppleContainerProviderModule = {
   cleanupOrphanedAppleContainers: (options: { namePrefix: string }) => Promise<{
@@ -187,12 +188,8 @@ export async function main(): Promise<void> {
 }
 
 async function cleanupWorkerAppleContainers(): Promise<void> {
-  const packageName = '@sandy/apple-container-provider';
-  const { cleanupOrphanedAppleContainers } = (await import(
-    packageName
-  )) as AppleContainerProviderModule;
-
   try {
+    const { cleanupOrphanedAppleContainers } = await importAppleContainerProvider();
     const result = await cleanupOrphanedAppleContainers({
       namePrefix: SANDY_WORKER_CONTAINER_PREFIX,
     });
@@ -207,6 +204,10 @@ async function cleanupWorkerAppleContainers(): Promise<void> {
   } catch (error) {
     console.warn(`Skipping Sandy worker container startup cleanup: ${errorMessage(error)}`);
   }
+}
+
+async function importAppleContainerProvider(): Promise<AppleContainerProviderModule> {
+  return (await import(APPLE_CONTAINER_PROVIDER_PACKAGE)) as AppleContainerProviderModule;
 }
 
 function errorMessage(error: unknown): string {

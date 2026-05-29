@@ -58,7 +58,12 @@ export interface SandcastleRunnerOptions {
 
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const OPEN_SRC_SANDBOX_CACHE = '/home/agent/.opensrc';
+const APPLE_CONTAINER_PROVIDER_PACKAGE = '@sandy/apple-container-provider';
 export const SANDY_WORKER_CONTAINER_PREFIX = 'sandy-worker-';
+
+type AppleContainerProviderModule = {
+  appleContainer: (options?: AppleContainerRunnerOptions) => SandboxProvider;
+};
 
 export class SandcastleRunner {
   readonly #imageName: string;
@@ -123,10 +128,9 @@ function createAgentProvider(agent: AgentDefinition, env: Record<string, string>
 async function createDefaultAppleContainer(
   options?: AppleContainerRunnerOptions,
 ): Promise<SandboxProvider> {
-  const packageName = '@sandy/apple-container-provider';
-  const { appleContainer } = (await import(packageName)) as {
-    appleContainer: (options?: AppleContainerRunnerOptions) => SandboxProvider;
-  };
+  const { appleContainer } = (await import(
+    APPLE_CONTAINER_PROVIDER_PACKAGE
+  )) as AppleContainerProviderModule;
   return appleContainer(options);
 }
 

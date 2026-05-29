@@ -1126,6 +1126,34 @@ describe('cleanupOrphanedAppleContainers()', () => {
         .map(([, args]) => (args as string[]).at(-1)),
     ).toEqual(['sandy-worker-old-running', 'sandy-worker-old-stopped']);
   });
+
+  it('treats an empty container list as no containers to delete', async () => {
+    mockExecFile.mockImplementation((_command, args, ...rest: unknown[]) => {
+      const callback = rest[rest.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+
+      if (Array.isArray(args) && args[0] === 'list') {
+        callback(null, '', '');
+        return undefined as never;
+      }
+
+      callback(null, '', '');
+      return undefined as never;
+    });
+
+    await expect(cleanupOrphanedAppleContainers({ namePrefix: 'sandy-worker-' })).resolves.toEqual({
+      found: [],
+      deleted: [],
+      failed: [],
+    });
+
+    expect(
+      mockExecFile.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === 'delete'),
+    ).toHaveLength(0);
+  });
 });
 
 describe('appleContainer() — integration (real `container` CLI)', () => {

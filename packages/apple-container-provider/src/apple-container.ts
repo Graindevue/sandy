@@ -54,6 +54,8 @@ const DEFAULT_CONTAINER_NAME_PREFIX = 'sandcastle-';
 
 /** Bound control-plane `container` CLI calls so a wedged daemon can't hang the worker. */
 const CONTAINER_CLI_TIMEOUT_MS = 60_000;
+const CONTAINER_LIST_TOP_LEVEL_NAME_KEYS = ['id', 'ID', 'name', 'Name'] as const;
+const CONTAINER_LIST_CONFIGURATION_NAME_KEYS = ['id', 'ID', 'name', 'Name', 'hostname'] as const;
 
 const execFileAsync = (
   command: string,
@@ -489,6 +491,10 @@ function errorMessage(error: unknown): string {
 }
 
 function parseContainerListNames(stdout: string): string[] {
+  if (stdout.trim().length === 0) {
+    return [];
+  }
+
   const parsed = JSON.parse(stdout) as unknown;
   const items = Array.isArray(parsed) ? parsed : [parsed];
   return items.flatMap((item) => {
@@ -502,7 +508,7 @@ function containerListItemName(item: unknown): string | null {
     return null;
   }
 
-  for (const key of ['id', 'ID', 'name', 'Name']) {
+  for (const key of CONTAINER_LIST_TOP_LEVEL_NAME_KEYS) {
     const value = item[key];
     if (typeof value === 'string' && value.length > 0) {
       return value;
@@ -513,7 +519,7 @@ function containerListItemName(item: unknown): string | null {
   if (!isRecord(configuration)) {
     return null;
   }
-  for (const key of ['id', 'ID', 'name', 'Name', 'hostname']) {
+  for (const key of CONTAINER_LIST_CONFIGURATION_NAME_KEYS) {
     const value = configuration[key];
     if (typeof value === 'string' && value.length > 0) {
       return value;
