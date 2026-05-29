@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -137,7 +137,7 @@ describe('CloneManager', () => {
     expect(firstSha).not.toBe(headSha);
   });
 
-  it('isolates concurrent worktrees for the same Repo at different SHAs', async () => {
+  it('isolates worktrees for the same Repo at different SHAs', async () => {
     const origin = await makeOrigin();
     const firstSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
     const baseDir = join(tmpRoot, 'repos');
@@ -210,5 +210,46 @@ describe('CloneManager', () => {
     });
 
     await expect(manager.ensureCloned(REPO)).rejects.toThrow(/clone/i);
+  });
+
+  it('re-creates a worktree at a path left behind by a crashed Review', async () => {
+    const origin = await makeOrigin();
+    const firstSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({ baseDir, cloneUrl: () => origin.url });
+    await manager.ensureCloned(REPO);
+    const secondSha = await origin.commit('second', 'feature.ts', 'export const x = 1;\n');
+    await manager.fetch(REPO);
+
+    // First materialization, then a re-run for the SAME reviewJobId WITHOUT
+    // removeWorktree (simulating a crash mid-Review): the leftover dir is still
+    // present and registered. createWorktree must reconcile and reuse the path,
+    // re-pinned to the new SHA, rather than failing on the leftover.
+    const first = await manager.createWorktree(REPO, { reviewJobId: 'rj_crash', sha: firstSha });
+    expect(existsSync(first.path)).toBe(true);
+
+    const second = await manager.createWorktree(REPO, { reviewJobId: 'rj_crash', sha: secondSha });
+    expect(second.path).toBe(first.path);
+    expect(await git(second.path, 'rev-parse', 'HEAD')).toBe(secondSha);
+    expect(existsSync(join(second.path, 'feature.ts'))).toBe(true);
+  });
+
+  it('re-clones when an interrupted clone left a broken directory', async () => {
+    const origin = await makeOrigin();
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({ baseDir, cloneUrl: () => origin.url });
+
+    // Simulate an interrupted first clone: a directory with a bogus `.git` that
+    // git does not recognize as a work tree.
+    const dest = manager.repoPath(REPO);
+    await mkdir(join(dest, '.git'), { recursive: true });
+    await writeFile(join(dest, '.git', 'HEAD'), 'garbage\n');
+
+    const repoPath = await manager.ensureCloned(REPO);
+
+    // The broken dir was replaced by a real clone, so later operations work.
+    expect(repoPath).toBe(dest);
+    expect(existsSync(join(repoPath, 'README.md'))).toBe(true);
+    expect(await git(repoPath, 'rev-parse', '--is-inside-work-tree')).toBe('true');
   });
 });

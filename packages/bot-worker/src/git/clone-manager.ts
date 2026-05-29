@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -73,14 +73,19 @@ export class CloneManager {
 
   /**
    * Clone the Repo on first observation; return its existing clone path on later
-   * calls (idempotent). The clone is created fresh under the Repo's namespaced
-   * path; a present `.git` directory is treated as an existing clone.
+   * calls (idempotent). A healthy existing clone is reused; a leftover directory
+   * that git doesn't recognize as a work tree (e.g. an interrupted first clone
+   * that left a partial `.git` behind) is removed and re-cloned, so a broken
+   * clone self-heals instead of wedging every later fetch/worktree.
    */
   async ensureCloned(repo: RepoIdentity): Promise<string> {
     const dest = this.repoPath(repo);
-    if (await isGitRepo(dest)) {
+    if (await this.#isClonedRepo(dest)) {
       return dest;
     }
+    // Clear any leftover (a partial clone) so `git clone` doesn't fail on a
+    // non-empty target; `rm` with `force` is a no-op when the path is absent.
+    await rm(dest, { recursive: true, force: true });
     await mkdir(join(this.#baseDir, repo.owner), { recursive: true });
     await this.#git(this.#baseDir, [
       'clone',
@@ -116,9 +121,14 @@ export class CloneManager {
 
     const path = this.worktreePath(repo, request.reviewJobId);
     await mkdir(join(this.#baseDir, '.worktrees', repo.owner, repo.name), { recursive: true });
-    // `--detach` checks out the SHA without creating a branch; `--force` lets a
-    // re-run reuse a path left behind by a crash mid-Review.
-    await this.#git(repoDir, ['worktree', 'add', '--detach', '--force', path, request.sha]);
+    // Reconcile any leftover at this path before adding: a Review that crashed
+    // after `worktree add` leaves the directory present AND registered, and
+    // `git worktree add` refuses an existing path even with `--force` (that only
+    // rescues a missing-but-registered path). Clearing first lets a re-run for
+    // the same Review reuse the path deterministically.
+    await this.#clearWorktree(repoDir, path);
+    // `--detach` checks out the SHA without creating a branch.
+    await this.#git(repoDir, ['worktree', 'add', '--detach', path, request.sha]);
 
     return { repo, path, sha: request.sha, reviewJobId: request.reviewJobId };
   }
@@ -129,20 +139,48 @@ export class CloneManager {
    * both the success and failure paths without guarding.
    */
   async removeWorktree(worktree: Worktree): Promise<void> {
-    const repoDir = this.repoPath(worktree.repo);
-    if (await pathExists(worktree.path)) {
-      // `--force` removes the worktree even if it has untracked/modified files,
-      // which a Review's tooling may have left behind.
-      await this.#git(repoDir, ['worktree', 'remove', '--force', worktree.path]);
+    await this.#clearWorktree(this.repoPath(worktree.repo), worktree.path);
+  }
+
+  /**
+   * Remove any worktree registered or left on disk at `path`, then prune stale
+   * administrative entries, so a fresh `worktree add` there can't fail on
+   * leftovers. Idempotent — shared by createWorktree (pre-add reconcile) and
+   * removeWorktree (teardown), so teardown is safe on both the success and
+   * failure paths and a never-created worktree is a no-op.
+   */
+  async #clearWorktree(repoDir: string, path: string): Promise<void> {
+    if (await pathExists(path)) {
+      // `--force` removes the worktree even with untracked/modified files a
+      // Review's tooling may have left behind.
+      await this.#git(repoDir, ['worktree', 'remove', '--force', path]);
     }
-    // Drop any administrative leftovers (e.g. a stale entry whose dir is already
-    // gone), keeping `git worktree list` clean for the next Review.
+    // Drop administrative leftovers (e.g. a stale entry whose dir is already
+    // gone): `worktree add` refuses a path that is still registered.
     await this.#git(repoDir, ['worktree', 'prune']);
   }
 
   /** Absolute path a Review's worktree is materialized at. */
   worktreePath(repo: RepoIdentity, reviewJobId: string): string {
     return join(this.#baseDir, '.worktrees', repo.owner, repo.name, reviewJobId);
+  }
+
+  /**
+   * Whether `dest` is a usable clone. A bare `.git` check isn't enough: an
+   * interrupted first clone (process killed, disk full) can leave a partial
+   * `.git` behind, which must NOT be treated as healthy or every later
+   * fetch/worktree fails forever. Confirm git itself accepts it as a work tree.
+   */
+  async #isClonedRepo(dest: string): Promise<boolean> {
+    if (!(await pathExists(join(dest, '.git')))) {
+      return false;
+    }
+    try {
+      await exec('git', ['-C', dest, 'rev-parse', '--is-inside-work-tree']);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -163,11 +201,6 @@ export class CloneManager {
       throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${detail}`);
     }
   }
-}
-
-/** Whether `dir` is the working tree of a git clone (has a `.git` entry). */
-async function isGitRepo(dir: string): Promise<boolean> {
-  return pathExists(join(dir, '.git'));
 }
 
 async function pathExists(path: string): Promise<boolean> {
