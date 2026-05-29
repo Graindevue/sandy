@@ -64,6 +64,18 @@ describe('parseFindingsPayload', () => {
     ).toThrow(/severity/i);
   });
 
+  it('uses the final findings block when earlier narration contains an example', () => {
+    const payload = parseFindingsPayload(`
+      Example:
+      <findings>{"summary":"Example only.","findings":[]}</findings>
+
+      Final answer:
+      <findings>{"summary":"Real result.","findings":[]}</findings>
+    `);
+
+    expect(payload).toEqual({ summary: 'Real result.', findings: [] });
+  });
+
   it('rejects output with no findings tag', () => {
     expect(() => parseFindingsPayload('no structured output')).toThrow(/<findings>/);
   });

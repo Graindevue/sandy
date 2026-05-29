@@ -25,12 +25,14 @@ export interface WorkerConfig {
   port: number;
   agentImage: string;
   maxChangedLines: number;
+  maxConcurrentJobs: number;
   agentEnv: Record<string, string>;
 }
 
 const DEFAULT_PORT = 3007;
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const DEFAULT_MAX_CHANGED_LINES = 5000;
+const DEFAULT_MAX_CONCURRENT_JOBS = 1;
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
 
 /**
@@ -48,6 +50,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
       ? DEFAULT_MAX_CHANGED_LINES
       : parsePositiveInt(env.SANDY_REVIEW_MAX_CHANGED_LINES, 'SANDY_REVIEW_MAX_CHANGED_LINES');
+  const maxConcurrentJobs =
+    env.SANDY_REVIEW_MAX_CONCURRENT_JOBS === undefined
+      ? DEFAULT_MAX_CONCURRENT_JOBS
+      : parsePositiveInt(env.SANDY_REVIEW_MAX_CONCURRENT_JOBS, 'SANDY_REVIEW_MAX_CONCURRENT_JOBS');
 
   return {
     webhookSecret,
@@ -57,6 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     port,
     agentImage: parseAgentImage(env.SANDY_AGENT_IMAGE),
     maxChangedLines,
+    maxConcurrentJobs,
     agentEnv: pickAgentEnv(env),
   };
 }
@@ -148,6 +155,7 @@ export async function main(): Promise<void> {
   const claimant = new ReviewClaimant({
     client: reactiveClient,
     handleClaimedJob: (jobId) => executor.executeClaimedJob(jobId),
+    maxConcurrentJobs: config.maxConcurrentJobs,
   });
   claimant.start();
 

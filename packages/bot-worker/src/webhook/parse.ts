@@ -190,7 +190,13 @@ async function parseResolvableIssueCommentEvent(
   if (typeof number !== 'number') {
     return ignored('issue_comment: missing issue number');
   }
-  const pr = await resolver.resolvePullRequest(repo, number);
+  let pr: PullRequestFacts | null;
+  try {
+    pr = await resolver.resolvePullRequest(repo, number);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return ignored(`issue_comment: pull_request resolution failed: ${detail}`);
+  }
   if (pr === null) {
     return ignored('issue_comment: pull_request details unavailable');
   }

@@ -26,6 +26,7 @@ interface InstallationToken {
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export class GitHubAppClient
   implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver
@@ -166,6 +167,7 @@ export class GitHubAppClient
   ): Promise<T> {
     const init: RequestInit = {
       method: options.method ?? 'GET',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         accept: 'application/vnd.github+json',
         authorization: `Bearer ${options.token}`,

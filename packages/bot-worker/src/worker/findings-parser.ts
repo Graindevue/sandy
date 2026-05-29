@@ -1,6 +1,6 @@
 import type { Confidence, Finding, FindingsPayload, Severity } from '@sandy/shared-types';
 
-const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/i;
+const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/gi;
 const SEVERITIES = new Set<Severity>(['P0', 'P1', 'P2']);
 const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
 
@@ -10,8 +10,9 @@ const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
  * model-generated text.
  */
 export function parseFindingsPayload(stdout: string): FindingsPayload {
-  const match = FINDINGS_BLOCK.exec(stdout);
-  if (match === null) {
+  const matches = [...stdout.matchAll(FINDINGS_BLOCK)];
+  const match = matches.at(-1);
+  if (match === undefined) {
     throw new Error('Agent output did not contain a <findings>...</findings> block');
   }
 

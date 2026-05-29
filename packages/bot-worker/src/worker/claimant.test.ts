@@ -53,6 +53,44 @@ describe('ReviewClaimant', () => {
     expect(client.claimed).toEqual([{ jobId: 'job-1', claimedAt: 1234 }]);
     expect(processed).toEqual([]);
   });
+
+  it('bounds distinct claimed jobs with maxConcurrentJobs', async () => {
+    const client = new FakeReactiveConvexClient([true, true]);
+    const processed: string[] = [];
+    const finish = new Map<string, () => void>();
+
+    const claimant = new ReviewClaimant({
+      client,
+      now: () => 1234,
+      logger: silentLogger,
+      maxConcurrentJobs: 1,
+      handleClaimedJob: async (jobId) => {
+        processed.push(jobId);
+        await new Promise<void>((resolve) => {
+          finish.set(jobId, resolve);
+        });
+      },
+    });
+
+    claimant.start();
+    client.emit([{ _id: 'job-1' }, { _id: 'job-2' }]);
+
+    await tick();
+    expect(client.claimed).toEqual([{ jobId: 'job-1', claimedAt: 1234 }]);
+    expect(processed).toEqual(['job-1']);
+
+    finish.get('job-1')?.();
+    await tick();
+    await tick();
+    expect(client.claimed).toEqual([
+      { jobId: 'job-1', claimedAt: 1234 },
+      { jobId: 'job-2', claimedAt: 1234 },
+    ]);
+    expect(processed).toEqual(['job-1', 'job-2']);
+
+    finish.get('job-2')?.();
+    await tick();
+  });
 });
 
 const silentLogger = {

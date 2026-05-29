@@ -25,15 +25,18 @@ export interface ReviewClaimantOptions {
   handleClaimedJob(jobId: string): Promise<void>;
   logger?: ClaimantLogger;
   now?: () => number;
+  maxConcurrentJobs?: number;
 }
 
 const defaultLogger: ClaimantLogger = console;
+const DEFAULT_MAX_CONCURRENT_JOBS = 1;
 
 export class ReviewClaimant {
   readonly #client: ReactiveConvexClient;
   readonly #handleClaimedJob: (jobId: string) => Promise<void>;
   readonly #logger: ClaimantLogger;
   readonly #now: () => number;
+  readonly #semaphore: AsyncSemaphore;
   readonly #inFlight = new Set<string>();
 
   constructor(options: ReviewClaimantOptions) {
@@ -41,6 +44,7 @@ export class ReviewClaimant {
     this.#handleClaimedJob = options.handleClaimedJob;
     this.#logger = options.logger ?? defaultLogger;
     this.#now = options.now ?? Date.now;
+    this.#semaphore = new AsyncSemaphore(options.maxConcurrentJobs ?? DEFAULT_MAX_CONCURRENT_JOBS);
   }
 
   start(): () => void {
@@ -71,6 +75,7 @@ export class ReviewClaimant {
       return;
     }
     this.#inFlight.add(jobId);
+    const release = await this.#semaphore.acquire();
 
     try {
       const claimed = await this.#client.mutation(api.reviewJobs.claim, {
@@ -85,7 +90,41 @@ export class ReviewClaimant {
     } catch (error) {
       this.#logger.error(`ReviewJob ${jobId} execution failed`, error);
     } finally {
+      release();
       this.#inFlight.delete(jobId);
     }
+  }
+}
+
+class AsyncSemaphore {
+  #available: number;
+  readonly #waiters: Array<() => void> = [];
+
+  constructor(maxConcurrent: number) {
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
+      throw new Error(`maxConcurrentJobs must be a positive integer, got ${maxConcurrent}`);
+    }
+    this.#available = maxConcurrent;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.#available > 0) {
+      this.#available -= 1;
+      return () => this.#release();
+    }
+
+    await new Promise<void>((resolve) => {
+      this.#waiters.push(resolve);
+    });
+    return () => this.#release();
+  }
+
+  #release(): void {
+    const next = this.#waiters.shift();
+    if (next === undefined) {
+      this.#available += 1;
+      return;
+    }
+    next();
   }
 }

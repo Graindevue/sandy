@@ -89,11 +89,13 @@ describe('loadConfig GitHub App credentials', () => {
       ...baseEnv,
       SANDY_AGENT_IMAGE: 'custom-agent',
       SANDY_REVIEW_MAX_CHANGED_LINES: '123',
+      SANDY_REVIEW_MAX_CONCURRENT_JOBS: '2',
       ANTHROPIC_API_KEY: 'sk-test',
     });
 
     expect(config.agentImage).toBe('custom-agent');
     expect(config.maxChangedLines).toBe(123);
+    expect(config.maxConcurrentJobs).toBe(2);
     expect(config.agentEnv).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
   });
 });

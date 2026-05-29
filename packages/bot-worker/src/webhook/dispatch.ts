@@ -68,11 +68,15 @@ export async function dispatchEvent(
   const decision = evaluateTrigger(event, currentReviewActive);
 
   if (decision.decline === 'fork') {
-    await options.forkDeclineCommenter?.postForkDeclined({
-      repo,
-      pullNumber: pr.number,
-      body: FORK_DECLINE_MESSAGE,
-    });
+    try {
+      await options.forkDeclineCommenter?.postForkDeclined({
+        repo,
+        pullNumber: pr.number,
+        body: FORK_DECLINE_MESSAGE,
+      });
+    } catch (error) {
+      logger.warn(`failed to post fork-decline comment for ${fullName(repo)}#${pr.number}`, error);
+    }
     logger.warn(`declining fork PR ${fullName(repo)}#${pr.number}: ${FORK_DECLINE_MESSAGE}`);
     return { action: 'declined-fork', repo: fullName(repo), number: pr.number };
   }

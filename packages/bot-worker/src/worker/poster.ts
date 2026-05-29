@@ -43,6 +43,10 @@ export interface GitHubReviewPoster {
   createIssueComment(input: IssueCommentInput): Promise<{ id: number }>;
 }
 
+export interface PosterLogger {
+  warn(message: string, ...args: unknown[]): void;
+}
+
 export interface PostReviewResultInput {
   target: PullRequestTarget;
   agentKey: string;
@@ -56,21 +60,29 @@ export interface PostScopeDeclinedInput {
   maxChangedLines: number;
 }
 
+const defaultLogger: PosterLogger = console;
+
 export class PullRequestPoster {
   readonly #github: GitHubReviewPoster;
+  readonly #logger: PosterLogger;
 
-  constructor(github: GitHubReviewPoster) {
+  constructor(github: GitHubReviewPoster, options: { logger?: PosterLogger } = {}) {
     this.#github = github;
+    this.#logger = options.logger ?? defaultLogger;
   }
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
     const posted: PostedFinding[] = [];
 
     for (const persisted of input.findings) {
-      const comment = await this.#github.createPullRequestReviewComment(
-        buildReviewCommentInput(input.target, persisted),
-      );
-      posted.push({ findingId: persisted.id, commentId: comment.id });
+      try {
+        const comment = await this.#github.createPullRequestReviewComment(
+          buildReviewCommentInput(input.target, persisted),
+        );
+        posted.push({ findingId: persisted.id, commentId: comment.id });
+      } catch (error) {
+        this.#logger.warn(`failed to post review comment for finding ${persisted.id}`, error);
+      }
     }
 
     await this.#github.createIssueComment({

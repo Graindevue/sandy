@@ -4,12 +4,14 @@ import { GitHubAppClient } from './app-client.js';
 describe('GitHubAppClient', () => {
   it('counts changed lines across PR files', async () => {
     const requests: string[] = [];
+    const signals: Array<AbortSignal | null | undefined> = [];
     const client = new GitHubAppClient({
       appId: '123',
       privateKey: 'unused',
       createJwt: () => 'app-jwt',
       fetch: async (url, init) => {
         requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+        signals.push(init?.signal);
         if (String(url).endsWith('/repos/acme/widget/installation')) {
           return jsonResponse({ id: 42 });
         }
@@ -34,6 +36,8 @@ describe('GitHubAppClient', () => {
     expect(requests).toContain(
       'GET https://api.github.com/repos/acme/widget/pulls/12/files?per_page=100&page=1',
     );
+    expect(signals).not.toHaveLength(0);
+    expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
   });
 
   it('builds authenticated clone URLs from installation tokens', async () => {

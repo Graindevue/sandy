@@ -189,6 +189,32 @@ describe('dispatchEvent', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(FORK_DECLINE_MESSAGE));
   });
 
+  it('still declines a fork PR when posting the courtesy comment fails', async () => {
+    const warn = vi.fn();
+    const sink = new FakeSink(false);
+    const outcome = await dispatchEvent(
+      comment('@bot review', { headRepo: { owner: 'forker', name: 'sandy' } }),
+      sink,
+      { info: vi.fn(), warn },
+      {
+        forkDeclineCommenter: {
+          async postForkDeclined() {
+            throw new Error('rate limited');
+          },
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ action: 'declined-fork', repo: 'tony-co/sandy', number: 7 });
+    expect(sink.upserts).toHaveLength(0);
+    expect(sink.enqueued).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to post fork-decline comment'),
+      expect.any(Error),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(FORK_DECLINE_MESSAGE));
+  });
+
   it('enqueues a push job for a direct push event on an opted-in PR', async () => {
     const sink = new FakeSink(true);
     const outcome = await dispatchEvent(push(), sink, silentLogger);

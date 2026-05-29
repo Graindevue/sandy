@@ -147,6 +147,23 @@ describe('parseEventForDispatch — issue_comment hydration', () => {
     expect(event.kind).toBe('ignored');
     expect(resolved).toBe(false);
   });
+
+  it('ignores a PR Conversation comment when PR resolution fails', async () => {
+    const event = await parseEventForDispatch(
+      'issue_comment',
+      issueCommentPayload('created', '@bot review'),
+      {
+        async resolvePullRequest() {
+          throw new Error('GitHub is unavailable');
+        },
+      },
+    );
+
+    expect(event).toEqual({
+      kind: 'ignored',
+      reason: 'issue_comment: pull_request resolution failed: GitHub is unavailable',
+    });
+  });
 });
 
 describe('parseEvent — PR lifecycle state (finding #3)', () => {
