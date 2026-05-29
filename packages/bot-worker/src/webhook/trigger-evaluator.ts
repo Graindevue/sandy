@@ -72,8 +72,8 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  *   (trigger `mention`); on a closed or merged PR → do nothing.
  * - draft → ready transition (`ready_for_review`) → enqueue + set
  *   `reviewActive = true` (trigger `ready`).
- * - push to a `reviewActive` PR → enqueue (trigger `push`). Pushes to an
- *   opted-out PR are ignored.
+ * - push / synchronize on a `reviewActive` PR → enqueue (trigger `push`).
+ *   Pushes to an opted-out, closed, or merged PR are ignored.
  * - PR closed → clear `reviewActive`.
  * - fork PR (head Repo ≠ base Repo) → decline (`decline: 'fork'`); v1 declines
  *   forks (PRD open question) and never enqueues them.
@@ -105,6 +105,12 @@ export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean
     }
 
     case 'push': {
+      // A push to a closed or merged PR must not re-review a dead head SHA, even
+      // if `reviewActive` is stale (e.g. the `closed` webhook was missed). The
+      // parsed PR state is authoritative; the flag alone is not.
+      if (isTerminal(event.pr)) {
+        return DO_NOTHING;
+      }
       if (!currentReviewActive) {
         return DO_NOTHING;
       }
@@ -132,6 +138,11 @@ export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean
           // A push to a PR also arrives as `synchronize`; the dedicated `push`
           // event drives re-review, so here we only re-review an already
           // opted-in PR and otherwise stay quiet.
+          if (isTerminal(event.pr)) {
+            // A synchronize on a closed/merged PR with a stale `reviewActive`
+            // must not enqueue against a dead head SHA.
+            return DO_NOTHING;
+          }
           if (!currentReviewActive) {
             return DO_NOTHING;
           }

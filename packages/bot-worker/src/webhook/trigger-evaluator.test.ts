@@ -203,6 +203,19 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
   });
 
+  // Follow-up: a push / synchronize on a closed or merged PR must not enqueue
+  // even when `reviewActive` is stale (a missed `closed` webhook) — the parsed
+  // PR state is authoritative, the flag alone is not.
+  it('does nothing on a push to a closed PR even when reviewActive is stale', () => {
+    expect(evaluateTrigger(pushEvent({ state: 'closed' }), true)).toEqual({ enqueue: false });
+  });
+
+  it('does nothing on a synchronize to a merged PR even when reviewActive is stale', () => {
+    expect(evaluateTrigger(prEvent('synchronize', { state: 'merged' }), true)).toEqual({
+      enqueue: false,
+    });
+  });
+
   it('does nothing for an ignored event', () => {
     expect(evaluateTrigger({ kind: 'ignored', reason: 'test' }, true)).toEqual({ enqueue: false });
   });
