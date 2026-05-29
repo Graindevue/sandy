@@ -208,20 +208,28 @@ describe('ConfigLoader SIGHUP', () => {
   it('reloads on SIGHUP and stops listening after dispose', async () => {
     const loader = await ConfigLoader.create(options());
     const reloadSpy = vi.spyOn(loader, 'reload');
-
-    loader.installSignalHandler();
+    // A guard listener stays attached for the whole test so `process.emit`
+    // always has a SIGHUP listener — the assertions watch the spy's call count,
+    // never the loader being the only listener, and the guard is removed in the
+    // `finally` so this test leaks no process-global listener.
+    const guard = () => {};
+    process.on('SIGHUP', guard);
     try {
+      loader.installSignalHandler();
       process.emit('SIGHUP');
       // The handler invokes reload(); give the microtask queue a tick to run it.
       await Promise.resolve();
       expect(reloadSpy).toHaveBeenCalledTimes(1);
+
+      // After dispose the loader's handler is detached: a further SIGHUP no
+      // longer reaches reload(), though the guard keeps SIGHUP handled.
+      loader.dispose();
+      process.emit('SIGHUP');
+      await Promise.resolve();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
     } finally {
       loader.dispose();
+      process.removeListener('SIGHUP', guard);
     }
-
-    // After dispose the handler is detached: a further SIGHUP does not reload.
-    process.emit('SIGHUP');
-    await Promise.resolve();
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 });
