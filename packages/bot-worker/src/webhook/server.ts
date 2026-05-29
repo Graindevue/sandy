@@ -28,7 +28,7 @@ export interface WebhookServerOptions {
   sink: ReviewSink;
   /** Logger; defaults to `console`. */
   logger?: DispatchLogger;
-  /** Path the server accepts deliveries on. Defaults to `/webhook`. */
+  /** Path the server accepts deliveries on. Defaults to `/`. */
   path?: string;
   /** Max accepted body size in bytes. Defaults to {@link MAX_BODY_BYTES}. */
   maxBodyBytes?: number;
@@ -92,7 +92,7 @@ export function createWebhookHandler(
   options: WebhookServerOptions,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const logger = options.logger ?? console;
-  const path = options.path ?? '/webhook';
+  const path = options.path ?? '/';
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
 
   return async (req, res) => {

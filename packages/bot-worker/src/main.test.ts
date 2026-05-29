@@ -7,7 +7,7 @@ describe('loadConfig PORT validation', () => {
   // trailing garbage and scientific notation ('1e4' -> 1, '3007abc' -> 3007),
   // mis-binding the server despite the "fails loudly" contract. The whole string
   // must be a positive integer in [1, 65535].
-  const baseEnv = { WEBHOOK_SECRET: 'secret', CONVEX_URL: 'https://example.convex.cloud' };
+  const baseEnv = { GITHUB_WEBHOOK_SECRET: 'secret', CONVEX_URL: 'https://example.convex.cloud' };
 
   it.each([
     '1e4',
@@ -36,6 +36,24 @@ describe('loadConfig PORT validation', () => {
 
   it('falls back to the default port when PORT is unset', () => {
     expect(loadConfig(baseEnv).port).toBe(3007);
+  });
+});
+
+describe('loadConfig webhook secret', () => {
+  // The GitHub App webhook secret is read from GITHUB_WEBHOOK_SECRET (the name the
+  // operator stores in .config/.env per the setup docs), not a bare WEBHOOK_SECRET.
+  it('reads the secret from GITHUB_WEBHOOK_SECRET', () => {
+    const config = loadConfig({
+      GITHUB_WEBHOOK_SECRET: 'shh',
+      CONVEX_URL: 'https://example.convex.cloud',
+    });
+    expect(config.webhookSecret).toBe('shh');
+  });
+
+  it('throws naming GITHUB_WEBHOOK_SECRET when it is missing', () => {
+    expect(() => loadConfig({ CONVEX_URL: 'https://example.convex.cloud' })).toThrow(
+      /GITHUB_WEBHOOK_SECRET/,
+    );
   });
 });
 
