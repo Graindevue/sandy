@@ -39,7 +39,7 @@ This Agent is disabled by default. It runs only when the operator explicitly ena
 
 ## Output
 
-Same JSON-block format. Use `"category": "style"`.
+Same JSON-block format. Use `"agentKey": "style"` and `"category": "style"`.
 
 ## Severity
 

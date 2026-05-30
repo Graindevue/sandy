@@ -34,6 +34,7 @@ A single issue raised by an Agent during a Review. Carries:
 
 - `severity`: P0 (critical) / P1 (high) / P2 (medium)
 - `confidence`: 0-5
+- `agentKey`: stable key of the Agent that produced the Finding
 - `anchor`: `{ repo, path, lineStart, lineEnd }` — where the inline comment attaches. Must be in the reviewed PR's diff (GitHub only accepts review comments on the PR's own changed lines). For a cross-repo Finding this is the **producer-side** line in the PR Repo that caused the break, not the consumer line.
 - `crossRepoReferences`: optional `{ repo, path, line }[]` — affected consumers in sibling Repos (at the recorded sibling `main` SHA). Rendered in the comment body as GitHub permalinks, never as separate inline comments. When a Finding has no postable anchor (e.g. a deleted file), it folds into the summary comment with these references as text.
 - `summary`: one sentence describing the issue

@@ -5,7 +5,8 @@ import { PullRequestPoster } from './poster.js';
 const baseFinding: Finding = {
   severity: 'P1',
   confidence: 4,
-  location: {
+  agentKey: 'logic',
+  anchor: {
     repo: 'acme/widget',
     path: 'src/cache.ts',
     lineStart: 22,
@@ -86,7 +87,7 @@ describe('PullRequestPoster', () => {
           id: 'finding-2',
           finding: {
             ...baseFinding,
-            location: { ...baseFinding.location, lineStart: 30, lineEnd: 30 },
+            anchor: { ...baseFinding.anchor, lineStart: 30, lineEnd: 30 },
             summary: 'The write path skips validation.',
           },
         },

@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { mutation, query } from './_generated/server.js';
-import { severity } from './validators.js';
+import { confidence, crossRepoReference, findingAnchor, severity } from './validators.js';
 
 /** Record a single Finding produced by an Agent during a Review. */
 export const recordFinding = mutation({
@@ -9,11 +9,9 @@ export const recordFinding = mutation({
     pullRequestId: v.id('pullRequests'),
     agentKey: v.string(),
     severity,
-    confidence: v.number(),
-    repo: v.string(),
-    path: v.string(),
-    lineStart: v.number(),
-    lineEnd: v.number(),
+    confidence,
+    anchor: findingAnchor,
+    crossRepoReferences: v.optional(v.array(crossRepoReference)),
     summary: v.string(),
     evidence: v.string(),
     suggestedFix: v.optional(v.string()),

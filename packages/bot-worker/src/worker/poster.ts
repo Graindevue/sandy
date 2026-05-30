@@ -118,14 +118,14 @@ function buildReviewCommentInput(
     repo: target.repo,
     pullNumber: target.pullNumber,
     commitId: target.headSha,
-    path: finding.location.path,
+    path: finding.anchor.path,
     body: formatFindingBody(persisted),
-    line: finding.location.lineEnd,
+    line: finding.anchor.lineEnd,
     side: 'RIGHT',
   };
 
-  if (finding.location.lineStart !== finding.location.lineEnd) {
-    base.startLine = finding.location.lineStart;
+  if (finding.anchor.lineStart !== finding.anchor.lineEnd) {
+    base.startLine = finding.anchor.lineStart;
     base.startSide = 'RIGHT';
   }
 
@@ -140,6 +140,13 @@ export function formatFindingBody({ id, finding }: PersistedFinding): string {
   ];
   if (finding.suggestedFix !== undefined) {
     parts.push(`Suggested fix:\n${finding.suggestedFix}`);
+  }
+  if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
+    parts.push(
+      `Cross-repo references:\n${finding.crossRepoReferences
+        .map((reference) => `- ${reference.repo}/${reference.path}:${reference.line}`)
+        .join('\n')}`,
+    );
   }
   parts.push(`<!-- bot:finding=${id} -->`);
   return parts.join('\n\n');

@@ -15,6 +15,13 @@ export const record = mutation({
   },
   returns: v.id('agentRuns'),
   handler: async (ctx, args) => {
-    return await ctx.db.insert('agentRuns', args);
+    const agentRunId = await ctx.db.insert('agentRuns', args);
+    const reviewJob = await ctx.db.get(args.reviewJobId);
+    if (reviewJob !== null) {
+      await ctx.db.patch(args.reviewJobId, {
+        agentRuns: [...reviewJob.agentRuns, agentRunId],
+      });
+    }
+    return agentRunId;
   },
 });

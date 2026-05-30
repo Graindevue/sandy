@@ -50,33 +50,68 @@ function validatePayload(value: unknown): FindingsPayload {
 function validateFinding(value: unknown, index: number): Finding {
   const where = `findings[${index}]`;
   const object = requireObject(value, where);
-  const location = requireObject(object.location, `${where}.location`);
-
-  const lineStart = requirePositiveInteger(location.lineStart, `${where}.location.lineStart`);
-  const lineEnd = requirePositiveInteger(location.lineEnd, `${where}.location.lineEnd`);
-  if (lineEnd < lineStart) {
-    throw new Error(`${where}.location.lineEnd must be greater than or equal to lineStart`);
-  }
+  const anchor = validateAnchor(object.anchor, `${where}.anchor`);
+  const crossRepoReferences = validateCrossRepoReferences(
+    object.crossRepoReferences,
+    `${where}.crossRepoReferences`,
+  );
 
   const finding: Finding = {
     severity: requireSeverity(object.severity, `${where}.severity`),
     confidence: requireConfidence(object.confidence, `${where}.confidence`),
-    location: {
-      repo: requireString(location.repo, `${where}.location.repo`),
-      path: requireString(location.path, `${where}.location.path`),
-      lineStart,
-      lineEnd,
-    },
+    agentKey: requireString(object.agentKey, `${where}.agentKey`),
+    anchor,
     summary: requireString(object.summary, `${where}.summary`),
     evidence: requireString(object.evidence, `${where}.evidence`),
     category: requireString(object.category, `${where}.category`),
   };
+
+  if (crossRepoReferences !== undefined) {
+    finding.crossRepoReferences = crossRepoReferences;
+  }
 
   if (object.suggestedFix !== undefined) {
     finding.suggestedFix = requireString(object.suggestedFix, `${where}.suggestedFix`);
   }
 
   return finding;
+}
+
+function validateAnchor(value: unknown, where: string): Finding['anchor'] {
+  const object = requireObject(value, where);
+  const lineStart = requirePositiveInteger(object.lineStart, `${where}.lineStart`);
+  const lineEnd = requirePositiveInteger(object.lineEnd, `${where}.lineEnd`);
+  if (lineEnd < lineStart) {
+    throw new Error(`${where}.lineEnd must be greater than or equal to lineStart`);
+  }
+
+  return {
+    repo: requireString(object.repo, `${where}.repo`),
+    path: requireString(object.path, `${where}.path`),
+    lineStart,
+    lineEnd,
+  };
+}
+
+function validateCrossRepoReferences(
+  value: unknown,
+  where: string,
+): Finding['crossRepoReferences'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${where} must be an array when provided`);
+  }
+  return value.map((reference, index) => {
+    const itemWhere = `${where}[${index}]`;
+    const object = requireObject(reference, itemWhere);
+    return {
+      repo: requireString(object.repo, `${itemWhere}.repo`),
+      path: requireString(object.path, `${itemWhere}.path`),
+      line: requirePositiveInteger(object.line, `${itemWhere}.line`),
+    };
+  });
 }
 
 function requireObject(value: unknown, where: string): Record<string, unknown> {

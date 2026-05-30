@@ -47,7 +47,7 @@ Cross-repo awareness is the headline feature, and it is **physical, not summary-
 
 **`packages/convex-backend/`** (extended)
 - `apiSurfaceManifests` table added — write-only audit log: `{ productId, repoShas, markdown, builtAt }`.
-- `findings` table extended with `category`, `agentName`, and the `anchor` / `crossRepoReferences` shape (replacing Phase 1's flat `location`).
+- `findings` table extended with `category`, `agentKey`, and the `anchor` / `crossRepoReferences` shape (replacing Phase 1's flat `location`).
 - `reviewJobs` table extended with `confidenceScore`, `agentRuns: Id[]`, and `siblingShas` (the pinned default-branch SHA per sibling Repo, recorded at Review start for permalink construction).
 
 ### Agents activated

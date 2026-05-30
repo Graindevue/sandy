@@ -1,5 +1,6 @@
 import type {
   AgentRunStatus,
+  Confidence,
   PullRequestState,
   ReviewJobStatus,
   ReviewTrigger,
@@ -41,8 +42,32 @@ export const severity = v.union(
   v.literal('P2' satisfies Severity),
 );
 
+export const confidence = v.union(
+  v.literal(0 satisfies Confidence),
+  v.literal(1 satisfies Confidence),
+  v.literal(2 satisfies Confidence),
+  v.literal(3 satisfies Confidence),
+  v.literal(4 satisfies Confidence),
+  v.literal(5 satisfies Confidence),
+);
+
 export const agentRunStatus = v.union(
   v.literal('running' satisfies AgentRunStatus),
   v.literal('completed' satisfies AgentRunStatus),
   v.literal('failed' satisfies AgentRunStatus),
 );
+
+export const findingAnchor = v.object({
+  repo: v.string(),
+  path: v.string(),
+  lineStart: v.number(),
+  lineEnd: v.number(),
+});
+
+export const crossRepoReference = v.object({
+  repo: v.string(),
+  path: v.string(),
+  line: v.number(),
+});
+
+export const siblingShas = v.record(v.string(), v.string());

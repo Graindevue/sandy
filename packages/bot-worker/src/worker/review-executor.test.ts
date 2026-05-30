@@ -20,7 +20,8 @@ const logicAgent: AgentDefinition = {
 const finding: Finding = {
   severity: 'P1',
   confidence: 4,
-  location: {
+  agentKey: 'logic',
+  anchor: {
     repo: 'acme/widget',
     path: 'src/cache.ts',
     lineStart: 12,
@@ -287,6 +288,9 @@ function makeContext(): ReviewJobContext {
       repoId: 'repo-1',
       headSha: 'abc123',
       agentKeys: ['logic'],
+      confidenceScore: 0,
+      agentRuns: [],
+      siblingShas: {},
     },
     repo: {
       id: 'repo-1',

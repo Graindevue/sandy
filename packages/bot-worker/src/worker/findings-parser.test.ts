@@ -12,12 +12,20 @@ describe('parseFindingsPayload', () => {
           {
             "severity": "P1",
             "confidence": 4,
-            "location": {
+            "agentKey": "logic",
+            "anchor": {
               "repo": "acme/widget",
               "path": "src/index.ts",
               "lineStart": 12,
               "lineEnd": 14
             },
+            "crossRepoReferences": [
+              {
+                "repo": "acme/consumer",
+                "path": "src/orders.ts",
+                "line": 31
+              }
+            ],
             "summary": "The cache key ignores the tenant id.",
             "evidence": "The lookup only uses userId, so two tenants can collide.",
             "suggestedFix": "Include tenantId in the key.",
@@ -34,13 +42,49 @@ describe('parseFindingsPayload', () => {
     expect(payload.findings[0]).toMatchObject({
       severity: 'P1',
       confidence: 4,
-      location: {
+      agentKey: 'logic',
+      anchor: {
         repo: 'acme/widget',
         path: 'src/index.ts',
         lineStart: 12,
         lineEnd: 14,
       },
+      crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
       category: 'logic',
+    });
+  });
+
+  it('validates an anchor-only same-Repo finding without cross-repo references', () => {
+    const payload = parseFindingsPayload(`<findings>{
+      "findings": [{
+        "severity": "P2",
+        "confidence": 3,
+        "agentKey": "test-coverage",
+        "anchor": {
+          "repo": "acme/widget",
+          "path": "src/cache.test.ts",
+          "lineStart": 9,
+          "lineEnd": 9
+        },
+        "summary": "The changed cache branch has no regression test.",
+        "evidence": "No test covers tenant-specific cache keys.",
+        "category": "test-coverage"
+      }]
+    }</findings>`);
+
+    expect(payload.findings[0]).toEqual({
+      severity: 'P2',
+      confidence: 3,
+      agentKey: 'test-coverage',
+      anchor: {
+        repo: 'acme/widget',
+        path: 'src/cache.test.ts',
+        lineStart: 9,
+        lineEnd: 9,
+      },
+      summary: 'The changed cache branch has no regression test.',
+      evidence: 'No test covers tenant-specific cache keys.',
+      category: 'test-coverage',
     });
   });
 
@@ -50,7 +94,8 @@ describe('parseFindingsPayload', () => {
         "findings": [{
           "severity": "P9",
           "confidence": 4,
-          "location": {
+          "agentKey": "logic",
+          "anchor": {
             "repo": "acme/widget",
             "path": "src/index.ts",
             "lineStart": 12,

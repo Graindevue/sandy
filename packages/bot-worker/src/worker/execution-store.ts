@@ -58,14 +58,14 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
       agentKey: input.agentKey,
       severity: finding.severity,
       confidence: finding.confidence,
-      repo: finding.location.repo,
-      path: finding.location.path,
-      lineStart: finding.location.lineStart,
-      lineEnd: finding.location.lineEnd,
+      anchor: finding.anchor,
       summary: finding.summary,
       evidence: finding.evidence,
       category: finding.category,
     };
+    if (finding.crossRepoReferences !== undefined) {
+      args.crossRepoReferences = finding.crossRepoReferences;
+    }
     if (finding.suggestedFix !== undefined) {
       args.suggestedFix = finding.suggestedFix;
     }

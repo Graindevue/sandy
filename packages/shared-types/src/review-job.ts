@@ -1,3 +1,5 @@
+import type { AgentRunId } from './agent.js';
+import type { Confidence } from './finding.js';
 import type { PullRequestId } from './pull-request.js';
 import type { RepoId } from './repo.js';
 
@@ -25,6 +27,12 @@ export interface ReviewJob {
   trigger: ReviewTrigger;
   /** Agent keys this job runs. Phase 1: always `["logic"]`. */
   agentKeys: string[];
+  /** PR-level confidence score computed from the synthesized Findings. */
+  confidenceScore: Confidence;
+  /** AgentRun ids produced while executing this ReviewJob. */
+  agentRuns: AgentRunId[];
+  /** Sibling Repo full names mapped to their pinned default-branch SHA. */
+  siblingShas: Record<string, string>;
   /** Epoch milliseconds when the job was enqueued. */
   createdAt: number;
   /** Epoch milliseconds when a worker claimed the job, if claimed. */

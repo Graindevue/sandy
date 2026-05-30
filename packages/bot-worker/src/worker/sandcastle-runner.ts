@@ -193,7 +193,7 @@ PR URL: ${pr.url}
 Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
 
-You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>:
+You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>. Each finding must use an in-diff "anchor"; use "crossRepoReferences" only for confirmed affected sibling-Repo consumers:
 
 <findings>
 {

@@ -1,6 +1,7 @@
 import type {
   AgentDefinition,
   AgentRunStatus,
+  Confidence,
   Finding,
   ReviewJobStatus,
 } from '@sandy/shared-types';
@@ -20,6 +21,9 @@ export interface ReviewJobContext {
     repoId: string;
     headSha: string;
     agentKeys: string[];
+    confidenceScore: Confidence;
+    agentRuns: string[];
+    siblingShas: Record<string, string>;
   };
   repo: {
     id: string;
@@ -269,13 +273,14 @@ export class ReviewExecutor {
   ): Promise<PersistedFinding[]> {
     const persistedFindings: PersistedFinding[] = [];
     for (const finding of findings) {
+      const producedFinding: Finding = { ...finding, agentKey };
       const id = await this.#store.recordFinding({
         reviewJobId: context.job.id,
         pullRequestId: context.pullRequest.id,
         agentKey,
-        finding,
+        finding: producedFinding,
       });
-      persistedFindings.push({ id, finding });
+      persistedFindings.push({ id, finding: producedFinding });
     }
     return persistedFindings;
   }
