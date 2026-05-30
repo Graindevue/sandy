@@ -1,4 +1,4 @@
-import type { ApiSurfaceRepoInput } from '@sandy/shared-types';
+import type { ApiSurfaceRepoInput, SiblingShas } from '@sandy/shared-types';
 import type { RunnerSiblingWorktree } from './sandcastle-runner.js';
 
 const SIBLING_WORKSPACE_ROOT = '/workspace';
@@ -58,6 +58,7 @@ export interface ReviewWorkspace {
   worktrees: ReviewWorktree[];
   manifestRepos: ApiSurfaceRepoInput[];
   siblingWorktrees: RunnerSiblingWorktree[];
+  siblingShas: SiblingShas;
 }
 
 export async function materializeReviewWorkspace(
@@ -68,6 +69,7 @@ export async function materializeReviewWorkspace(
   const worktrees: ReviewWorktree[] = [];
   const manifestRepos: ApiSurfaceRepoInput[] = [];
   const siblingWorktrees: RunnerSiblingWorktree[] = [];
+  const siblingShas: SiblingShas = {};
   let prWorktree: ReviewWorktree | null = null;
 
   for (const productRepo of productReposForContext(context)) {
@@ -90,6 +92,7 @@ export async function materializeReviewWorkspace(
         hostPath: worktree.path,
         sandboxPath: siblingSandboxPath(productRepo),
       });
+      siblingShas[productRepo.fullName] = sha;
     }
 
     manifestRepos.push({
@@ -108,7 +111,7 @@ export async function materializeReviewWorkspace(
     );
   }
 
-  return { prWorktree, worktrees, manifestRepos, siblingWorktrees };
+  return { prWorktree, worktrees, manifestRepos, siblingWorktrees, siblingShas };
 }
 
 function productReposForContext(context: ReviewWorkspaceContext): ProductRepoForReview[] {

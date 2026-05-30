@@ -1,4 +1,4 @@
-import type { ReviewJobStatus, ReviewTrigger } from '@sandy/shared-types';
+import type { ReviewJobStatus, ReviewTrigger, SiblingShas } from '@sandy/shared-types';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel.js';
 import { type MutationCtx, mutation, query } from './_generated/server.js';
@@ -15,7 +15,7 @@ interface PendingReviewJobInput {
   headSha: string;
   trigger: ReviewTrigger;
   agentKeys: string[];
-  siblingShas?: Record<string, string>;
+  siblingShas?: SiblingShas;
 }
 
 /** Enqueue a new `pending` ReviewJob and return its id. */

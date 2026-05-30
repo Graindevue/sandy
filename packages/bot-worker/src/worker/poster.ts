@@ -1,4 +1,4 @@
-import type { CrossRepoReference, Finding } from '@sandy/shared-types';
+import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
 
 export interface PullRequestTarget {
   owner: string;
@@ -52,7 +52,7 @@ export interface PostReviewResultInput {
   agentKey: string;
   findings: PersistedFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
-  siblingShas: Record<string, string>;
+  siblingShas: SiblingShas;
   summary?: string;
 }
 
@@ -113,7 +113,7 @@ export class PullRequestPoster {
 function buildReviewCommentInput(
   target: PullRequestTarget,
   persisted: PersistedFinding,
-  siblingShas: Record<string, string>,
+  siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
   const base: ReviewCommentInput = {
@@ -137,7 +137,7 @@ function buildReviewCommentInput(
 
 export function formatFindingBody(
   { id, finding }: PersistedFinding,
-  siblingShas: Record<string, string>,
+  siblingShas: SiblingShas,
 ): string {
   const parts = [
     `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
@@ -158,10 +158,7 @@ export function formatFindingBody(
   return parts.join('\n\n');
 }
 
-function formatCrossRepoReference(
-  reference: CrossRepoReference,
-  siblingShas: Record<string, string>,
-): string {
+function formatCrossRepoReference(reference: CrossRepoReference, siblingShas: SiblingShas): string {
   const sha = siblingShas[reference.repo];
   if (sha === undefined) {
     return `${reference.repo}/${reference.path}:${reference.line}`;

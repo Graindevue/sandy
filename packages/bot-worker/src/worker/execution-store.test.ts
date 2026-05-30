@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { type ConvexExecutionClient, ConvexExecutionStore } from './execution-store.js';
 
 describe('ConvexExecutionStore', () => {
+  it('records sibling SHAs on the ReviewJob', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordSiblingShas('job-1', { 'acme/desktop': 'desktop-main-sha' });
+
+    expect(client.mutations[0]?.args).toEqual({
+      jobId: 'job-1',
+      siblingShas: { 'acme/desktop': 'desktop-main-sha' },
+    });
+  });
+
   it('records a finding with anchor and cross-repo references intact', async () => {
     const client = new FakeConvexClient();
     const store = new ConvexExecutionStore(client);
