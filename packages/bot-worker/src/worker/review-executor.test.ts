@@ -380,6 +380,46 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
+  it('marks the job failed when persistence fails after a successful Agent run', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    store.recordFinding = async () => {
+      throw new Error('Convex write failed');
+    };
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async () =>
+          `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(store.agentRuns).toEqual([
+      {
+        reviewJobId: 'job-1',
+        agentKey: 'logic',
+        status: 'completed',
+        startedAt: 100,
+        finishedAt: 200,
+        findingCount: 1,
+      },
+    ]);
+    expect(poster.results).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([
+      { jobId: 'job-1', finishedAt: 300, error: 'Convex write failed' },
+    ]);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
+  });
+
   it('declines oversized diffs without creating a worktree or running an Agent', async () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();

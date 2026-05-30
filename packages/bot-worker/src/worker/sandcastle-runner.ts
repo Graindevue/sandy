@@ -141,10 +141,6 @@ export class SandcastleRunner {
 
     return result.stdout;
   }
-
-  async runLogicAgent(input: RunAgentInput): Promise<string> {
-    return await this.runAgent(input);
-  }
 }
 
 function createAgentProvider(agent: AgentDefinition, env: Record<string, string>): AgentProvider {

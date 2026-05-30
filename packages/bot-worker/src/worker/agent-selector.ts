@@ -55,7 +55,7 @@ export async function selectAgentsForReview(
   input: SelectAgentsForReviewInput,
 ): Promise<AgentDefinition[]> {
   const knownAgentKeys = new Set(input.agents.map((agent) => agent.key));
-  const productDependencies = await readProductDependencies(input.productRepos);
+  let productDependencies: Set<string> | null = null;
   const selected = new Set<string>();
 
   for (const agent of input.agents) {
@@ -63,8 +63,11 @@ export async function selectAgentsForReview(
       selected.add(agent.key);
       continue;
     }
-    if (agent.defaultEnabled === 'auto' && isAutoEnabled(agent.key, productDependencies)) {
-      selected.add(agent.key);
+    if (agent.defaultEnabled === 'auto') {
+      productDependencies ??= await readProductDependencies(input.productRepos);
+      if (isAutoEnabled(agent.key, productDependencies)) {
+        selected.add(agent.key);
+      }
     }
   }
 

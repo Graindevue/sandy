@@ -74,6 +74,20 @@ describe('selectAgentsForReview', () => {
 
     expect(selected.map((selectedAgent) => selectedAgent.key)).toEqual(['logic', 'nextjs']);
   });
+
+  it('does not inspect package.json when no Agent needs auto-detection', async () => {
+    const apiRoot = join(root, 'api');
+    await mkdir(apiRoot, { recursive: true });
+    await writeFile(join(apiRoot, 'package.json'), '{');
+
+    const selected = await selectAgentsForReview({
+      agents: [agent('logic', true), agent('style', false)],
+      reviewRepoFullName: 'acme/api',
+      productRepos: [{ fullName: 'acme/api', worktreePath: apiRoot, agentsYaml: null }],
+    });
+
+    expect(selected.map((selectedAgent) => selectedAgent.key)).toEqual(['logic']);
+  });
 });
 
 async function writePackageJson(

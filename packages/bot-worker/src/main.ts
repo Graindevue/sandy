@@ -309,15 +309,24 @@ export function isMainModule(importMetaUrl: string, argv1: string | undefined): 
   return importMetaUrl === pathToFileURL(argv1).href;
 }
 
-interface AgentResolutionLoader {
-  config?: {
-    agents: Map<string, AgentDefinition>;
+interface ConfiguredAgentLoader {
+  resolveForRepo(
+    owner: string,
+    name: string,
+  ): {
+    agents: AgentDefinition[];
+  } | null;
+}
+
+interface AgentCandidateLoader {
+  config: {
+    agents: ReadonlyMap<string, AgentDefinition>;
   };
   resolveForRepo(
     owner: string,
     name: string,
   ): {
-    product?: ProductConfig;
+    product: ProductConfig;
     agents: AgentDefinition[];
   } | null;
 }
@@ -343,7 +352,7 @@ interface ReviewBotConfigReader {
 }
 
 export function resolveConfiguredAgent(
-  loader: AgentResolutionLoader,
+  loader: ConfiguredAgentLoader,
   repo: RepoForWorktree,
   agentKey: string,
 ): AgentDefinition | null {
@@ -355,19 +364,16 @@ export function resolveConfiguredAgent(
 }
 
 export function resolveConfiguredAgents(
-  loader: AgentResolutionLoader,
+  loader: AgentCandidateLoader,
   repo: RepoForWorktree,
 ): AgentDefinition[] {
   const resolved = loader.resolveForRepo(repo.owner, repo.name);
   if (resolved === null) {
     return [];
   }
-  if (loader.config === undefined || resolved.product === undefined) {
-    return resolved.agents;
-  }
   if (resolved.product.agents.length > 0) {
     return resolved.product.agents.map((agentKey) => {
-      const agent = loader.config?.agents.get(agentKey);
+      const agent = loader.config.agents.get(agentKey);
       if (agent === undefined) {
         throw new Error(`configured Agent ${JSON.stringify(agentKey)} is not loaded`);
       }

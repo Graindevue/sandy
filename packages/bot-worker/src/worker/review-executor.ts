@@ -5,6 +5,7 @@ import type {
   ApiSurfaceRepoInput,
   Confidence,
   Finding,
+  FindingsPayload,
   ReviewJobStatus,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
@@ -115,6 +116,38 @@ export interface ReviewAgentRunner {
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
+type FailedAgentRunStatus = Extract<AgentRunStatus, 'failed' | 'timed_out'>;
+type AgentExecutionOutcome =
+  | {
+      status: 'completed';
+      startedAt: number;
+      finishedAt: number;
+      payload: FindingsPayload;
+    }
+  | {
+      status: FailedAgentRunStatus;
+      startedAt: number;
+      finishedAt: number;
+      error: string;
+    };
+
+interface AgentWorkspace {
+  prWorktree: ReviewWorktree;
+  siblingWorktrees: readonly RunnerSiblingWorktree[];
+}
+
+interface AgentExecutionInput {
+  context: ReviewJobContext;
+  agent: AgentDefinition;
+  workspace: AgentWorkspace;
+  manifest: ApiSurfaceManifestBuildResult | undefined;
+  reviewBotConfig: ReviewBotContext;
+  cancellationSignal: AbortSignal | undefined;
+}
+
+interface SelectedAgentInput extends AgentExecutionInput {
+  target: PullRequestTarget;
+}
 
 export interface ReviewPoster {
   postReviewResult(input: {
@@ -288,10 +321,7 @@ export class ReviewExecutor {
     context: ReviewJobContext;
     target: PullRequestTarget;
     agents: readonly AgentDefinition[];
-    workspace: {
-      prWorktree: ReviewWorktree;
-      siblingWorktrees: readonly RunnerSiblingWorktree[];
-    };
+    workspace: AgentWorkspace;
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
     cancellationSignal: AbortSignal | undefined;
@@ -307,59 +337,62 @@ export class ReviewExecutor {
     }
   }
 
-  async #runSelectedAgent(input: {
-    context: ReviewJobContext;
-    target: PullRequestTarget;
-    agent: AgentDefinition;
-    workspace: {
-      prWorktree: ReviewWorktree;
-      siblingWorktrees: readonly RunnerSiblingWorktree[];
-    };
-    manifest: ApiSurfaceManifestBuildResult | undefined;
-    reviewBotConfig: ReviewBotContext;
-    cancellationSignal: AbortSignal | undefined;
-  }): Promise<void> {
-    const { context, target, agent, workspace, manifest, reviewBotConfig, cancellationSignal } =
-      input;
-    const agentStartedAt = this.#now();
-    const runInput: ReviewAgentRunInput = {
-      agent,
-      worktreePath: workspace.prWorktree.path,
-      pullRequest: runnerPullRequest(context),
-      botConfig: reviewBotConfig,
-    };
-    if (manifest !== undefined) {
-      runInput.apiSurfaceManifest = manifest.markdown;
+  async #runSelectedAgent(input: SelectedAgentInput): Promise<void> {
+    const { context, target, agent } = input;
+    const outcome = await this.#executeAgent(input);
+    if (outcome.status !== 'completed') {
+      await this.#store.recordAgentRun({
+        reviewJobId: context.job.id,
+        agentKey: agent.key,
+        status: outcome.status,
+        startedAt: outcome.startedAt,
+        finishedAt: outcome.finishedAt,
+        findingCount: 0,
+        error: outcome.error,
+      });
+      return;
     }
-    if (workspace.siblingWorktrees.length > 0) {
-      runInput.siblingWorktrees = workspace.siblingWorktrees;
-    }
+
+    await this.#store.recordAgentRun({
+      reviewJobId: context.job.id,
+      agentKey: agent.key,
+      status: 'completed',
+      startedAt: outcome.startedAt,
+      finishedAt: outcome.finishedAt,
+      findingCount: outcome.payload.findings.length,
+    });
+
+    await this.#throwIfCancelledOrSuperseded(context.job.id, input.cancellationSignal);
+    const persistedFindings = await this.#recordFindings(
+      context,
+      agent.key,
+      outcome.payload.findings,
+    );
+    await this.#throwIfCancelledOrSuperseded(context.job.id, input.cancellationSignal);
+    await this.#postReviewResult(
+      target,
+      agent.key,
+      persistedFindings,
+      context.job.siblingShas,
+      outcome.payload.summary,
+    );
+  }
+
+  async #executeAgent(input: AgentExecutionInput): Promise<AgentExecutionOutcome> {
+    const { context, agent, cancellationSignal } = input;
+    const startedAt = this.#now();
+    const runInput = agentRunInput(input);
 
     try {
       const stdout = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
       const payload = parseFindingsPayload(stdout);
-      const agentFinishedAt = this.#now();
-
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey: agent.key,
+      return {
         status: 'completed',
-        startedAt: agentStartedAt,
-        finishedAt: agentFinishedAt,
-        findingCount: payload.findings.length,
-      });
-
-      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
-      const persistedFindings = await this.#recordFindings(context, agent.key, payload.findings);
-      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
-      await this.#postReviewResult(
-        target,
-        agent.key,
-        persistedFindings,
-        context.job.siblingShas,
-        payload.summary,
-      );
+        startedAt,
+        finishedAt: this.#now(),
+        payload,
+      };
     } catch (error) {
       if (isReviewSupersededError(error)) {
         throw error;
@@ -369,15 +402,12 @@ export class ReviewExecutor {
       }
 
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey: agent.key,
+      return {
         status: isAgentTimedOutError(error) ? 'timed_out' : 'failed',
-        startedAt: agentStartedAt,
+        startedAt,
         finishedAt: this.#now(),
-        findingCount: 0,
         error: describeError(error),
-      });
+      };
     }
   }
 
@@ -561,6 +591,22 @@ function runnerPullRequest(context: ReviewJobContext): RunnerPullRequest {
   };
 }
 
+function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
+  const runInput: ReviewAgentRunInput = {
+    agent: input.agent,
+    worktreePath: input.workspace.prWorktree.path,
+    pullRequest: runnerPullRequest(input.context),
+    botConfig: input.reviewBotConfig,
+  };
+  if (input.manifest !== undefined) {
+    runInput.apiSurfaceManifest = input.manifest.markdown;
+  }
+  if (input.workspace.siblingWorktrees.length > 0) {
+    runInput.siblingWorktrees = input.workspace.siblingWorktrees;
+  }
+  return runInput;
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -585,27 +631,10 @@ function agentSelectionRepo(
 }
 
 function repoAgentsYaml(config: ReviewBotContext, fullName: string): string | null | undefined {
-  if (!('repos' in config) || !Array.isArray(config.repos)) {
-    return undefined;
-  }
-  const repoConfig = config.repos.find((entry: unknown) => {
-    if (typeof entry !== 'object' || entry === null || !('repo' in entry)) {
-      return false;
-    }
-    const repo = (entry as { repo?: unknown }).repo;
-    return (
-      typeof repo === 'object' &&
-      repo !== null &&
-      'fullName' in repo &&
-      typeof (repo as { fullName?: unknown }).fullName === 'string' &&
-      (repo as { fullName: string }).fullName.toLowerCase() === fullName.toLowerCase()
-    );
-  });
-  if (typeof repoConfig !== 'object' || repoConfig === null || !('agentsYaml' in repoConfig)) {
-    return undefined;
-  }
-  const agentsYaml = (repoConfig as { agentsYaml?: unknown }).agentsYaml;
-  return typeof agentsYaml === 'string' || agentsYaml === null ? agentsYaml : undefined;
+  const repoConfig = config.repos?.find(
+    (entry) => entry.repo.fullName.toLowerCase() === fullName.toLowerCase(),
+  );
+  return repoConfig?.agentsYaml;
 }
 
 class AgentTimedOutError extends Error {
