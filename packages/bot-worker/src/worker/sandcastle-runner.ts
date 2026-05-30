@@ -43,7 +43,7 @@ export interface RunnerSiblingWorktree {
   sandboxPath: string;
 }
 
-export interface RunLogicAgentInput {
+export interface RunAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
@@ -96,13 +96,7 @@ export class SandcastleRunner {
     this.#createAgentProvider = options.createAgentProvider ?? createAgentProvider;
   }
 
-  async runLogicAgent(input: RunLogicAgentInput): Promise<string> {
-    if (input.agent.key !== 'logic') {
-      throw new Error(
-        `Phase 1 can only run the logic Agent, got ${JSON.stringify(input.agent.key)}`,
-      );
-    }
-
+  async runAgent(input: RunAgentInput): Promise<string> {
     const mounts: { hostPath: string; sandboxPath: string; readonly?: boolean }[] = [
       { hostPath: join(homedir(), '.opensrc'), sandboxPath: OPEN_SRC_SANDBOX_CACHE },
     ];
@@ -146,6 +140,10 @@ export class SandcastleRunner {
     const result = await this.#run(runOptions);
 
     return result.stdout;
+  }
+
+  async runLogicAgent(input: RunAgentInput): Promise<string> {
+    return await this.runAgent(input);
   }
 }
 
@@ -200,7 +198,7 @@ async function createDefaultAppleContainer(
   return appleContainer(options);
 }
 
-export function buildReviewPrompt(input: RunLogicAgentInput): string {
+export function buildReviewPrompt(input: RunAgentInput): string {
   const pr = input.pullRequest;
   const siblingContext =
     input.siblingWorktrees === undefined || input.siblingWorktrees.length === 0

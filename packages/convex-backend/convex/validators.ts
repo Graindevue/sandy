@@ -55,6 +55,7 @@ export const agentRunStatus = v.union(
   v.literal('running' satisfies AgentRunStatus),
   v.literal('completed' satisfies AgentRunStatus),
   v.literal('failed' satisfies AgentRunStatus),
+  v.literal('timed_out' satisfies AgentRunStatus),
 );
 
 export const findingAnchor = v.object({

@@ -18,7 +18,7 @@ const logicAgent: AgentDefinition = {
 };
 
 describe('SandcastleRunner', () => {
-  it('runs the logic Agent in an Apple Container against the review worktree', async () => {
+  it('runs an Agent in an Apple Container against the review worktree', async () => {
     const runCalls: RunOptions[] = [];
     const createAppleContainerCalls: unknown[] = [];
     const sandbox = fakeSandbox();
@@ -39,7 +39,7 @@ describe('SandcastleRunner', () => {
       createAgentProvider: () => provider,
     });
 
-    const stdout = await runner.runLogicAgent({
+    const stdout = await runner.runAgent({
       agent: logicAgent,
       worktreePath: '/tmp/sandy/worktrees/job-1',
       signal: abortController.signal,

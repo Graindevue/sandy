@@ -47,7 +47,7 @@ export interface AgentDefinition {
 export type AgentRunId = string;
 
 /** Status of a single Agent's execution within a Review. */
-export type AgentRunStatus = 'running' | 'completed' | 'failed';
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'timed_out';
 
 /** A record of one Agent executing within a Review. */
 export interface AgentRun {

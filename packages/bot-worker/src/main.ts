@@ -185,6 +185,7 @@ export async function main(): Promise<void> {
       },
     },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
+    resolveAgents: (repo) => resolveConfiguredAgents(configLoader, repo),
     resolveReviewBotConfig: ({ repo, worktreePath }) =>
       resolveReviewBotConfig(configLoader, botConfigReader, repo, worktreePath),
   });
@@ -309,10 +310,14 @@ export function isMainModule(importMetaUrl: string, argv1: string | undefined): 
 }
 
 interface AgentResolutionLoader {
+  config?: {
+    agents: Map<string, AgentDefinition>;
+  };
   resolveForRepo(
     owner: string,
     name: string,
   ): {
+    product?: ProductConfig;
     agents: AgentDefinition[];
   } | null;
 }
@@ -347,6 +352,29 @@ export function resolveConfiguredAgent(
     return null;
   }
   return resolved.agents.find((agent) => agent.key === agentKey) ?? null;
+}
+
+export function resolveConfiguredAgents(
+  loader: AgentResolutionLoader,
+  repo: RepoForWorktree,
+): AgentDefinition[] {
+  const resolved = loader.resolveForRepo(repo.owner, repo.name);
+  if (resolved === null) {
+    return [];
+  }
+  if (loader.config === undefined || resolved.product === undefined) {
+    return resolved.agents;
+  }
+  if (resolved.product.agents.length > 0) {
+    return resolved.product.agents.map((agentKey) => {
+      const agent = loader.config?.agents.get(agentKey);
+      if (agent === undefined) {
+        throw new Error(`configured Agent ${JSON.stringify(agentKey)} is not loaded`);
+      }
+      return { ...agent, defaultEnabled: true };
+    });
+  }
+  return [...loader.config.agents.values()];
 }
 
 export async function resolveReviewBotConfig(

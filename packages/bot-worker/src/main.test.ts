@@ -5,6 +5,7 @@ import {
   isMainModule,
   loadConfig,
   resolveConfiguredAgent,
+  resolveConfiguredAgents,
   resolveReviewBotConfig,
 } from './main.js';
 
@@ -146,6 +147,53 @@ describe('resolveConfiguredAgent', () => {
   });
 });
 
+describe('resolveConfiguredAgents', () => {
+  it('returns all loaded Agents for a Product using default selection', () => {
+    const logicAgent = agent('logic');
+    const styleAgent = { ...agent('style'), defaultEnabled: false as const };
+    const loader = {
+      config: {
+        agents: new Map([
+          [logicAgent.key, logicAgent],
+          [styleAgent.key, styleAgent],
+        ]),
+      },
+      resolveForRepo: () => ({
+        product: product([]),
+        agents: [logicAgent],
+      }),
+    };
+
+    expect(
+      resolveConfiguredAgents(loader, { owner: 'acme', name: 'widget', defaultBranch: 'main' }).map(
+        (resolvedAgent) => resolvedAgent.key,
+      ),
+    ).toEqual(['logic', 'style']);
+  });
+
+  it('treats Product-explicit Agents as enabled selection candidates', () => {
+    const styleAgent = { ...agent('style'), defaultEnabled: false as const };
+    const loader = {
+      config: {
+        agents: new Map([[styleAgent.key, styleAgent]]),
+      },
+      resolveForRepo: () => ({
+        product: product(['style']),
+        agents: [styleAgent],
+      }),
+    };
+
+    const [resolved] = resolveConfiguredAgents(loader, {
+      owner: 'acme',
+      name: 'widget',
+      defaultBranch: 'main',
+    });
+
+    expect(resolved?.key).toBe('style');
+    expect(resolved?.defaultEnabled).toBe(true);
+  });
+});
+
 describe('resolveReviewBotConfig', () => {
   it('reads .bot context for the configured Product and reviewed Repo', async () => {
     const repo = {
@@ -255,5 +303,21 @@ function agent(key: string): AgentDefinition {
     completionSignal: '</findings>',
     defaultEnabled: true,
     systemPrompt: `# ${key}`,
+  };
+}
+
+function product(agents: string[]) {
+  return {
+    slug: 'acme',
+    name: 'Acme',
+    repos: [
+      {
+        owner: 'acme',
+        name: 'widget',
+        fullName: 'acme/widget',
+        defaultBranch: 'main',
+      },
+    ],
+    agents,
   };
 }

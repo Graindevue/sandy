@@ -25,7 +25,7 @@ export interface ReviewJob {
   status: ReviewJobStatus;
   /** Why this Review was triggered. */
   trigger: ReviewTrigger;
-  /** Agent keys this job runs. Phase 1: always `["logic"]`. */
+  /** Agent keys requested when the ReviewJob was enqueued. */
   agentKeys: string[];
   /** PR-level confidence score computed from the synthesized Findings. */
   confidenceScore: Confidence;

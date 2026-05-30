@@ -8,6 +8,7 @@ import type {
   ReviewJobStatus,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
+import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
   type ReviewCancellationRegistry,
@@ -102,7 +103,7 @@ export interface ReviewDiffInspector {
 }
 
 export interface ReviewAgentRunner {
-  runLogicAgent(input: {
+  runAgent(input: {
     agent: AgentDefinition;
     worktreePath: string;
     pullRequest: RunnerPullRequest;
@@ -113,7 +114,7 @@ export interface ReviewAgentRunner {
   }): Promise<string>;
 }
 
-type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runLogicAgent']>[0];
+type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
 
 export interface ReviewPoster {
   postReviewResult(input: {
@@ -150,14 +151,17 @@ export interface ReviewExecutorOptions {
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
+  resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
   manifestBuilder?: ReviewManifestBuilder;
   resolveReviewBotConfig?: (input: ResolveReviewBotConfigInput) => Promise<ReviewBotContext>;
   cancellationRegistry?: ReviewCancellationRegistry;
   maxChangedLines?: number;
+  agentTimeoutMs?: number;
   now?: () => number;
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
+const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 export class ReviewExecutor {
   readonly #store: ReviewExecutionStore;
@@ -166,12 +170,14 @@ export class ReviewExecutor {
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
+  readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
   readonly #manifestBuilder: ReviewManifestBuilder | null;
   readonly #resolveReviewBotConfig: (
     input: ResolveReviewBotConfigInput,
   ) => Promise<ReviewBotContext>;
   readonly #cancellationRegistry: ReviewCancellationRegistry | null;
   readonly #maxChangedLines: number;
+  readonly #agentTimeoutMs: number;
   readonly #now: () => number;
 
   constructor(options: ReviewExecutorOptions) {
@@ -181,28 +187,25 @@ export class ReviewExecutor {
     this.#runner = options.runner;
     this.#poster = options.poster;
     this.#resolveAgent = options.resolveAgent;
+    this.#resolveAgents = options.resolveAgents ?? null;
     this.#manifestBuilder = options.manifestBuilder ?? null;
     this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? resolveEmptyReviewBotContext;
     this.#cancellationRegistry = options.cancellationRegistry ?? null;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
+    this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
   }
 
   async executeClaimedJob(jobId: string): Promise<void> {
     let context: ReviewJobContext | null = null;
     const worktrees: ReviewWorktree[] = [];
-    let agentKey: string | null = null;
-    let agentStartedAt: number | null = null;
-    let agentRunRecorded = false;
     const cancellation = this.#cancellationRegistry?.register(jobId);
     const cancellationSignal = cancellation?.signal;
 
     try {
       cancellationSignal?.throwIfAborted();
       context = await this.#requiredContext(jobId);
-      agentKey = requireLogicAgentKey(context);
       const repo = repoForWorktree(context);
-      const agent = this.#requiredAgent(repo, agentKey);
       const target = pullRequestTarget(context);
       const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
       const changedLines = await this.#diffInspector.changedLineCount(
@@ -229,63 +232,203 @@ export class ReviewExecutor {
       });
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
-      agentStartedAt = this.#now();
-      const runInput: ReviewAgentRunInput = {
-        agent,
-        worktreePath: workspace.prWorktree.path,
-        pullRequest: runnerPullRequest(context),
-        botConfig: reviewBotConfig,
-      };
-      if (manifest !== undefined) {
-        runInput.apiSurfaceManifest = manifest.markdown;
-      }
-      if (workspace.siblingWorktrees.length > 0) {
-        runInput.siblingWorktrees = workspace.siblingWorktrees;
-      }
-      if (cancellationSignal !== undefined) {
-        runInput.signal = cancellationSignal;
-      }
-      const stdout = await this.#runner.runLogicAgent(runInput);
-      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const payload = parseFindingsPayload(stdout);
-      const agentFinishedAt = this.#now();
-
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey,
-        status: 'completed',
-        startedAt: agentStartedAt,
-        finishedAt: agentFinishedAt,
-        findingCount: payload.findings.length,
-      });
-      agentRunRecorded = true;
-
-      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const persistedFindings = await this.#recordFindings(context, agentKey, payload.findings);
-      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      await this.#postReviewResult(
-        target,
-        agentKey,
-        persistedFindings,
-        context.job.siblingShas,
-        payload.summary,
+      const agents = await this.#selectAgents(
+        context,
+        repo,
+        workspace.manifestRepos,
+        reviewBotConfig,
       );
+      await this.#runSelectedAgents({
+        context,
+        target,
+        agents,
+        workspace,
+        manifest,
+        reviewBotConfig,
+        cancellationSignal,
+      });
 
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#store.markCompleted(jobId, this.#now());
     } catch (error) {
       if (isReviewSupersededError(error)) {
         return;
       }
       const message = describeError(error);
-      if (context !== null && agentKey !== null && agentStartedAt !== null && !agentRunRecorded) {
-        await this.#recordFailedAgentRun(context, agentKey, agentStartedAt, message);
-      }
       await this.#store.markFailed(jobId, this.#now(), message);
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
       cancellation?.dispose();
+    }
+  }
+
+  async #selectAgents(
+    context: ReviewJobContext,
+    repo: RepoForWorktree,
+    manifestRepos: readonly ApiSurfaceRepoInput[],
+    reviewBotConfig: ReviewBotContext,
+  ): Promise<AgentDefinition[]> {
+    const candidates =
+      this.#resolveAgents === null
+        ? context.job.agentKeys.map((agentKey) => this.#requiredAgent(repo, agentKey))
+        : this.#resolveAgents(repo);
+
+    return await selectAgentsForReview({
+      agents: candidates,
+      reviewRepoFullName: `${context.repo.owner}/${context.repo.name}`,
+      productRepos: manifestRepos.map((manifestRepo) =>
+        agentSelectionRepo(manifestRepo, reviewBotConfig),
+      ),
+    });
+  }
+
+  async #runSelectedAgents(input: {
+    context: ReviewJobContext;
+    target: PullRequestTarget;
+    agents: readonly AgentDefinition[];
+    workspace: {
+      prWorktree: ReviewWorktree;
+      siblingWorktrees: readonly RunnerSiblingWorktree[];
+    };
+    manifest: ApiSurfaceManifestBuildResult | undefined;
+    reviewBotConfig: ReviewBotContext;
+    cancellationSignal: AbortSignal | undefined;
+  }): Promise<void> {
+    const results = await Promise.allSettled(
+      input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
+    );
+
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        throw result.reason;
+      }
+    }
+  }
+
+  async #runSelectedAgent(input: {
+    context: ReviewJobContext;
+    target: PullRequestTarget;
+    agent: AgentDefinition;
+    workspace: {
+      prWorktree: ReviewWorktree;
+      siblingWorktrees: readonly RunnerSiblingWorktree[];
+    };
+    manifest: ApiSurfaceManifestBuildResult | undefined;
+    reviewBotConfig: ReviewBotContext;
+    cancellationSignal: AbortSignal | undefined;
+  }): Promise<void> {
+    const { context, target, agent, workspace, manifest, reviewBotConfig, cancellationSignal } =
+      input;
+    const agentStartedAt = this.#now();
+    const runInput: ReviewAgentRunInput = {
+      agent,
+      worktreePath: workspace.prWorktree.path,
+      pullRequest: runnerPullRequest(context),
+      botConfig: reviewBotConfig,
+    };
+    if (manifest !== undefined) {
+      runInput.apiSurfaceManifest = manifest.markdown;
+    }
+    if (workspace.siblingWorktrees.length > 0) {
+      runInput.siblingWorktrees = workspace.siblingWorktrees;
+    }
+
+    try {
+      const stdout = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
+      const payload = parseFindingsPayload(stdout);
+      const agentFinishedAt = this.#now();
+
+      await this.#store.recordAgentRun({
+        reviewJobId: context.job.id,
+        agentKey: agent.key,
+        status: 'completed',
+        startedAt: agentStartedAt,
+        finishedAt: agentFinishedAt,
+        findingCount: payload.findings.length,
+      });
+
+      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
+      const persistedFindings = await this.#recordFindings(context, agent.key, payload.findings);
+      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
+      await this.#postReviewResult(
+        target,
+        agent.key,
+        persistedFindings,
+        context.job.siblingShas,
+        payload.summary,
+      );
+    } catch (error) {
+      if (isReviewSupersededError(error)) {
+        throw error;
+      }
+      if (isReviewSupersededError(cancellationSignal?.reason)) {
+        throw cancellationSignal.reason;
+      }
+
+      await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
+      await this.#store.recordAgentRun({
+        reviewJobId: context.job.id,
+        agentKey: agent.key,
+        status: isAgentTimedOutError(error) ? 'timed_out' : 'failed',
+        startedAt: agentStartedAt,
+        finishedAt: this.#now(),
+        findingCount: 0,
+        error: describeError(error),
+      });
+    }
+  }
+
+  async #runAgentWithTimeout(
+    input: ReviewAgentRunInput,
+    agentKey: string,
+    parentSignal: AbortSignal | undefined,
+  ): Promise<string> {
+    parentSignal?.throwIfAborted();
+
+    const controller = new AbortController();
+    let timeoutError: AgentTimedOutError | null = null;
+    let onParentAbort: (() => void) | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      const timeout = setTimeout(() => {
+        timeoutError = new AgentTimedOutError(agentKey, this.#agentTimeoutMs);
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, this.#agentTimeoutMs);
+
+      const clear = () => clearTimeout(timeout);
+      controller.signal.addEventListener('abort', clear, { once: true });
+    });
+    const parentAbortPromise = new Promise<never>((_resolve, reject) => {
+      if (parentSignal === undefined) {
+        return;
+      }
+      onParentAbort = () => {
+        const reason = parentSignal.reason ?? new Error('Review execution was aborted');
+        controller.abort(reason);
+        reject(reason);
+      };
+      parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    });
+
+    try {
+      return await Promise.race([
+        this.#runner.runAgent({ ...input, signal: controller.signal }),
+        timeoutPromise,
+        parentAbortPromise,
+      ]);
+    } catch (error) {
+      if (timeoutError !== null && !isAgentTimedOutError(error)) {
+        throw timeoutError;
+      }
+      throw error;
+    } finally {
+      controller.abort();
+      if (parentSignal !== undefined && onParentAbort !== undefined) {
+        parentSignal.removeEventListener('abort', onParentAbort);
+      }
     }
   }
 
@@ -379,23 +522,6 @@ export class ReviewExecutor {
     }
   }
 
-  async #recordFailedAgentRun(
-    context: ReviewJobContext,
-    agentKey: string,
-    startedAt: number,
-    error: string,
-  ): Promise<void> {
-    await this.#store.recordAgentRun({
-      reviewJobId: context.job.id,
-      agentKey,
-      status: 'failed',
-      startedAt,
-      finishedAt: this.#now(),
-      findingCount: 0,
-      error,
-    });
-  }
-
   async #throwIfCancelledOrSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const status = await this.#store.getReviewJobStatus(jobId);
@@ -404,15 +530,6 @@ export class ReviewExecutor {
       throw new ReviewSupersededError(jobId);
     }
   }
-}
-
-function requireLogicAgentKey(context: ReviewJobContext): string {
-  if (context.job.agentKeys.length !== 1 || context.job.agentKeys[0] !== 'logic') {
-    throw new Error(
-      `Phase 1 can only execute the logic Agent, got ${context.job.agentKeys.join(', ')}`,
-    );
-  }
-  return 'logic';
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {
@@ -450,4 +567,54 @@ function describeError(error: unknown): string {
 
 async function resolveEmptyReviewBotContext(): Promise<ReviewBotContext> {
   return EMPTY_REVIEW_BOT_CONTEXT;
+}
+
+function agentSelectionRepo(
+  manifestRepo: ApiSurfaceRepoInput,
+  reviewBotConfig: ReviewBotContext,
+): AgentSelectionRepo {
+  const repo: AgentSelectionRepo = {
+    fullName: manifestRepo.fullName,
+    worktreePath: manifestRepo.worktreePath,
+  };
+  const agentsYaml = repoAgentsYaml(reviewBotConfig, manifestRepo.fullName);
+  if (agentsYaml !== undefined) {
+    repo.agentsYaml = agentsYaml;
+  }
+  return repo;
+}
+
+function repoAgentsYaml(config: ReviewBotContext, fullName: string): string | null | undefined {
+  if (!('repos' in config) || !Array.isArray(config.repos)) {
+    return undefined;
+  }
+  const repoConfig = config.repos.find((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null || !('repo' in entry)) {
+      return false;
+    }
+    const repo = (entry as { repo?: unknown }).repo;
+    return (
+      typeof repo === 'object' &&
+      repo !== null &&
+      'fullName' in repo &&
+      typeof (repo as { fullName?: unknown }).fullName === 'string' &&
+      (repo as { fullName: string }).fullName.toLowerCase() === fullName.toLowerCase()
+    );
+  });
+  if (typeof repoConfig !== 'object' || repoConfig === null || !('agentsYaml' in repoConfig)) {
+    return undefined;
+  }
+  const agentsYaml = (repoConfig as { agentsYaml?: unknown }).agentsYaml;
+  return typeof agentsYaml === 'string' || agentsYaml === null ? agentsYaml : undefined;
+}
+
+class AgentTimedOutError extends Error {
+  constructor(agentKey: string, timeoutMs: number) {
+    super(`Agent ${JSON.stringify(agentKey)} exceeded ${timeoutMs}ms execution timeout`);
+    this.name = 'AgentTimedOutError';
+  }
+}
+
+function isAgentTimedOutError(error: unknown): error is AgentTimedOutError {
+  return error instanceof AgentTimedOutError;
 }

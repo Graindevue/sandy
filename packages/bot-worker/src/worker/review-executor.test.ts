@@ -17,6 +17,15 @@ const logicAgent: AgentDefinition = {
   systemPrompt: 'Review logic.',
 };
 
+const securityAgent: AgentDefinition = {
+  ...logicAgent,
+  key: 'security',
+  name: 'security',
+  description: 'Reviews security issues.',
+  category: 'security',
+  systemPrompt: 'Review security.',
+};
+
 const finding: Finding = {
   severity: 'P1',
   confidence: 4,
@@ -31,6 +40,13 @@ const finding: Finding = {
   evidence: 'The lookup only uses userId.',
   suggestedFix: 'Include tenantId.',
   category: 'logic',
+};
+
+const securityFinding: Finding = {
+  ...finding,
+  agentKey: 'security',
+  summary: 'The endpoint accepts an untrusted redirect target.',
+  category: 'security',
 };
 
 describe('ReviewExecutor', () => {
@@ -92,6 +108,140 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
+  it('runs selected Agents concurrently and records each Agent result', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const cloneManager = new FakeCloneManager();
+    const poster = new FakePoster();
+    const securityStarted = deferred<void>();
+    const runnerCalls: string[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async ({ agent }) => {
+          runnerCalls.push(agent.key);
+          if (agent.key === 'logic') {
+            await securityStarted.promise;
+            return `<findings>{"findings":[${JSON.stringify(finding)}]}</findings>`;
+          }
+          securityStarted.resolve();
+          return `<findings>{"findings":[${JSON.stringify(securityFinding)}]}</findings>`;
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+
+    expect(runnerCalls.sort()).toEqual(['logic', 'security']);
+    expect(store.recordedFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reviewJobId: 'job-1',
+          pullRequestId: 'pr-1',
+          finding,
+        }),
+        expect.objectContaining({
+          reviewJobId: 'job-1',
+          pullRequestId: 'pr-1',
+          finding: securityFinding,
+        }),
+      ]),
+    );
+    expect(store.agentRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentKey: 'logic', status: 'completed', findingCount: 1 }),
+        expect.objectContaining({ agentKey: 'security', status: 'completed', findingCount: 1 }),
+      ]),
+    );
+    expect(poster.results.map((result) => result.agentKey).sort()).toEqual(['logic', 'security']);
+    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
+    expect(store.failed).toEqual([]);
+  });
+
+  it('records a failed Agent run without blocking other Agents from posting findings', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async ({ agent }) => {
+          if (agent.key === 'logic') {
+            throw new Error('container exited with status 1');
+          }
+          return `<findings>{"findings":[${JSON.stringify(securityFinding)}]}</findings>`;
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(store.agentRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentKey: 'logic',
+          status: 'failed',
+          findingCount: 0,
+          error: 'container exited with status 1',
+        }),
+        expect.objectContaining({
+          agentKey: 'security',
+          status: 'completed',
+          findingCount: 1,
+        }),
+      ]),
+    );
+    expect(store.recordedFindings).toEqual([expect.objectContaining({ finding: securityFinding })]);
+    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
+    expect(store.failed).toEqual([]);
+  });
+
+  it('records timed_out when one Agent exceeds its execution cap', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async ({ agent }) => {
+          if (agent.key === 'logic') {
+            return await new Promise<string>(() => {});
+          }
+          return '<findings>{"findings":[]}</findings>';
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      agentTimeoutMs: 5,
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+
+    expect(store.agentRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentKey: 'logic',
+          status: 'timed_out',
+          findingCount: 0,
+        }),
+        expect.objectContaining({ agentKey: 'security', status: 'completed' }),
+      ]),
+    );
+    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
+    expect(store.failed).toEqual([]);
+  });
+
   it('builds, records, and injects the ApiSurfaceManifest for every Product Repo', async () => {
     const context = makeContext({
       productRepos: [
@@ -122,7 +272,7 @@ describe('ReviewExecutor', () => {
       poster: new FakePoster(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runLogicAgent: async (input) => {
+        runAgent: async (input) => {
           runnerInput = input;
           return '<findings>{"findings":[]}</findings>';
         },
@@ -197,7 +347,7 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/desktop@job-1', 'acme/widget@job-1']);
   });
 
-  it('marks the job failed cleanly when Agent output is malformed', async () => {
+  it('records a failed Agent run when Agent output is malformed', async () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
@@ -206,7 +356,7 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       diffInspector: { changedLineCount: async () => 42 },
-      runner: { runLogicAgent: async () => '<findings>[]</findings>' },
+      runner: { runAgent: async () => '<findings>[]</findings>' },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
     });
@@ -222,8 +372,11 @@ describe('ReviewExecutor', () => {
       finishedAt: 200,
       findingCount: 0,
     });
-    expect(store.failed[0]).toMatchObject({ jobId: 'job-1', finishedAt: 300 });
-    expect(store.failed[0]?.error).toContain('FindingsPayload must be an object');
+    expect(store.agentRuns[0]).toMatchObject({
+      error: expect.stringContaining('FindingsPayload must be an object'),
+    });
+    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
+    expect(store.failed).toEqual([]);
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
@@ -237,7 +390,7 @@ describe('ReviewExecutor', () => {
       poster,
       diffInspector: { changedLineCount: async () => 5001 },
       runner: {
-        runLogicAgent: async () => {
+        runAgent: async () => {
           throw new Error('should not run');
         },
       },
@@ -268,7 +421,7 @@ describe('ReviewExecutor', () => {
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runLogicAgent: async ({ signal }) =>
+        runAgent: async ({ signal }) =>
           new Promise<string>((_resolve, reject) => {
             runnerStarted.resolve();
             signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
@@ -302,7 +455,7 @@ describe('ReviewExecutor', () => {
       poster,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runLogicAgent: async () => {
+        runAgent: async () => {
           store.status = 'superseded';
           return `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`;
         },
@@ -340,7 +493,7 @@ describe('ReviewExecutor', () => {
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runLogicAgent: async () =>
+        runAgent: async () =>
           `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
       },
       resolveAgent: () => logicAgent,
@@ -375,7 +528,7 @@ describe('ReviewExecutor', () => {
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runLogicAgent: async () => {
+        runAgent: async () => {
           runnerCalls += 1;
           return '<findings>{"findings":[]}</findings>';
         },
@@ -396,7 +549,7 @@ describe('ReviewExecutor', () => {
 });
 
 function makeContext(
-  options: { productRepos?: ReviewJobContext['product']['repos'] } = {},
+  options: { productRepos?: ReviewJobContext['product']['repos']; agentKeys?: string[] } = {},
 ): ReviewJobContext {
   return {
     job: {
@@ -404,7 +557,7 @@ function makeContext(
       pullRequestId: 'pr-1',
       repoId: 'repo-1',
       headSha: 'abc123',
-      agentKeys: ['logic'],
+      agentKeys: options.agentKeys ?? ['logic'],
       confidenceScore: 0,
       agentRuns: [],
       siblingShas: {},
@@ -547,10 +700,15 @@ class FakeCloneManager {
 }
 
 class FakePoster {
-  results: unknown[] = [];
+  results: Array<{ agentKey: string; findings: unknown[]; siblingShas: Record<string, string> }> =
+    [];
   scopeDeclines: { changedLines: number; maxChangedLines: number }[] = [];
 
-  async postReviewResult(input: unknown): Promise<{ findingId: string; commentId: number }[]> {
+  async postReviewResult(input: {
+    agentKey: string;
+    findings: unknown[];
+    siblingShas: Record<string, string>;
+  }): Promise<{ findingId: string; commentId: number }[]> {
     this.results.push(input);
     return [{ findingId: 'finding-1', commentId: 900 }];
   }
@@ -579,8 +737,17 @@ class FakeRunner {
 
   constructor(private readonly stdout: string) {}
 
-  async runLogicAgent(input: { botConfig?: unknown }): Promise<string> {
+  async runAgent(input: { botConfig?: unknown }): Promise<string> {
     this.calls.push(input);
     return this.stdout;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    }),
+  ]);
 }

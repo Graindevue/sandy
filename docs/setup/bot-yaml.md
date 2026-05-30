@@ -116,11 +116,15 @@ Agent keys are the file names (without `.md`) in `agents/` and
 | `test-coverage` | Missing or over-mocked tests | claude / haiku |
 | `style` | Maintainability Biome can't catch (verbose strictness only) | codex / gpt-5.5 |
 
-> **Phase 1 runs only `logic`.** The other Agents are present in the repo but
-> unused until multi-Agent fan-out activates in a later phase. In Phase 1, the
-> effective selection is a single Agent regardless of what you list here; listing
-> more does no harm but won't fan out yet. See
-> [`docs/prds/phase-01-first-useful-review.md`](../prds/phase-01-first-useful-review.md).
+When a Product omits `agents`, Sandy starts from each Agent's `defaultEnabled`
+frontmatter: `true` runs by default, `false` stays off, and `auto` runs only
+when a Product Repo declares the relevant framework dependency in `package.json`.
+The reviewed Repo can then override that selection with `.bot/agents.yaml`:
+
+```yaml
+enable: [style]
+disable: [security]
+```
 
 To add a custom Agent, drop a markdown file in `.config/agents/` and reference
 its key in a Product's `agents` list. A file there with the same name as a
