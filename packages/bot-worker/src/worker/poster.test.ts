@@ -1,6 +1,12 @@
-import type { Finding } from '@sandy/shared-types';
+import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
-import type { GitHubReviewPoster, IssueCommentInput, ReviewCommentInput } from './poster.js';
+import type {
+  GitHubReviewPoster,
+  IssueCommentInput,
+  PersistedFinding,
+  PullRequestTarget,
+  ReviewCommentInput,
+} from './poster.js';
 import { formatFindingBody, PullRequestPoster } from './poster.js';
 
 const baseFinding: Finding = {
@@ -19,16 +25,35 @@ const baseFinding: Finding = {
   category: 'logic',
 };
 
+const target: PullRequestTarget = {
+  owner: 'acme',
+  repo: 'widget',
+  pullNumber: 12,
+  headSha: 'abc123',
+};
+
+const noFindingsSummary = 'Confidence score: 0/5\n\nSandy review: no findings posted.';
+const oneFindingSummary = 'Confidence score: 3/5\n\nSandy review posted 1 finding.';
+const twoFindingsSummary = 'Confidence score: 3/5\n\nSandy review posted 2 findings.';
+const consumerReference: CrossRepoReference = {
+  repo: 'acme/consumer',
+  path: 'src/orders.ts',
+  line: 31,
+};
+const consumerSiblingShas: SiblingShas = { 'acme/consumer': 'consumer-main-sha' };
+const consumerPermalink =
+  'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31';
+
 describe('PullRequestPoster', () => {
   it('posts inline comments with the load-bearing finding trailer', async () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
     const posted = await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      target,
       siblingShas: {},
       summary: 'Confidence score: 2/5\n\nSandy review posted 1 finding.',
-      findings: [{ id: 'finding-1', finding: baseFinding }],
+      findings: [persistedFinding()],
     });
 
     expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
@@ -56,9 +81,9 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github);
 
     const posted = await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      target,
       siblingShas: {},
-      summary: 'Confidence score: 0/5\n\nSandy review: no findings posted.',
+      summary: noFindingsSummary,
       findings: [],
     });
 
@@ -69,7 +94,7 @@ describe('PullRequestPoster', () => {
         owner: 'acme',
         repo: 'widget',
         issueNumber: 12,
-        body: 'Confidence score: 0/5\n\nSandy review: no findings posted.',
+        body: noFindingsSummary,
       },
     ]);
   });
@@ -80,19 +105,18 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github, { logger });
 
     const posted = await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      target,
       siblingShas: {},
-      summary: 'Confidence score: 3/5\n\nSandy review posted 2 findings.',
+      summary: twoFindingsSummary,
       findings: [
-        { id: 'finding-1', finding: baseFinding },
-        {
-          id: 'finding-2',
-          finding: {
-            ...baseFinding,
+        persistedFinding(),
+        persistedFinding(
+          {
             anchor: { ...baseFinding.anchor, lineStart: 30, lineEnd: 30 },
             summary: 'The write path skips validation.',
           },
-        },
+          'finding-2',
+        ),
       ],
     });
 
@@ -116,23 +140,13 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github);
 
     await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
-      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
-      findings: [
-        {
-          id: 'finding-1',
-          finding: {
-            ...baseFinding,
-            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
-          },
-        },
-      ],
+      target,
+      siblingShas: consumerSiblingShas,
+      summary: oneFindingSummary,
+      findings: [persistedFinding({ crossRepoReferences: [consumerReference] })],
     });
 
-    expect(github.reviewComments[0]?.body).toContain(
-      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
-    );
+    expect(github.reviewComments[0]?.body).toContain(consumerPermalink);
     expect(github.reviewComments[0]?.owner).toBe('acme');
     expect(github.reviewComments[0]?.repo).toBe('widget');
   });
@@ -142,23 +156,19 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github);
 
     await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
-      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
+      target,
+      siblingShas: consumerSiblingShas,
+      summary: oneFindingSummary,
       findings: [
-        {
-          id: 'finding-1',
-          finding: {
-            ...baseFinding,
-            anchor: {
-              repo: 'acme/widget',
-              path: 'src/api.ts',
-              lineStart: 41,
-              lineEnd: 41,
-            },
-            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
+        persistedFinding({
+          anchor: {
+            repo: 'acme/widget',
+            path: 'src/api.ts',
+            lineStart: 41,
+            lineEnd: 41,
           },
-        },
+          crossRepoReferences: [consumerReference],
+        }),
       ],
     });
 
@@ -172,9 +182,7 @@ describe('PullRequestPoster', () => {
         line: 41,
       }),
     ]);
-    expect(github.reviewComments[0]?.body).toContain(
-      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
-    );
+    expect(github.reviewComments[0]?.body).toContain(consumerPermalink);
     expect(github.issueComments).toEqual([
       expect.objectContaining({
         owner: 'acme',
@@ -215,23 +223,19 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github);
 
     const posted = await poster.postReviewResult({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
-      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
+      target,
+      siblingShas: consumerSiblingShas,
+      summary: oneFindingSummary,
       findings: [
-        {
-          id: 'finding-1',
-          finding: {
-            ...baseFinding,
-            anchor: {
-              repo: 'acme/consumer',
-              path: 'src/orders.ts',
-              lineStart: 31,
-              lineEnd: 31,
-            },
-            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
+        persistedFinding({
+          anchor: {
+            repo: 'acme/consumer',
+            path: 'src/orders.ts',
+            lineStart: 31,
+            lineEnd: 31,
           },
-        },
+          crossRepoReferences: [consumerReference],
+        }),
       ],
     });
 
@@ -239,9 +243,7 @@ describe('PullRequestPoster', () => {
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
     expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
-    expect(github.issueComments[0]?.body).toContain(
-      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
-    );
+    expect(github.issueComments[0]?.body).toContain(consumerPermalink);
   });
 
   it('posts a scope-decline summary for oversized diffs', async () => {
@@ -249,7 +251,7 @@ describe('PullRequestPoster', () => {
     const poster = new PullRequestPoster(github);
 
     await poster.postScopeDeclined({
-      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      target,
       changedLines: 5001,
       maxChangedLines: 5000,
     });
@@ -259,6 +261,10 @@ describe('PullRequestPoster', () => {
     expect(github.issueComments[0]?.body).toContain('5,001 changed lines');
   });
 });
+
+function persistedFinding(overrides: Partial<Finding> = {}, id = 'finding-1'): PersistedFinding {
+  return { id, finding: { ...baseFinding, ...overrides } };
+}
 
 class FakeGitHubReviewPoster implements GitHubReviewPoster {
   reviewComments: ReviewCommentInput[] = [];

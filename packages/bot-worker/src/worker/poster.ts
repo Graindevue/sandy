@@ -18,18 +18,21 @@ export interface PostedFinding {
   commentId: number;
 }
 
-export interface ReviewCommentInput {
+interface ReviewCommentInputBase {
   owner: string;
   repo: string;
   pullNumber: number;
   commitId: string;
   path: string;
   body: string;
-  line: number;
-  side: 'RIGHT';
-  startLine?: number;
-  startSide?: 'RIGHT';
 }
+
+type ReviewCommentLineRange = { line: number; side: 'RIGHT' } & (
+  | { startLine?: never; startSide?: never }
+  | { startLine: number; startSide: 'RIGHT' }
+);
+
+export type ReviewCommentInput = ReviewCommentInputBase & ReviewCommentLineRange;
 
 export interface IssueCommentInput {
   owner: string;
@@ -129,23 +132,31 @@ function buildReviewCommentInput(
   siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
-  const base: ReviewCommentInput = {
+  return {
     owner: target.owner,
     repo: target.repo,
     pullNumber: target.pullNumber,
     commitId: target.headSha,
     path: finding.anchor.path,
     body: formatFindingBody(persisted, siblingShas),
-    line: finding.anchor.lineEnd,
-    side: 'RIGHT',
+    ...reviewCommentLineRange(finding.anchor),
   };
+}
 
-  if (finding.anchor.lineStart !== finding.anchor.lineEnd) {
-    base.startLine = finding.anchor.lineStart;
-    base.startSide = 'RIGHT';
+function reviewCommentLineRange(anchor: Finding['anchor']): ReviewCommentLineRange {
+  if (anchor.lineStart === anchor.lineEnd) {
+    return {
+      line: anchor.lineEnd,
+      side: 'RIGHT',
+    };
   }
 
-  return base;
+  return {
+    line: anchor.lineEnd,
+    side: 'RIGHT',
+    startLine: anchor.lineStart,
+    startSide: 'RIGHT',
+  };
 }
 
 function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): boolean {
