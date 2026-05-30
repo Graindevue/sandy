@@ -1,4 +1,4 @@
-import type { ReviewJobStatus } from '@sandy/shared-types';
+import type { ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { type FunctionReference, makeFunctionReference } from 'convex/server';
 import type {
   RecordAgentRunInput,
@@ -104,7 +104,7 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     await this.#client.mutation(refs.apiSurfaceManifests.record, input);
   }
 
-  async recordSiblingShas(jobId: string, siblingShas: Record<string, string>): Promise<void> {
+  async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
     await this.#client.mutation(refs.reviewJobs.setSiblingShas, { jobId, siblingShas });
   }
 

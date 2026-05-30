@@ -1,7 +1,16 @@
-import type { AgentDefinition, Finding } from '@sandy/shared-types';
+import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
-import { ReviewExecutor, type ReviewJobContext } from './review-executor.js';
+import {
+  type RecordAgentRunInput,
+  type RecordFindingInput,
+  type ReviewAgentRunner,
+  type ReviewDiffInspector,
+  type ReviewExecutionStore,
+  ReviewExecutor,
+  type ReviewJobContext,
+  type ReviewPoster,
+} from './review-executor.js';
 
 const logicAgent: AgentDefinition = {
   key: 'logic',
@@ -201,8 +210,9 @@ describe('ReviewExecutor', () => {
         },
       ],
     });
-    expect(store.context?.job.siblingShas).toEqual({ 'acme/desktop': 'def456' });
-    expect(poster.postedSiblingShas).toEqual([{ 'acme/desktop': 'def456' }]);
+    expect(poster.results.map((result) => result.siblingShas)).toEqual([
+      { 'acme/desktop': 'def456' },
+    ]);
     expect(cloneManager.removed).toEqual(['acme/desktop@job-1', 'acme/widget@job-1']);
   });
 
@@ -416,7 +426,6 @@ function makeContext(
       agentKeys: ['logic'],
       confidenceScore: 0,
       agentRuns: [],
-      siblingShas: {},
     },
     repo: {
       id: 'repo-1',
@@ -454,38 +463,45 @@ function nextNow(values: number[]): () => number {
   return () => copy.shift() ?? values.at(-1) ?? 0;
 }
 
-class FakeExecutionStore {
-  recordedManifests: unknown[] = [];
-  recordedSiblingShas: unknown[] = [];
-  recordedFindings: unknown[] = [];
+class FakeExecutionStore implements ReviewExecutionStore {
+  recordedManifests: Array<{
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }> = [];
+  recordedSiblingShas: { jobId: string; siblingShas: SiblingShas }[] = [];
+  recordedFindings: RecordFindingInput[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
-  agentRuns: unknown[] = [];
+  agentRuns: RecordAgentRunInput[] = [];
   completed: { jobId: string; finishedAt: number }[] = [];
   failed: { jobId: string; finishedAt: number; error: string }[] = [];
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'superseded' | null = 'running';
+  status: ReviewJobStatus | null = 'running';
 
-  constructor(readonly context: ReviewJobContext | null) {}
+  constructor(private readonly context: ReviewJobContext | null) {}
 
-  async getReviewJobContext(): Promise<ReviewJobContext | null> {
+  async getReviewJobContext(_jobId: string): Promise<ReviewJobContext | null> {
     return this.context;
   }
 
-  async getReviewJobStatus(): Promise<typeof this.status> {
+  async getReviewJobStatus(_jobId: string): Promise<typeof this.status> {
     return this.status;
   }
 
-  async recordApiSurfaceManifest(input: unknown): Promise<void> {
+  async recordApiSurfaceManifest(input: {
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }): Promise<void> {
     this.recordedManifests.push(input);
   }
 
-  async recordSiblingShas(jobId: string, siblingShas: Record<string, string>): Promise<void> {
+  async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
     this.recordedSiblingShas.push({ jobId, siblingShas });
-    if (this.context !== null) {
-      this.context.job.siblingShas = siblingShas;
-    }
   }
 
-  async recordFinding(input: unknown): Promise<string> {
+  async recordFinding(input: RecordFindingInput): Promise<string> {
     this.recordedFindings.push(input);
     return `finding-${this.recordedFindings.length}`;
   }
@@ -494,7 +510,7 @@ class FakeExecutionStore {
     this.postedFindings.push({ findingId, githubCommentId });
   }
 
-  async recordAgentRun(input: unknown): Promise<void> {
+  async recordAgentRun(input: RecordAgentRunInput): Promise<void> {
     this.agentRuns.push(input);
   }
 
@@ -563,16 +579,14 @@ class FakeCloneManager {
   }
 }
 
-class FakePoster {
-  results: unknown[] = [];
-  postedSiblingShas: unknown[] = [];
+class FakePoster implements ReviewPoster {
+  results: Array<Parameters<ReviewPoster['postReviewResult']>[0]> = [];
   scopeDeclines: { changedLines: number; maxChangedLines: number }[] = [];
 
-  async postReviewResult(input: {
-    siblingShas: Record<string, string>;
-  }): Promise<{ findingId: string; commentId: number }[]> {
+  async postReviewResult(
+    input: Parameters<ReviewPoster['postReviewResult']>[0],
+  ): Promise<{ findingId: string; commentId: number }[]> {
     this.results.push(input);
-    this.postedSiblingShas.push(input.siblingShas);
     return [{ findingId: 'finding-1', commentId: 900 }];
   }
 
@@ -584,23 +598,29 @@ class FakePoster {
   }
 }
 
-class FakeDiffInspector {
-  calls: { target: unknown; ignorePatterns: unknown }[] = [];
+class FakeDiffInspector implements ReviewDiffInspector {
+  calls: {
+    target: Parameters<ReviewDiffInspector['changedLineCount']>[0];
+    ignorePatterns: Parameters<ReviewDiffInspector['changedLineCount']>[1];
+  }[] = [];
 
   constructor(private readonly changedLines: number) {}
 
-  async changedLineCount(target: unknown, ignorePatterns?: unknown): Promise<number> {
+  async changedLineCount(
+    target: Parameters<ReviewDiffInspector['changedLineCount']>[0],
+    ignorePatterns?: Parameters<ReviewDiffInspector['changedLineCount']>[1],
+  ): Promise<number> {
     this.calls.push({ target, ignorePatterns });
     return this.changedLines;
   }
 }
 
-class FakeRunner {
-  calls: { botConfig?: unknown }[] = [];
+class FakeRunner implements ReviewAgentRunner {
+  calls: Array<Parameters<ReviewAgentRunner['runLogicAgent']>[0]> = [];
 
   constructor(private readonly stdout: string) {}
 
-  async runLogicAgent(input: { botConfig?: unknown }): Promise<string> {
+  async runLogicAgent(input: Parameters<ReviewAgentRunner['runLogicAgent']>[0]): Promise<string> {
     this.calls.push(input);
     return this.stdout;
   }

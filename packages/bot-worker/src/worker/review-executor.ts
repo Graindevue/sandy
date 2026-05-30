@@ -6,6 +6,7 @@ import type {
   Confidence,
   Finding,
   ReviewJobStatus,
+  SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
 import {
@@ -41,7 +42,6 @@ export interface ReviewJobContext {
     agentKeys: string[];
     confidenceScore: Confidence;
     agentRuns: string[];
-    siblingShas: Record<string, string>;
   };
   repo: {
     id: string;
@@ -90,7 +90,7 @@ export interface ReviewExecutionStore {
     markdown: string;
     builtAt: number;
   }): Promise<void>;
-  recordSiblingShas(jobId: string, siblingShas: Record<string, string>): Promise<void>;
+  recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void>;
   recordFinding(input: RecordFindingInput): Promise<string>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
@@ -121,7 +121,7 @@ export interface ReviewPoster {
     target: PullRequestTarget;
     agentKey: string;
     findings: PersistedFinding[];
-    siblingShas: Record<string, string>;
+    siblingShas: SiblingShas;
     summary?: string;
   }): Promise<PostedFinding[]>;
   postScopeDeclined(input: {
@@ -220,8 +220,7 @@ export class ReviewExecutor {
 
       const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
       worktrees.push(...workspace.worktrees);
-      const siblingShas = siblingShasForWorkspace(workspace.siblingWorktrees);
-      await this.#store.recordSiblingShas(jobId, siblingShas);
+      await this.#store.recordSiblingShas(jobId, workspace.siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
@@ -270,7 +269,7 @@ export class ReviewExecutor {
         target,
         agentKey,
         persistedFindings,
-        siblingShas,
+        workspace.siblingShas,
         payload.summary,
       );
 
@@ -362,14 +361,14 @@ export class ReviewExecutor {
     target: PullRequestTarget,
     agentKey: string,
     findings: PersistedFinding[],
-    siblingShas: Record<string, string>,
+    siblingShas: SiblingShas,
     summary: string | undefined,
   ): Promise<void> {
     const input: {
       target: PullRequestTarget;
       agentKey: string;
       findings: PersistedFinding[];
-      siblingShas: Record<string, string>;
+      siblingShas: SiblingShas;
       summary?: string;
     } = { target, agentKey, findings, siblingShas };
     if (summary !== undefined) {
@@ -445,12 +444,6 @@ function runnerPullRequest(context: ReviewJobContext): RunnerPullRequest {
     title: context.pullRequest.title,
     url: context.pullRequest.url,
   };
-}
-
-function siblingShasForWorkspace(
-  siblingWorktrees: readonly RunnerSiblingWorktree[],
-): Record<string, string> {
-  return Object.fromEntries(siblingWorktrees.map((worktree) => [worktree.repo, worktree.sha]));
 }
 
 function describeError(error: unknown): string {

@@ -12,6 +12,9 @@ export type ReviewJobStatus = 'pending' | 'running' | 'completed' | 'failed' | '
 /** What caused a Review to be triggered. */
 export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened';
 
+/** Sibling Repo full names mapped to their pinned default-branch SHA. */
+export type SiblingShas = Record<string, string>;
+
 /**
  * A queued unit of review work in Convex. One ReviewJob per Review attempt;
  * multiple may exist for the same PR over time as iteration happens.
@@ -32,7 +35,7 @@ export interface ReviewJob {
   /** AgentRun ids produced while executing this ReviewJob. */
   agentRuns: AgentRunId[];
   /** Sibling Repo full names mapped to their pinned default-branch SHA. */
-  siblingShas: Record<string, string>;
+  siblingShas: SiblingShas;
   /** Epoch milliseconds when the job was enqueued. */
   createdAt: number;
   /** Epoch milliseconds when a worker claimed the job, if claimed. */
