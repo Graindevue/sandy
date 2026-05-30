@@ -1,4 +1,4 @@
-import type { Finding } from '@sandy/shared-types';
+import type { CrossRepoSearchRationale, Finding } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
 import { PullRequestPoster } from './poster.js';
 
@@ -18,6 +18,12 @@ const baseFinding: Finding = {
   category: 'logic',
 };
 
+const skippedCrossRepoSearch: CrossRepoSearchRationale = {
+  status: 'skipped',
+  trigger: 'none',
+  rationale: 'Only tests changed; no cross-repo contract risk was detected.',
+};
+
 describe('PullRequestPoster', () => {
   it('posts inline comments with the load-bearing finding trailer', async () => {
     const github = new FakeGitHubReviewPoster();
@@ -28,11 +34,7 @@ describe('PullRequestPoster', () => {
       agentKey: 'logic',
       siblingShas: {},
       summary: 'One issue found.',
-      crossRepoSearch: {
-        status: 'skipped',
-        trigger: 'none',
-        rationale: 'Only tests changed; no cross-repo contract risk was detected.',
-      },
+      crossRepoSearch: skippedCrossRepoSearch,
       findings: [{ id: 'finding-1', finding: baseFinding }],
     });
 
@@ -67,6 +69,7 @@ describe('PullRequestPoster', () => {
       agentKey: 'logic',
       siblingShas: {},
       summary: 'No correctness issues were found.',
+      crossRepoSearch: skippedCrossRepoSearch,
       findings: [],
     });
 
@@ -77,7 +80,10 @@ describe('PullRequestPoster', () => {
         owner: 'acme',
         repo: 'widget',
         issueNumber: 12,
-        body: 'Sandy logic review: no issues found.\n\nNo correctness issues were found.',
+        body:
+          'Sandy logic review: no issues found.\n\n' +
+          'Cross-repo search: skipped (none) - Only tests changed; no cross-repo contract risk was detected.\n\n' +
+          'No correctness issues were found.',
       },
     ]);
   });
@@ -92,6 +98,7 @@ describe('PullRequestPoster', () => {
       agentKey: 'logic',
       siblingShas: {},
       summary: 'Two issues found.',
+      crossRepoSearch: skippedCrossRepoSearch,
       findings: [
         { id: 'finding-1', finding: baseFinding },
         {
@@ -122,6 +129,7 @@ describe('PullRequestPoster', () => {
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
       agentKey: 'logic',
       siblingShas: { 'acme/consumer': 'consumer-main-sha' },
+      crossRepoSearch: skippedCrossRepoSearch,
       findings: [
         {
           id: 'finding-1',

@@ -18,7 +18,13 @@ import {
   ReviewSupersededError,
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
-import type { PersistedFinding, PostedFinding, PullRequestTarget } from './poster.js';
+import type {
+  PersistedFinding,
+  PostedFinding,
+  PostReviewResultInput,
+  PostScopeDeclinedInput,
+  PullRequestTarget,
+} from './poster.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -74,16 +80,28 @@ export interface RecordFindingInput {
   finding: Finding;
 }
 
-export interface RecordAgentRunInput {
+type FailedAgentRunStatus = Extract<AgentRunStatus, 'failed' | 'timed_out'>;
+
+interface RecordAgentRunBaseInput {
   reviewJobId: string;
   agentKey: string;
-  status: AgentRunStatus;
   startedAt: number;
   finishedAt: number;
-  findingCount: number;
-  crossRepoSearch?: CrossRepoSearchRationale;
-  error?: string;
 }
+
+export type RecordAgentRunInput =
+  | (RecordAgentRunBaseInput & {
+      status: 'completed';
+      findingCount: number;
+      crossRepoSearch: CrossRepoSearchRationale;
+      error?: never;
+    })
+  | (RecordAgentRunBaseInput & {
+      status: FailedAgentRunStatus;
+      findingCount: 0;
+      error: string;
+      crossRepoSearch?: never;
+    });
 
 export interface ReviewExecutionStore {
   getReviewJobContext(jobId: string): Promise<ReviewJobContext | null>;
@@ -119,7 +137,6 @@ export interface ReviewAgentRunner {
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
-type FailedAgentRunStatus = Extract<AgentRunStatus, 'failed' | 'timed_out'>;
 type AgentExecutionOutcome =
   | {
       status: 'completed';
@@ -154,19 +171,8 @@ interface SelectedAgentInput extends AgentExecutionInput {
 }
 
 export interface ReviewPoster {
-  postReviewResult(input: {
-    target: PullRequestTarget;
-    agentKey: string;
-    findings: PersistedFinding[];
-    siblingShas: SiblingShas;
-    summary?: string;
-    crossRepoSearch?: CrossRepoSearchRationale;
-  }): Promise<PostedFinding[]>;
-  postScopeDeclined(input: {
-    target: PullRequestTarget;
-    changedLines: number;
-    maxChangedLines: number;
-  }): Promise<void>;
+  postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]>;
+  postScopeDeclined(input: PostScopeDeclinedInput): Promise<void>;
 }
 
 export interface ReviewManifestBuilder {
@@ -542,21 +548,17 @@ export class ReviewExecutor {
     findings: PersistedFinding[],
     siblingShas: SiblingShas,
     summary: string | undefined,
-    crossRepoSearch: CrossRepoSearchRationale | undefined,
+    crossRepoSearch: CrossRepoSearchRationale,
   ): Promise<void> {
-    const input: {
-      target: PullRequestTarget;
-      agentKey: string;
-      findings: PersistedFinding[];
-      siblingShas: SiblingShas;
-      summary?: string;
-      crossRepoSearch?: CrossRepoSearchRationale;
-    } = { target, agentKey, findings, siblingShas };
+    const input: PostReviewResultInput = {
+      target,
+      agentKey,
+      findings,
+      siblingShas,
+      crossRepoSearch,
+    };
     if (summary !== undefined) {
       input.summary = summary;
-    }
-    if (crossRepoSearch !== undefined) {
-      input.crossRepoSearch = crossRepoSearch;
     }
 
     const posted = await this.#poster.postReviewResult(input);

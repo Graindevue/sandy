@@ -1,6 +1,7 @@
 import type {
   Confidence,
   CrossRepoSearchRationale,
+  CrossRepoSearchRunTrigger,
   CrossRepoSearchStatus,
   CrossRepoSearchTrigger,
   Finding,
@@ -17,6 +18,10 @@ const CROSS_REPO_SEARCH_TRIGGERS = new Set<CrossRepoSearchTrigger>([
   'diff-judgment',
   'none',
 ]);
+
+type CrossRepoSearchDecision =
+  | { status: 'searched'; trigger: CrossRepoSearchRunTrigger }
+  | { status: 'skipped'; trigger: 'none' };
 
 /**
  * Extract and validate the structured payload an Agent emits. This intentionally
@@ -69,25 +74,38 @@ function validateCrossRepoSearch(value: unknown, where: string): CrossRepoSearch
   const object = requireObject(value, where);
   const status = requireCrossRepoSearchStatus(object.status, `${where}.status`);
   const trigger = requireCrossRepoSearchTrigger(object.trigger, `${where}.trigger`);
-  const rationale = requireString(object.rationale, `${where}.rationale`);
-  const result: CrossRepoSearchRationale = { status, trigger, rationale };
-
-  if (status === 'skipped' && trigger !== 'none') {
-    throw new Error(`${where}.trigger must be "none" when status is "skipped"`);
-  }
-  if (status === 'searched' && trigger === 'none') {
-    throw new Error(`${where}.trigger must be "manifest" or "diff-judgment" when searched`);
-  }
+  const base: { rationale: string; searchedRepos?: string[] } = {
+    rationale: requireString(object.rationale, `${where}.rationale`),
+  };
+  const decision = validateCrossRepoSearchDecision(status, trigger, where);
   if (object.searchedRepos !== undefined) {
     if (!Array.isArray(object.searchedRepos)) {
       throw new Error(`${where}.searchedRepos must be an array when provided`);
     }
-    result.searchedRepos = object.searchedRepos.map((repo, index) =>
+    base.searchedRepos = object.searchedRepos.map((repo, index) =>
       requireString(repo, `${where}.searchedRepos[${index}]`),
     );
   }
 
-  return result;
+  return { ...base, ...decision };
+}
+
+function validateCrossRepoSearchDecision(
+  status: CrossRepoSearchStatus,
+  trigger: CrossRepoSearchTrigger,
+  where: string,
+): CrossRepoSearchDecision {
+  if (status === 'skipped') {
+    if (trigger !== 'none') {
+      throw new Error(`${where}.trigger must be "none" when status is "skipped"`);
+    }
+    return { status, trigger };
+  }
+
+  if (trigger === 'none') {
+    throw new Error(`${where}.trigger must be "manifest" or "diff-judgment" when searched`);
+  }
+  return { status, trigger };
 }
 
 function validateFinding(value: unknown, index: number): Finding {

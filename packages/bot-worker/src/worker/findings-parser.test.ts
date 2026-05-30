@@ -132,6 +132,19 @@ describe('parseFindingsPayload', () => {
     ).toThrow(/severity/i);
   });
 
+  it('rejects inconsistent Cross-Repo Search status and trigger pairs', () => {
+    expect(() =>
+      parseFindingsPayload(`<findings>{
+        "crossRepoSearch": {
+          "status": "searched",
+          "trigger": "none",
+          "rationale": "No cross-repo contract risk was detected."
+        },
+        "findings": []
+      }</findings>`),
+    ).toThrow(/trigger must be "manifest" or "diff-judgment"/);
+  });
+
   it('uses the final findings block when earlier narration contains an example', () => {
     const payload = parseFindingsPayload(`
       Example:

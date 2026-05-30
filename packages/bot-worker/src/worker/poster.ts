@@ -59,7 +59,7 @@ export interface PostReviewResultInput {
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary?: string;
-  crossRepoSearch?: CrossRepoSearchRationale;
+  crossRepoSearch: CrossRepoSearchRationale;
 }
 
 export interface PostScopeDeclinedInput {
@@ -183,12 +183,12 @@ function buildSummaryBody(
   agentKey: string,
   findingCount: number,
   summary: string | undefined,
-  crossRepoSearch: CrossRepoSearchRationale | undefined,
+  crossRepoSearch: CrossRepoSearchRationale,
 ): string {
-  const parts = [buildSummaryHeadline(agentKey, findingCount)];
-  if (crossRepoSearch !== undefined) {
-    parts.push(formatCrossRepoSearch(crossRepoSearch));
-  }
+  const parts = [
+    buildSummaryHeadline(agentKey, findingCount),
+    formatCrossRepoSearch(crossRepoSearch),
+  ];
   const trimmedSummary = summary?.trim();
   if (trimmedSummary !== undefined && trimmedSummary.length > 0) {
     parts.push(trimmedSummary);

@@ -58,15 +58,24 @@ export type CrossRepoSearchStatus = 'searched' | 'skipped';
 
 /** Which part of the Cross-Repo Search contract caused the Agent's decision. */
 export type CrossRepoSearchTrigger = 'manifest' | 'diff-judgment' | 'none';
+export type CrossRepoSearchRunTrigger = Exclude<CrossRepoSearchTrigger, 'none'>;
 
-export interface CrossRepoSearchRationale {
-  status: CrossRepoSearchStatus;
-  trigger: CrossRepoSearchTrigger;
+interface CrossRepoSearchRationaleBase {
   /** Human-readable reason the Agent searched, or why it skipped. */
   rationale: string;
   /** Owner/name Repos actually searched. Omit or leave empty when skipped. */
   searchedRepos?: string[];
 }
+
+export type CrossRepoSearchRationale =
+  | (CrossRepoSearchRationaleBase & {
+      status: 'searched';
+      trigger: CrossRepoSearchRunTrigger;
+    })
+  | (CrossRepoSearchRationaleBase & {
+      status: 'skipped';
+      trigger: 'none';
+    });
 
 /**
  * The JSON block an Agent emits inside `<findings>…</findings>`. Parsed and
