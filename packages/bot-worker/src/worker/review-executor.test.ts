@@ -1,9 +1,10 @@
 import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
+import type { PersistedFinding } from './poster.js';
 import {
   type RecordAgentRunInput,
-  type RecordFindingInput,
+  type RecordSynthesizedReviewInput,
   type ReviewAgentRunner,
   type ReviewDiffInspector,
   type ReviewExecutionStore,
@@ -11,6 +12,12 @@ import {
   type ReviewJobContext,
   type ReviewPoster,
 } from './review-executor.js';
+
+interface RecordedFinding {
+  reviewJobId: string;
+  pullRequestId: string;
+  finding: Finding;
+}
 
 const logicAgent: AgentDefinition = {
   key: 'logic',
@@ -461,7 +468,7 @@ describe('ReviewExecutor', () => {
 
   it('marks the job failed when persistence fails after a successful Agent run', async () => {
     const store = new FakeExecutionStore(makeContext());
-    store.recordFinding = async () => {
+    store.recordSynthesizedReview = async () => {
       throw new Error('Convex write failed');
     };
     const cloneManager = new FakeCloneManager();
@@ -725,7 +732,7 @@ class FakeExecutionStore implements ReviewExecutionStore {
   }> = [];
   recordedSiblingShas: { jobId: string; siblingShas: SiblingShas }[] = [];
   confidenceScores: { jobId: string; confidenceScore: Finding['confidence'] }[] = [];
-  recordedFindings: RecordFindingInput[] = [];
+  recordedFindings: RecordedFinding[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
   agentRuns: RecordAgentRunInput[] = [];
   completed: { jobId: string; finishedAt: number }[] = [];
@@ -755,16 +762,19 @@ class FakeExecutionStore implements ReviewExecutionStore {
     this.recordedSiblingShas.push({ jobId, siblingShas });
   }
 
-  async recordConfidenceScore(
-    jobId: string,
-    confidenceScore: Finding['confidence'],
-  ): Promise<void> {
-    this.confidenceScores.push({ jobId, confidenceScore });
-  }
-
-  async recordFinding(input: RecordFindingInput): Promise<string> {
-    this.recordedFindings.push(input);
-    return `finding-${this.recordedFindings.length}`;
+  async recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]> {
+    this.confidenceScores.push({
+      jobId: input.reviewJobId,
+      confidenceScore: input.confidenceScore,
+    });
+    return input.findings.map((finding) => {
+      this.recordedFindings.push({
+        reviewJobId: input.reviewJobId,
+        pullRequestId: input.pullRequestId,
+        finding,
+      });
+      return { id: `finding-${this.recordedFindings.length}`, finding };
+    });
   }
 
   async markFindingPosted(findingId: string, githubCommentId: number): Promise<void> {

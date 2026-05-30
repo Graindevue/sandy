@@ -1,6 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { synthesizeReview } from './synthesizer.js';
+import { synthesizeAgentOutputs, synthesizeReview } from './synthesizer.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -63,6 +63,46 @@ describe('synthesizeReview', () => {
     });
 
     expect(result.findings).toHaveLength(2);
+  });
+
+  it('dedupes transitively through nearby duplicate clusters', () => {
+    const result = synthesizeReview({
+      findings: [
+        baseFinding,
+        {
+          ...baseFinding,
+          anchor: { ...baseFinding.anchor, lineStart: 24, lineEnd: 24 },
+          confidence: 5,
+        },
+        {
+          ...baseFinding,
+          anchor: { ...baseFinding.anchor, lineStart: 26, lineEnd: 26 },
+          severity: 'P0',
+        },
+      ],
+      changedLineCount: 80,
+      agentSummaries: [],
+    });
+
+    expect(result.findings).toEqual([expect.objectContaining({ severity: 'P0' })]);
+  });
+
+  it('uses the completed Agent key as the authoritative Finding producer', () => {
+    const result = synthesizeAgentOutputs({
+      agentOutputs: [
+        {
+          agentKey: 'security',
+          payload: {
+            summary: 'One issue found.',
+            findings: [{ ...baseFinding, agentKey: 'model-supplied-key' }],
+          },
+        },
+      ],
+      changedLineCount: 80,
+    });
+
+    expect(result.findings).toEqual([expect.objectContaining({ agentKey: 'security' })]);
+    expect(result.summary).toContain('One issue found.');
   });
 
   it('builds a summary comment that surfaces the persisted confidence score', () => {

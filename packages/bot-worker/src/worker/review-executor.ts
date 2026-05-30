@@ -10,7 +10,7 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
-import { type SynthesizedReview, synthesizeReview } from '../synthesizer/synthesizer.js';
+import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
@@ -68,10 +68,11 @@ export interface ReviewJobContext {
   };
 }
 
-export interface RecordFindingInput {
+export interface RecordSynthesizedReviewInput {
   reviewJobId: string;
   pullRequestId: string;
-  finding: Finding;
+  confidenceScore: Confidence;
+  findings: readonly Finding[];
 }
 
 export interface RecordAgentRunInput {
@@ -94,8 +95,7 @@ export interface ReviewExecutionStore {
     builtAt: number;
   }): Promise<void>;
   recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void>;
-  recordConfidenceScore(jobId: string, confidenceScore: Confidence): Promise<void>;
-  recordFinding(input: RecordFindingInput): Promise<string>;
+  recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
   markCompleted(jobId: string, finishedAt: number): Promise<void>;
@@ -147,11 +147,6 @@ interface AgentExecutionInput {
   manifest: ApiSurfaceManifestBuildResult | undefined;
   reviewBotConfig: ReviewBotContext;
   cancellationSignal: AbortSignal | undefined;
-}
-
-interface CompletedAgentOutput {
-  agentKey: string;
-  payload: FindingsPayload;
 }
 
 export interface ReviewPoster {
@@ -338,12 +333,12 @@ export class ReviewExecutor {
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<CompletedAgentOutput[]> {
+  }): Promise<AgentReviewOutput[]> {
     const results = await Promise.allSettled(
       input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
     );
 
-    const outputs: CompletedAgentOutput[] = [];
+    const outputs: AgentReviewOutput[] = [];
     for (const result of results) {
       if (result.status === 'rejected') {
         throw result.reason;
@@ -355,7 +350,7 @@ export class ReviewExecutor {
     return outputs;
   }
 
-  async #runSelectedAgent(input: AgentExecutionInput): Promise<CompletedAgentOutput | null> {
+  async #runSelectedAgent(input: AgentExecutionInput): Promise<AgentReviewOutput | null> {
     const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
     if (outcome.status !== 'completed') {
@@ -516,35 +511,25 @@ export class ReviewExecutor {
     return manifest;
   }
 
-  async #recordFindings(
-    context: ReviewJobContext,
-    findings: Finding[],
-  ): Promise<PersistedFinding[]> {
-    const persistedFindings: PersistedFinding[] = [];
-    for (const finding of findings) {
-      const id = await this.#store.recordFinding({
-        reviewJobId: context.job.id,
-        pullRequestId: context.pullRequest.id,
-        finding,
-      });
-      persistedFindings.push({ id, finding });
-    }
-    return persistedFindings;
-  }
-
   async #synthesizePersistAndPostReview(input: {
     context: ReviewJobContext;
     target: PullRequestTarget;
-    agentOutputs: readonly CompletedAgentOutput[];
+    agentOutputs: readonly AgentReviewOutput[];
     changedLineCount: number;
     siblingShas: SiblingShas;
     cancellationSignal: AbortSignal | undefined;
   }): Promise<void> {
-    const synthesized = synthesizeAgentOutputs(input.agentOutputs, input.changedLineCount);
+    const synthesized = synthesizeAgentOutputs({
+      agentOutputs: input.agentOutputs,
+      changedLineCount: input.changedLineCount,
+    });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    await this.#store.recordConfidenceScore(input.context.job.id, synthesized.confidenceScore);
-    await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const persistedFindings = await this.#recordFindings(input.context, synthesized.findings);
+    const persistedFindings = await this.#store.recordSynthesizedReview({
+      reviewJobId: input.context.job.id,
+      pullRequestId: input.context.pullRequest.id,
+      confidenceScore: synthesized.confidenceScore,
+      findings: synthesized.findings,
+    });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
     await this.#postReviewResult(
       input.target,
@@ -574,21 +559,6 @@ export class ReviewExecutor {
       throw new ReviewSupersededError(jobId);
     }
   }
-}
-
-function synthesizeAgentOutputs(
-  outputs: readonly CompletedAgentOutput[],
-  changedLineCount: number,
-): SynthesizedReview {
-  return synthesizeReview({
-    changedLineCount,
-    agentSummaries: outputs.flatMap(({ payload }) =>
-      payload.summary === undefined ? [] : [payload.summary],
-    ),
-    findings: outputs.flatMap(({ agentKey, payload }) =>
-      payload.findings.map((finding) => ({ ...finding, agentKey })),
-    ),
-  });
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {

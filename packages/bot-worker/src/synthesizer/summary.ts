@@ -53,9 +53,17 @@ function buildDedupSummary(rawFindingCount: number, findingCount: number): strin
 }
 
 function cleanAgentSummaries(agentSummaries: readonly string[]): string[] {
-  return agentSummaries
-    .map((summary) => summary.trim())
-    .filter(
-      (summary, index, summaries) => summary.length > 0 && summaries.indexOf(summary) === index,
-    );
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+
+  for (const agentSummary of agentSummaries) {
+    const summary = agentSummary.trim();
+    if (summary.length === 0 || seen.has(summary)) {
+      continue;
+    }
+    seen.add(summary);
+    cleaned.push(summary);
+  }
+
+  return cleaned;
 }

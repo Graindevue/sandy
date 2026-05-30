@@ -49,48 +49,28 @@ export function dedupeFindings(
   findings: readonly Finding[],
   options: DedupFindingsOptions = {},
 ): Finding[] {
-  const summaryCosineThreshold = options.summaryCosineThreshold ?? DEFAULT_SUMMARY_COSINE_THRESHOLD;
-  const lineProximity = options.lineProximity ?? DEFAULT_LINE_PROXIMITY;
+  const dedupOptions = {
+    summaryCosineThreshold: options.summaryCosineThreshold ?? DEFAULT_SUMMARY_COSINE_THRESHOLD,
+    lineProximity: options.lineProximity ?? DEFAULT_LINE_PROXIMITY,
+  };
   const clusters: Candidate[][] = [];
-  let nextIndex = 0;
 
-  for (const finding of findings) {
-    const candidate = { finding, index: nextIndex };
-    nextIndex += 1;
-    const matchingClusterIndexes = clusters.flatMap((cluster, index) =>
-      cluster.some((member) =>
-        isDuplicateFinding(member.finding, finding, {
-          lineProximity,
-          summaryCosineThreshold,
-        }),
-      )
-        ? [index]
-        : [],
+  for (const [index, finding] of findings.entries()) {
+    const candidate = { finding, index };
+    const matchingClusters = clusters.filter((cluster) =>
+      cluster.some((member) => isDuplicateFinding(member.finding, finding, dedupOptions)),
     );
 
-    if (matchingClusterIndexes.length === 0) {
-      clusters.push([candidate]);
-      continue;
-    }
-
-    const [firstClusterIndex, ...restClusterIndexes] = matchingClusterIndexes;
-    if (firstClusterIndex === undefined) {
-      clusters.push([candidate]);
-      continue;
-    }
-    const firstCluster = clusters[firstClusterIndex];
+    const firstCluster = matchingClusters[0];
     if (firstCluster === undefined) {
       clusters.push([candidate]);
       continue;
     }
-    firstCluster.push(candidate);
 
-    for (const clusterIndex of restClusterIndexes.reverse()) {
-      const cluster = clusters[clusterIndex];
-      if (cluster !== undefined) {
-        firstCluster.push(...cluster);
-        clusters.splice(clusterIndex, 1);
-      }
+    firstCluster.push(candidate);
+    for (const cluster of matchingClusters.slice(1).reverse()) {
+      firstCluster.push(...cluster);
+      clusters.splice(clusters.indexOf(cluster), 1);
     }
   }
 
