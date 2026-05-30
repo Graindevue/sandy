@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import npmExports from './extractors/npm-exports.js';
 import { buildManifest } from './main.js';
 
 let tmpRoot: string;
@@ -171,6 +172,55 @@ describe('buildManifest', () => {
     expect(result.markdown).toContain('### Custom Framework Surface');
     expect(result.markdown).toContain('Custom extractor output.');
     expect(result.markdown).not.toContain('Declared');
+  });
+
+  it('does not follow package entrypoints outside a Repo worktree', async () => {
+    const repo = await makeRepo('api');
+    const secretPath = join(tmpRoot, 'secret.ts');
+    await writeFile(secretPath, 'export const leakedSecret = "do-not-read";\n');
+    await mkdir(join(repo, 'src'), { recursive: true });
+    await symlink(secretPath, join(repo, 'src', 'index.ts'));
+    await write(
+      repo,
+      'package.json',
+      JSON.stringify({
+        name: '@acme/api',
+        exports: {
+          './escape': '../secret.ts',
+          './link': './src/index.ts',
+        },
+      }),
+    );
+
+    const result = await buildManifest('product-1', [repoInput('acme/api', repo, 'abc123')], {
+      extractors: [npmExports],
+      now: () => 1_800_000_000_000,
+    });
+
+    expect(result.structured.repos[0]?.sections[0]?.data).toEqual([]);
+    expect(result.markdown).not.toContain('leakedSecret');
+    expect(result.markdown).not.toContain('do-not-read');
+  });
+
+  it('resolves package entrypoint directories to index files', async () => {
+    const repo = await makeRepo('api');
+    await write(
+      repo,
+      'package.json',
+      JSON.stringify({
+        name: '@acme/api',
+        exports: './src',
+      }),
+    );
+    await write(repo, 'src/index.ts', 'export const publicName = "api";\n');
+
+    const result = await buildManifest('product-1', [repoInput('acme/api', repo, 'abc123')], {
+      extractors: [npmExports],
+      now: () => 1_800_000_000_000,
+    });
+
+    expect(result.markdown).toContain('`.` -> `src/index.ts`');
+    expect(result.markdown).toContain('publicName');
   });
 });
 

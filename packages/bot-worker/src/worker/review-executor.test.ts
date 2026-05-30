@@ -174,6 +174,14 @@ describe('ReviewExecutor', () => {
     expect(runnerInput).toMatchObject({
       worktreePath: '/tmp/worktree/acme/widget/job-1',
       apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n',
+      siblingWorktrees: [
+        {
+          repo: 'acme/desktop',
+          sha: 'def456',
+          hostPath: '/tmp/worktree/acme/desktop/job-1',
+          sandboxPath: '/workspace/acme/desktop',
+        },
+      ],
     });
     expect(cloneManager.removed).toEqual(['acme/desktop@job-1', 'acme/widget@job-1']);
   });
@@ -489,7 +497,7 @@ class FakeCloneManager {
   defaultBranchShas = new Map<string, string>();
   removed: string[] = [];
 
-  async ensureCloned(repo: unknown): Promise<void> {
+  async ensureCloned(repo: { owner: string; name: string; defaultBranch: string }): Promise<void> {
     this.ensured.push(repo);
   }
 
@@ -499,27 +507,28 @@ class FakeCloneManager {
   }
 
   async createWorktree(
-    repo: unknown,
-    request: unknown,
-  ): Promise<{ repo: unknown; reviewJobId: string; path: string }> {
+    repo: { owner: string; name: string; defaultBranch: string },
+    request: { reviewJobId: string; sha: string },
+  ): Promise<{
+    repo: { owner: string; name: string; defaultBranch: string };
+    reviewJobId: string;
+    path: string;
+    sha: string;
+  }> {
     this.created.push({ repo, request });
-    const owner = (repo as { owner?: string }).owner ?? 'unknown';
-    const name = (repo as { name?: string }).name ?? 'unknown';
-    const reviewJobId = (request as { reviewJobId?: string }).reviewJobId ?? 'job-1';
     return {
       repo,
-      reviewJobId,
-      path: `/tmp/worktree/${owner}/${name}/${reviewJobId}`,
+      reviewJobId: request.reviewJobId,
+      sha: request.sha,
+      path: `/tmp/worktree/${repo.owner}/${repo.name}/${request.reviewJobId}`,
     };
   }
 
   async removeWorktree(worktree: {
-    repo?: { owner?: string; name?: string };
+    repo: { owner: string; name: string };
     reviewJobId: string;
   }): Promise<void> {
-    const owner = worktree.repo?.owner ?? 'unknown';
-    const name = worktree.repo?.name ?? 'unknown';
-    this.removed.push(`${owner}/${name}@${worktree.reviewJobId}`);
+    this.removed.push(`${worktree.repo.owner}/${worktree.repo.name}@${worktree.reviewJobId}`);
   }
 }
 

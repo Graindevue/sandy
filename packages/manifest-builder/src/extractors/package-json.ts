@@ -1,6 +1,4 @@
-import { join } from 'node:path';
-import type { JsonValue } from '@sandy/shared-types';
-import { parentDir, pathExists, readRepoJson } from '../fs-utils.js';
+import { parentDir, repoFileExists } from '../fs-utils.js';
 
 export interface PackageJson {
   name?: string;
@@ -38,13 +36,6 @@ export async function loadPackageJsonFiles(context: {
   return packages;
 }
 
-export async function packageJsonAt<T = JsonValue>(
-  root: string,
-  relativePath: string,
-): Promise<T | null> {
-  return await readRepoJson<T>(root, relativePath);
-}
-
 export async function resolveExistingEntryPath(
   root: string,
   packageDir: string,
@@ -54,7 +45,7 @@ export async function resolveExistingEntryPath(
   const base = packageDir.length === 0 ? withoutPrefix : `${packageDir}/${withoutPrefix}`;
   const candidates = entryCandidates(base);
   for (const candidate of candidates) {
-    if (await pathExists(join(root, candidate))) {
+    if (await repoFileExists(root, candidate)) {
       return candidate;
     }
   }

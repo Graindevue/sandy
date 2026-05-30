@@ -51,6 +51,9 @@ importers:
       '@sandy/convex-backend':
         specifier: workspace:*
         version: link:../convex-backend
+      '@sandy/manifest-builder':
+        specifier: workspace:*
+        version: link:../manifest-builder
       '@sandy/shared-types':
         specifier: workspace:*
         version: link:../shared-types

@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, join, relative, sep } from 'node:path';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const SKIP_DIRS = new Set([
   '.git',
@@ -25,30 +25,12 @@ export async function readTextFile(path: string): Promise<string | null> {
 }
 
 export async function readRepoText(root: string, relativePath: string): Promise<string | null> {
-  return await readTextFile(join(root, relativePath));
+  const path = await resolveRepoFilePath(root, relativePath);
+  return path === null ? null : await readTextFile(path);
 }
 
-export async function readRepoJson<T = unknown>(
-  root: string,
-  relativePath: string,
-): Promise<T | null> {
-  const text = await readRepoText(root, relativePath);
-  if (text === null) {
-    return null;
-  }
-  return JSON.parse(text) as T;
-}
-
-export async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (error) {
-    if (isNotFound(error)) {
-      return false;
-    }
-    throw error;
-  }
+export async function repoFileExists(root: string, relativePath: string): Promise<boolean> {
+  return (await resolveRepoFilePath(root, relativePath)) !== null;
 }
 
 export async function listRepoFiles(root: string): Promise<string[]> {
@@ -92,6 +74,32 @@ export function toPosix(path: string): string {
 export function parentDir(path: string): string {
   const dir = dirname(path);
   return dir === '.' ? '' : toPosix(dir);
+}
+
+async function resolveRepoFilePath(root: string, relativePath: string): Promise<string | null> {
+  const rootPath = resolve(root);
+  const targetPath = resolve(rootPath, relativePath);
+  if (!isWithin(rootPath, targetPath)) {
+    return null;
+  }
+
+  try {
+    const [realRoot, realTarget] = await Promise.all([realpath(rootPath), realpath(targetPath)]);
+    if (!isWithin(realRoot, realTarget)) {
+      return null;
+    }
+    return (await stat(realTarget)).isFile() ? realTarget : null;
+  } catch (error) {
+    if (isNotFound(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isWithin(root: string, path: string): boolean {
+  const relativePath = relative(root, path);
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
 
 function isNotFound(error: unknown): boolean {

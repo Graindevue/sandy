@@ -13,7 +13,22 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type { PersistedFinding, PostedFinding, PullRequestTarget } from './poster.js';
-import type { RunnerPullRequest } from './sandcastle-runner.js';
+import {
+  materializeReviewWorkspace,
+  type ProductRepoForReview,
+  type RepoForWorktree,
+  type ReviewCloneManager,
+  type ReviewWorktree,
+} from './review-workspace.js';
+import type { RunnerPullRequest, RunnerSiblingWorktree } from './sandcastle-runner.js';
+
+export type {
+  ProductRepoForReview,
+  RepoForWorktree,
+  ReviewCloneManager,
+  ReviewWorktree,
+  WorktreeRequest,
+} from './review-workspace.js';
 
 export interface ReviewJobContext {
   job: {
@@ -43,14 +58,6 @@ export interface ReviewJobContext {
     title: string;
     url: string;
   };
-}
-
-export interface ProductRepoForReview {
-  id: string;
-  owner: string;
-  name: string;
-  fullName: string;
-  defaultBranch: string;
 }
 
 export interface RecordFindingInput {
@@ -86,28 +93,6 @@ export interface ReviewExecutionStore {
   markFailed(jobId: string, finishedAt: number, error: string): Promise<void>;
 }
 
-export interface ReviewWorktree {
-  path: string;
-}
-
-export interface ReviewCloneManager {
-  ensureCloned(repo: RepoForWorktree): Promise<unknown>;
-  resolveDefaultBranchSha(repo: RepoForWorktree): Promise<string>;
-  createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
-  removeWorktree(worktree: ReviewWorktree): Promise<void>;
-}
-
-export interface RepoForWorktree {
-  owner: string;
-  name: string;
-  defaultBranch: string;
-}
-
-export interface WorktreeRequest {
-  reviewJobId: string;
-  sha: string;
-}
-
 export interface ReviewDiffInspector {
   changedLineCount(target: PullRequestTarget): Promise<number>;
 }
@@ -118,6 +103,7 @@ export interface ReviewAgentRunner {
     worktreePath: string;
     pullRequest: RunnerPullRequest;
     apiSurfaceManifest?: string;
+    siblingWorktrees?: readonly RunnerSiblingWorktree[];
     signal?: AbortSignal;
   }): Promise<string>;
 }
@@ -210,20 +196,23 @@ export class ReviewExecutor {
         return;
       }
 
-      const materialized = await this.#materializeReviewWorktrees(context);
-      worktrees.push(...materialized.worktrees);
+      const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
+      worktrees.push(...workspace.worktrees);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const manifest = await this.#buildAndRecordManifest(context, materialized.manifestRepos);
+      const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
         agent,
-        worktreePath: materialized.prWorktree.path,
+        worktreePath: workspace.prWorktree.path,
         pullRequest: runnerPullRequest(context),
       };
       if (manifest !== undefined) {
         runInput.apiSurfaceManifest = manifest.markdown;
+      }
+      if (workspace.siblingWorktrees.length > 0) {
+        runInput.siblingWorktrees = workspace.siblingWorktrees;
       }
       if (cancellationSignal !== undefined) {
         runInput.signal = cancellationSignal;
@@ -295,50 +284,6 @@ export class ReviewExecutor {
       maxChangedLines: this.#maxChangedLines,
     });
     await this.#store.markCompleted(jobId, this.#now());
-  }
-
-  async #materializeReviewWorktrees(context: ReviewJobContext): Promise<{
-    prWorktree: ReviewWorktree;
-    worktrees: ReviewWorktree[];
-    manifestRepos: ApiSurfaceRepoInput[];
-  }> {
-    const currentRepo = repoForWorktree(context);
-    const productRepos = productReposForContext(context);
-    const worktrees: ReviewWorktree[] = [];
-    const manifestRepos: ApiSurfaceRepoInput[] = [];
-    let prWorktree: ReviewWorktree | null = null;
-
-    for (const productRepo of productRepos) {
-      const repo = repoForProductRepo(productRepo);
-      await this.#cloneManager.ensureCloned(repo);
-      const sha = sameRepo(repo, currentRepo)
-        ? context.job.headSha
-        : await this.#cloneManager.resolveDefaultBranchSha(repo);
-      const worktree = await this.#cloneManager.createWorktree(repo, {
-        reviewJobId: context.job.id,
-        sha,
-      });
-      worktrees.push(worktree);
-      if (sameRepo(repo, currentRepo)) {
-        prWorktree = worktree;
-      }
-      manifestRepos.push({
-        owner: productRepo.owner,
-        name: productRepo.name,
-        fullName: productRepo.fullName,
-        defaultBranch: productRepo.defaultBranch,
-        worktreePath: worktree.path,
-        sha,
-      });
-    }
-
-    if (prWorktree === null) {
-      throw new Error(
-        `Product ${context.product.slug} does not include reviewed Repo ${currentRepo.owner}/${currentRepo.name}`,
-      );
-    }
-
-    return { prWorktree, worktrees, manifestRepos };
   }
 
   async #buildAndRecordManifest(
@@ -432,32 +377,6 @@ function requireLogicAgentKey(context: ReviewJobContext): string {
     );
   }
   return 'logic';
-}
-
-function productReposForContext(context: ReviewJobContext): ProductRepoForReview[] {
-  if (context.product.repos.length > 0) {
-    return context.product.repos;
-  }
-  return [
-    {
-      id: context.repo.id,
-      owner: context.repo.owner,
-      name: context.repo.name,
-      fullName: `${context.repo.owner}/${context.repo.name}`,
-      defaultBranch: context.repo.defaultBranch,
-    },
-  ];
-}
-
-function repoForProductRepo(repo: ProductRepoForReview): RepoForWorktree {
-  return { owner: repo.owner, name: repo.name, defaultBranch: repo.defaultBranch };
-}
-
-function sameRepo(left: RepoForWorktree, right: RepoForWorktree): boolean {
-  return (
-    left.owner.toLowerCase() === right.owner.toLowerCase() &&
-    left.name.toLowerCase() === right.name.toLowerCase()
-  );
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {

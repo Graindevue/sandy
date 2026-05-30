@@ -1,12 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type {
-  AgentDefinition,
-  ApiSurfaceManifestBuildResult,
-  ApiSurfaceRepoInput,
-} from '@sandy/shared-types';
+import { buildManifest } from '@sandy/manifest-builder';
+import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { ConfigLoader } from './config/loader.js';
 import {
@@ -173,7 +170,9 @@ export async function main(): Promise<void> {
     maxChangedLines: config.maxChangedLines,
     manifestBuilder: {
       buildManifest: (productId, repoShas) =>
-        buildApiSurfaceManifest(repoRoot, productId, repoShas),
+        buildManifest(productId, repoShas, {
+          customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
+        }),
     },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
@@ -280,32 +279,6 @@ function isNotFound(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === 'ENOENT'
   );
-}
-
-async function buildApiSurfaceManifest(
-  repoRoot: string,
-  productId: string,
-  repoShas: readonly ApiSurfaceRepoInput[],
-): Promise<ApiSurfaceManifestBuildResult> {
-  const modulePath = manifestBuilderModulePath(repoRoot);
-  const module = (await import(pathToFileURL(modulePath).href)) as {
-    buildManifest(
-      productId: string,
-      repoShas: readonly ApiSurfaceRepoInput[],
-      options: { customExtractorsDir: string },
-    ): Promise<ApiSurfaceManifestBuildResult>;
-  };
-  return await module.buildManifest(productId, repoShas, {
-    customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
-  });
-}
-
-function manifestBuilderModulePath(repoRoot: string): string {
-  const built = resolve(repoRoot, 'packages/manifest-builder/dist/main.js');
-  if (existsSync(built)) {
-    return built;
-  }
-  return resolve(repoRoot, 'packages/manifest-builder/src/main.ts');
 }
 
 /**
