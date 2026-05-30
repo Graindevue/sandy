@@ -43,6 +43,11 @@ describe('SandcastleRunner', () => {
       agent: logicAgent,
       worktreePath: '/tmp/sandy/worktrees/job-1',
       signal: abortController.signal,
+      botConfig: {
+        repoRules: '- Keep widget cache keys tenant-scoped.',
+        productRules: '- API errors expose stable codes.',
+        ignorePatterns: ['generated/**'],
+      },
       pullRequest: {
         owner: 'acme',
         repo: 'widget',
@@ -95,6 +100,11 @@ describe('SandcastleRunner', () => {
     expect(runCalls[0]?.prompt).toContain('Use this manifest as a trigger');
     expect(runCalls[0]?.prompt).toContain('Sibling Repo mounts');
     expect(runCalls[0]?.prompt).toContain('/workspace/acme/desktop');
+    expect(runCalls[0]?.prompt).toContain('Product Rules');
+    expect(runCalls[0]?.prompt).toContain('- API errors expose stable codes.');
+    expect(runCalls[0]?.prompt).toContain('Repo-local Rules');
+    expect(runCalls[0]?.prompt).toContain('- Keep widget cache keys tenant-scoped.');
+    expect(runCalls[0]?.prompt).toContain('generated/**');
     expect(runCalls[0]?.prompt).toContain('<findings>');
   });
 });

@@ -7,6 +7,7 @@ import type {
   Finding,
   ReviewJobStatus,
 } from '@sandy/shared-types';
+import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
 import {
   isReviewSupersededError,
   type ReviewCancellationRegistry,
@@ -97,7 +98,7 @@ export interface ReviewExecutionStore {
 }
 
 export interface ReviewDiffInspector {
-  changedLineCount(target: PullRequestTarget): Promise<number>;
+  changedLineCount(target: PullRequestTarget, ignorePatterns?: readonly string[]): Promise<number>;
 }
 
 export interface ReviewAgentRunner {
@@ -107,6 +108,7 @@ export interface ReviewAgentRunner {
     pullRequest: RunnerPullRequest;
     apiSurfaceManifest?: string;
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
+    botConfig?: ReviewBotContext;
     signal?: AbortSignal;
   }): Promise<string>;
 }
@@ -135,6 +137,12 @@ export interface ReviewManifestBuilder {
   ): Promise<ApiSurfaceManifestBuildResult>;
 }
 
+export interface ResolveReviewBotConfigInput {
+  context: ReviewJobContext;
+  repo: RepoForWorktree;
+  worktreePath?: string;
+}
+
 export interface ReviewExecutorOptions {
   store: ReviewExecutionStore;
   cloneManager: ReviewCloneManager;
@@ -143,6 +151,7 @@ export interface ReviewExecutorOptions {
   poster: ReviewPoster;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   manifestBuilder?: ReviewManifestBuilder;
+  resolveReviewBotConfig?: (input: ResolveReviewBotConfigInput) => Promise<ReviewBotContext>;
   cancellationRegistry?: ReviewCancellationRegistry;
   maxChangedLines?: number;
   now?: () => number;
@@ -158,6 +167,9 @@ export class ReviewExecutor {
   readonly #poster: ReviewPoster;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #manifestBuilder: ReviewManifestBuilder | null;
+  readonly #resolveReviewBotConfig: (
+    input: ResolveReviewBotConfigInput,
+  ) => Promise<ReviewBotContext>;
   readonly #cancellationRegistry: ReviewCancellationRegistry | null;
   readonly #maxChangedLines: number;
   readonly #now: () => number;
@@ -170,6 +182,7 @@ export class ReviewExecutor {
     this.#poster = options.poster;
     this.#resolveAgent = options.resolveAgent;
     this.#manifestBuilder = options.manifestBuilder ?? null;
+    this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? resolveEmptyReviewBotContext;
     this.#cancellationRegistry = options.cancellationRegistry ?? null;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#now = options.now ?? Date.now;
@@ -191,7 +204,11 @@ export class ReviewExecutor {
       const repo = repoForWorktree(context);
       const agent = this.#requiredAgent(repo, agentKey);
       const target = pullRequestTarget(context);
-      const changedLines = await this.#diffInspector.changedLineCount(target);
+      const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
+      const changedLines = await this.#diffInspector.changedLineCount(
+        target,
+        preflightBotConfig.ignorePatterns,
+      );
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       if (changedLines > this.#maxChangedLines) {
@@ -205,12 +222,19 @@ export class ReviewExecutor {
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
+      const reviewBotConfig = await this.#resolveReviewBotConfig({
+        context,
+        repo,
+        worktreePath: workspace.prWorktree.path,
+      });
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
         agent,
         worktreePath: workspace.prWorktree.path,
         pullRequest: runnerPullRequest(context),
+        botConfig: reviewBotConfig,
       };
       if (manifest !== undefined) {
         runInput.apiSurfaceManifest = manifest.markdown;
@@ -422,4 +446,8 @@ function runnerPullRequest(context: ReviewJobContext): RunnerPullRequest {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function resolveEmptyReviewBotContext(): Promise<ReviewBotContext> {
+  return EMPTY_REVIEW_BOT_CONTEXT;
 }
