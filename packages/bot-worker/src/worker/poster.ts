@@ -62,6 +62,7 @@ export interface PostScopeDeclinedInput {
 }
 
 const defaultLogger: PosterLogger = console;
+const CROSS_REPO_REFERENCE_RENDER_LIMIT = 10;
 
 export class PullRequestPoster {
   readonly #github: GitHubReviewPoster;
@@ -73,27 +74,40 @@ export class PullRequestPoster {
   }
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
-    const posted: PostedFinding[] = [];
+    const inlinePosted: PostedFinding[] = [];
+    const summaryOnly: PersistedFinding[] = [];
 
     for (const persisted of input.findings) {
+      if (!isReviewedRepoAnchor(input.target, persisted.finding.anchor.repo)) {
+        summaryOnly.push(persisted);
+        continue;
+      }
+
       try {
         const comment = await this.#github.createPullRequestReviewComment(
           buildReviewCommentInput(input.target, persisted, input.siblingShas),
         );
-        posted.push({ findingId: persisted.id, commentId: comment.id });
+        inlinePosted.push({ findingId: persisted.id, commentId: comment.id });
       } catch (error) {
         this.#logger.warn(`failed to post review comment for finding ${persisted.id}`, error);
+        summaryOnly.push(persisted);
       }
     }
 
-    await this.#github.createIssueComment({
+    const summaryComment = await this.#github.createIssueComment({
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: input.summary,
+      body: appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
     });
 
-    return posted;
+    return [
+      ...inlinePosted,
+      ...summaryOnly.map((persisted) => ({
+        findingId: persisted.id,
+        commentId: summaryComment.id,
+      })),
+    ];
   }
 
   async postScopeDeclined(input: PostScopeDeclinedInput): Promise<void> {
@@ -134,6 +148,57 @@ function buildReviewCommentInput(
   return base;
 }
 
+function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): boolean {
+  return anchorRepo.toLowerCase() === `${target.owner}/${target.repo}`.toLowerCase();
+}
+
+function appendSummaryOnlyFindings(
+  summary: string,
+  findings: PersistedFinding[],
+  siblingShas: SiblingShas,
+): string {
+  if (findings.length === 0) {
+    return summary;
+  }
+
+  return [
+    summary,
+    `Findings folded into the summary:\n\n${findings
+      .map((finding) => formatSummaryOnlyFinding(finding, siblingShas))
+      .join('\n\n')}`,
+  ].join('\n\n');
+}
+
+function formatSummaryOnlyFinding(
+  { id, finding }: PersistedFinding,
+  siblingShas: SiblingShas,
+): string {
+  const parts = [
+    `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
+    `Anchor: ${formatAnchor(finding.anchor)}`,
+    finding.summary,
+    `Evidence:\n${finding.evidence}`,
+  ];
+
+  if (finding.suggestedFix !== undefined) {
+    parts.push(`Suggested fix:\n${finding.suggestedFix}`);
+  }
+  if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
+    parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
+  }
+  parts.push(`<!-- bot:finding=${id} -->`);
+
+  return parts.join('\n\n');
+}
+
+function formatAnchor(anchor: Finding['anchor']): string {
+  const line =
+    anchor.lineStart === anchor.lineEnd
+      ? `${anchor.lineEnd}`
+      : `${anchor.lineStart}-${anchor.lineEnd}`;
+  return `${anchor.repo}/${anchor.path}:${line}`;
+}
+
 export function formatFindingBody(
   { id, finding }: PersistedFinding,
   siblingShas: SiblingShas,
@@ -147,14 +212,31 @@ export function formatFindingBody(
     parts.push(`Suggested fix:\n${finding.suggestedFix}`);
   }
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
-    parts.push(
-      `Cross-repo references:\n${finding.crossRepoReferences
-        .map((reference) => `- ${formatCrossRepoReference(reference, siblingShas)}`)
-        .join('\n')}`,
-    );
+    parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
   parts.push(`<!-- bot:finding=${id} -->`);
   return parts.join('\n\n');
+}
+
+function formatCrossRepoReferences(
+  references: CrossRepoReference[],
+  siblingShas: SiblingShas,
+): string {
+  const visible = references
+    .slice(0, CROSS_REPO_REFERENCE_RENDER_LIMIT)
+    .map((reference) => `- ${formatCrossRepoReference(reference, siblingShas)}`);
+  const overflow = formatReferenceOverflow(references.slice(CROSS_REPO_REFERENCE_RENDER_LIMIT));
+
+  return `Cross-repo references:\n${[...visible, ...overflow].join('\n')}`;
+}
+
+function formatReferenceOverflow(references: CrossRepoReference[]): string[] {
+  const countsByRepo = new Map<string, number>();
+  for (const reference of references) {
+    countsByRepo.set(reference.repo, (countsByRepo.get(reference.repo) ?? 0) + 1);
+  }
+
+  return [...countsByRepo.entries()].map(([repo, count]) => `- + ${count} more in \`${repo}\``);
 }
 
 function formatCrossRepoReference(reference: CrossRepoReference, siblingShas: SiblingShas): string {

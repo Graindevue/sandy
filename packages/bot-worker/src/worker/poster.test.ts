@@ -1,6 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
-import { PullRequestPoster } from './poster.js';
+import { formatFindingBody, PullRequestPoster } from './poster.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -95,9 +95,14 @@ describe('PullRequestPoster', () => {
       ],
     });
 
-    expect(posted).toEqual([{ findingId: 'finding-2', commentId: 101 }]);
+    expect(posted).toEqual([
+      { findingId: 'finding-2', commentId: 101 },
+      { findingId: 'finding-1', commentId: 102 },
+    ]);
     expect(github.reviewComments).toHaveLength(2);
     expect(github.issueComments[0]?.body).toContain('Sandy review posted 2 findings.');
+    expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
+    expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('finding finding-1'),
       expect.any(Error),
@@ -124,6 +129,68 @@ describe('PullRequestPoster', () => {
     });
 
     expect(github.reviewComments[0]?.body).toContain(
+      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
+    );
+    expect(github.reviewComments[0]?.owner).toBe('acme');
+    expect(github.reviewComments[0]?.repo).toBe('widget');
+  });
+
+  it('caps rendered cross-repo references and summarizes overflow by repo', () => {
+    const references = Array.from({ length: 12 }, (_, index) => ({
+      repo: index === 11 ? 'acme/mobile' : 'acme/consumer',
+      path: `src/orders-${index + 1}.ts`,
+      line: index + 1,
+    }));
+
+    const body = formatFindingBody(
+      {
+        id: 'finding-1',
+        finding: {
+          ...baseFinding,
+          crossRepoReferences: references,
+        },
+      },
+      {
+        'acme/consumer': 'consumer-main-sha',
+        'acme/mobile': 'mobile-main-sha',
+      },
+    );
+
+    expect(body.match(/https:\/\/github\.com/g)).toHaveLength(10);
+    expect(body).toContain('- + 1 more in `acme/consumer`');
+    expect(body).toContain('- + 1 more in `acme/mobile`');
+  });
+
+  it('folds findings without a reviewed-repo anchor into the summary comment', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    const posted = await poster.postReviewResult({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
+      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
+      findings: [
+        {
+          id: 'finding-1',
+          finding: {
+            ...baseFinding,
+            anchor: {
+              repo: 'acme/consumer',
+              path: 'src/orders.ts',
+              lineStart: 31,
+              lineEnd: 31,
+            },
+            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
+          },
+        },
+      ],
+    });
+
+    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(github.reviewComments).toEqual([]);
+    expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
+    expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
+    expect(github.issueComments[0]?.body).toContain(
       'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
     );
   });
