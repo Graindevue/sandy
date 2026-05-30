@@ -114,12 +114,13 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(context);
     const cloneManager = new FakeCloneManager();
     cloneManager.defaultBranchShas.set('acme/desktop', 'def456');
+    const poster = new FakePoster();
     let runnerInput: unknown;
     const manifestBuilds: unknown[] = [];
     const executor = new ReviewExecutor({
       store,
       cloneManager,
-      poster: new FakePoster(),
+      poster,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runLogicAgent: async (input) => {
@@ -182,6 +183,12 @@ describe('ReviewExecutor', () => {
         builtAt: 1234,
       },
     ]);
+    expect(store.recordedSiblingShas).toEqual([
+      {
+        jobId: 'job-1',
+        siblingShas: { 'acme/desktop': 'def456' },
+      },
+    ]);
     expect(runnerInput).toMatchObject({
       worktreePath: '/tmp/worktree/acme/widget/job-1',
       apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n',
@@ -194,6 +201,8 @@ describe('ReviewExecutor', () => {
         },
       ],
     });
+    expect(store.context?.job.siblingShas).toEqual({ 'acme/desktop': 'def456' });
+    expect(poster.postedSiblingShas).toEqual([{ 'acme/desktop': 'def456' }]);
     expect(cloneManager.removed).toEqual(['acme/desktop@job-1', 'acme/widget@job-1']);
   });
 
@@ -447,6 +456,7 @@ function nextNow(values: number[]): () => number {
 
 class FakeExecutionStore {
   recordedManifests: unknown[] = [];
+  recordedSiblingShas: unknown[] = [];
   recordedFindings: unknown[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
   agentRuns: unknown[] = [];
@@ -454,7 +464,7 @@ class FakeExecutionStore {
   failed: { jobId: string; finishedAt: number; error: string }[] = [];
   status: 'pending' | 'running' | 'completed' | 'failed' | 'superseded' | null = 'running';
 
-  constructor(private readonly context: ReviewJobContext | null) {}
+  constructor(readonly context: ReviewJobContext | null) {}
 
   async getReviewJobContext(): Promise<ReviewJobContext | null> {
     return this.context;
@@ -466,6 +476,13 @@ class FakeExecutionStore {
 
   async recordApiSurfaceManifest(input: unknown): Promise<void> {
     this.recordedManifests.push(input);
+  }
+
+  async recordSiblingShas(jobId: string, siblingShas: Record<string, string>): Promise<void> {
+    this.recordedSiblingShas.push({ jobId, siblingShas });
+    if (this.context !== null) {
+      this.context.job.siblingShas = siblingShas;
+    }
   }
 
   async recordFinding(input: unknown): Promise<string> {
@@ -548,10 +565,14 @@ class FakeCloneManager {
 
 class FakePoster {
   results: unknown[] = [];
+  postedSiblingShas: unknown[] = [];
   scopeDeclines: { changedLines: number; maxChangedLines: number }[] = [];
 
-  async postReviewResult(input: unknown): Promise<{ findingId: string; commentId: number }[]> {
+  async postReviewResult(input: {
+    siblingShas: Record<string, string>;
+  }): Promise<{ findingId: string; commentId: number }[]> {
     this.results.push(input);
+    this.postedSiblingShas.push(input.siblingShas);
     return [{ findingId: 'finding-1', commentId: 900 }];
   }
 

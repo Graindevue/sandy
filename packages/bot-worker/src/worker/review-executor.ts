@@ -90,6 +90,7 @@ export interface ReviewExecutionStore {
     markdown: string;
     builtAt: number;
   }): Promise<void>;
+  recordSiblingShas(jobId: string, siblingShas: Record<string, string>): Promise<void>;
   recordFinding(input: RecordFindingInput): Promise<string>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
@@ -219,6 +220,8 @@ export class ReviewExecutor {
 
       const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
       worktrees.push(...workspace.worktrees);
+      const siblingShas = siblingShasForWorkspace(workspace.siblingWorktrees);
+      await this.#store.recordSiblingShas(jobId, siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
@@ -267,7 +270,7 @@ export class ReviewExecutor {
         target,
         agentKey,
         persistedFindings,
-        context.job.siblingShas,
+        siblingShas,
         payload.summary,
       );
 
@@ -442,6 +445,12 @@ function runnerPullRequest(context: ReviewJobContext): RunnerPullRequest {
     title: context.pullRequest.title,
     url: context.pullRequest.url,
   };
+}
+
+function siblingShasForWorkspace(
+  siblingWorktrees: readonly RunnerSiblingWorktree[],
+): Record<string, string> {
+  return Object.fromEntries(siblingWorktrees.map((worktree) => [worktree.repo, worktree.sha]));
 }
 
 function describeError(error: unknown): string {
