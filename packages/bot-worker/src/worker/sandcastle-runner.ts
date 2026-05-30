@@ -39,7 +39,14 @@ export interface RunLogicAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
+  botConfig?: ReviewBotContext;
   signal?: AbortSignal;
+}
+
+export interface ReviewBotContext {
+  repoRules: string | null;
+  productRules: string | null;
+  ignorePatterns: readonly string[];
 }
 
 type SandcastleRun = (options: RunOptions) => Promise<Pick<RunResult, 'stdout'>>;
@@ -192,6 +199,7 @@ Repository: ${pr.owner}/${pr.repo}
 PR URL: ${pr.url}
 Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
+${formatReviewBotContext(input.botConfig)}
 
 You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>:
 
@@ -202,4 +210,37 @@ You are running inside the checked-out PR worktree. Review the diff and emit exa
 }
 </findings>
 `;
+}
+
+function formatReviewBotContext(config: ReviewBotContext | undefined): string {
+  if (config === undefined) {
+    return '';
+  }
+
+  const sections: string[] = [];
+  if (config.productRules !== null) {
+    sections.push(`## Product Rules
+
+Rules from .bot/product-rules.md across this Product:
+
+${config.productRules}`);
+  }
+  if (config.repoRules !== null) {
+    sections.push(`## Repo-local Rules
+
+Rules from .bot/rules.md for only this Repo:
+
+${config.repoRules}`);
+  }
+  if (config.ignorePatterns.length > 0) {
+    sections.push(`## Ignored Diff Paths
+
+Files matching these .bot/ignore.gitignore patterns are excluded from Sandy's review diff. Do not review changes whose paths match them:
+
+${config.ignorePatterns.map((pattern) => `- ${pattern}`).join('\n')}
+
+If a diff tool still displays an ignored path, disregard that file's hunks.`);
+  }
+
+  return sections.length === 0 ? '' : `\n\n${sections.join('\n\n')}`;
 }

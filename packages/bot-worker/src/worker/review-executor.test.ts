@@ -37,16 +37,23 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
+    const diffInspector = new FakeDiffInspector(42);
+    const runner = new FakeRunner(
+      `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
+    );
+    const botConfig = {
+      repoRules: '- Keep cache keys tenant-scoped.',
+      productRules: '- API errors expose stable codes.',
+      ignorePatterns: ['generated/**'],
+    };
     const executor = new ReviewExecutor({
       store,
       cloneManager,
       poster,
-      diffInspector: { changedLineCount: async () => 42 },
-      runner: {
-        runLogicAgent: async () =>
-          `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
-      },
+      diffInspector,
+      runner,
       resolveAgent: () => logicAgent,
+      resolveReviewBotConfig: async () => botConfig,
       now: nextNow([100, 200, 300]),
     });
 
@@ -64,6 +71,8 @@ describe('ReviewExecutor', () => {
     expect(store.recordedFindings).toEqual([
       expect.objectContaining({ reviewJobId: 'job-1', pullRequestId: 'pr-1', agentKey: 'logic' }),
     ]);
+    expect(diffInspector.calls[0]?.options).toEqual({ ignorePatterns: ['generated/**'] });
+    expect(runner.calls[0]?.botConfig).toEqual(botConfig);
     expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
@@ -400,5 +409,27 @@ class FakePoster {
       changedLines: input.changedLines,
       maxChangedLines: input.maxChangedLines,
     });
+  }
+}
+
+class FakeDiffInspector {
+  calls: { target: unknown; options: unknown }[] = [];
+
+  constructor(private readonly changedLines: number) {}
+
+  async changedLineCount(target: unknown, options?: unknown): Promise<number> {
+    this.calls.push({ target, options });
+    return this.changedLines;
+  }
+}
+
+class FakeRunner {
+  calls: { botConfig?: unknown }[] = [];
+
+  constructor(private readonly stdout: string) {}
+
+  async runLogicAgent(input: { botConfig?: unknown }): Promise<string> {
+    this.calls.push(input);
+    return this.stdout;
   }
 }

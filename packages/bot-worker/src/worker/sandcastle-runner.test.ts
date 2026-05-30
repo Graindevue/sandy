@@ -43,6 +43,11 @@ describe('SandcastleRunner', () => {
       agent: logicAgent,
       worktreePath: '/tmp/sandy/worktrees/job-1',
       signal: abortController.signal,
+      botConfig: {
+        repoRules: '- Keep widget cache keys tenant-scoped.',
+        productRules: '- API errors expose stable codes.',
+        ignorePatterns: ['generated/**'],
+      },
       pullRequest: {
         owner: 'acme',
         repo: 'widget',
@@ -77,6 +82,11 @@ describe('SandcastleRunner', () => {
       signal: abortController.signal,
     });
     expect(runCalls[0]?.prompt).toContain('PR #12: Fix cache key');
+    expect(runCalls[0]?.prompt).toContain('Product Rules');
+    expect(runCalls[0]?.prompt).toContain('- API errors expose stable codes.');
+    expect(runCalls[0]?.prompt).toContain('Repo-local Rules');
+    expect(runCalls[0]?.prompt).toContain('- Keep widget cache keys tenant-scoped.');
+    expect(runCalls[0]?.prompt).toContain('generated/**');
     expect(runCalls[0]?.prompt).toContain('<findings>');
   });
 });
