@@ -49,7 +49,7 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  findings: PersistedFinding[];
+  findings: readonly PersistedFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary: string;
@@ -154,7 +154,7 @@ function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): bo
 
 function appendSummaryOnlyFindings(
   summary: string,
-  findings: PersistedFinding[],
+  findings: readonly PersistedFinding[],
   siblingShas: SiblingShas,
 ): string {
   if (findings.length === 0) {
@@ -174,19 +174,12 @@ function formatSummaryOnlyFinding(
   siblingShas: SiblingShas,
 ): string {
   const parts = [
-    `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
+    formatFindingHeading(finding),
     `Anchor: ${formatAnchor(finding.anchor)}`,
     finding.summary,
     `Evidence:\n${finding.evidence}`,
+    ...formatFindingDetailSections(id, finding, siblingShas),
   ];
-
-  if (finding.suggestedFix !== undefined) {
-    parts.push(`Suggested fix:\n${finding.suggestedFix}`);
-  }
-  if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
-    parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
-  }
-  parts.push(`<!-- bot:finding=${id} -->`);
 
   return parts.join('\n\n');
 }
@@ -204,10 +197,26 @@ export function formatFindingBody(
   siblingShas: SiblingShas,
 ): string {
   const parts = [
-    `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
+    formatFindingHeading(finding),
     finding.summary,
     `Evidence:\n${finding.evidence}`,
+    ...formatFindingDetailSections(id, finding, siblingShas),
   ];
+
+  return parts.join('\n\n');
+}
+
+function formatFindingHeading(finding: Finding): string {
+  return `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`;
+}
+
+function formatFindingDetailSections(
+  id: string,
+  finding: Finding,
+  siblingShas: SiblingShas,
+): string[] {
+  const parts: string[] = [];
+
   if (finding.suggestedFix !== undefined) {
     parts.push(`Suggested fix:\n${finding.suggestedFix}`);
   }
@@ -215,11 +224,12 @@ export function formatFindingBody(
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
   parts.push(`<!-- bot:finding=${id} -->`);
-  return parts.join('\n\n');
+
+  return parts;
 }
 
 function formatCrossRepoReferences(
-  references: CrossRepoReference[],
+  references: readonly CrossRepoReference[],
   siblingShas: SiblingShas,
 ): string {
   const visible = references
@@ -230,7 +240,7 @@ function formatCrossRepoReferences(
   return `Cross-repo references:\n${[...visible, ...overflow].join('\n')}`;
 }
 
-function formatReferenceOverflow(references: CrossRepoReference[]): string[] {
+function formatReferenceOverflow(references: readonly CrossRepoReference[]): string[] {
   const countsByRepo = new Map<string, number>();
   for (const reference of references) {
     countsByRepo.set(reference.repo, (countsByRepo.get(reference.repo) ?? 0) + 1);

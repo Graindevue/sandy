@@ -1,5 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
+import type { GitHubReviewPoster, IssueCommentInput, ReviewCommentInput } from './poster.js';
 import { formatFindingBody, PullRequestPoster } from './poster.js';
 
 const baseFinding: Finding = {
@@ -99,7 +100,8 @@ describe('PullRequestPoster', () => {
       { findingId: 'finding-2', commentId: 101 },
       { findingId: 'finding-1', commentId: 102 },
     ]);
-    expect(github.reviewComments).toHaveLength(2);
+    expect(github.reviewComments).toHaveLength(1);
+    expect(github.reviewComments[0]?.body).toContain('The write path skips validation.');
     expect(github.issueComments[0]?.body).toContain('Sandy review posted 2 findings.');
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
     expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
@@ -211,10 +213,11 @@ describe('PullRequestPoster', () => {
   });
 });
 
-class FakeGitHubReviewPoster {
+class FakeGitHubReviewPoster implements GitHubReviewPoster {
   reviewComments: ReviewCommentInput[] = [];
   issueComments: IssueCommentInput[] = [];
   readonly failReviewCommentIndexes: Set<number>;
+  #reviewCommentAttempts = 0;
   #nextCommentId = 101;
 
   constructor(options: { failReviewCommentIndexes?: number[] } = {}) {
@@ -222,11 +225,12 @@ class FakeGitHubReviewPoster {
   }
 
   async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
-    const index = this.reviewComments.length;
-    this.reviewComments.push(input);
+    const index = this.#reviewCommentAttempts;
+    this.#reviewCommentAttempts += 1;
     if (this.failReviewCommentIndexes.has(index)) {
       throw new Error('line is not reviewable');
     }
+    this.reviewComments.push(input);
     return { id: this.#nextCommentId++ };
   }
 
@@ -234,24 +238,4 @@ class FakeGitHubReviewPoster {
     this.issueComments.push(input);
     return { id: this.#nextCommentId++ };
   }
-}
-
-interface ReviewCommentInput {
-  owner: string;
-  repo: string;
-  pullNumber: number;
-  commitId: string;
-  path: string;
-  body: string;
-  line: number;
-  side: 'RIGHT';
-  startLine?: number;
-  startSide?: 'RIGHT';
-}
-
-interface IssueCommentInput {
-  owner: string;
-  repo: string;
-  issueNumber: number;
-  body: string;
 }
