@@ -11,6 +11,7 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
+import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
@@ -74,10 +75,11 @@ export interface ReviewJobContext {
   };
 }
 
-export interface RecordFindingInput {
+export interface RecordSynthesizedReviewInput {
   reviewJobId: string;
   pullRequestId: string;
-  finding: Finding;
+  confidenceScore: Confidence;
+  findings: readonly Finding[];
 }
 
 type FailedAgentRunStatus = Extract<AgentRunStatus, 'failed' | 'timed_out'>;
@@ -113,7 +115,7 @@ export interface ReviewExecutionStore {
     builtAt: number;
   }): Promise<void>;
   recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void>;
-  recordFinding(input: RecordFindingInput): Promise<string>;
+  recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
   markCompleted(jobId: string, finishedAt: number): Promise<void>;
@@ -164,10 +166,6 @@ interface AgentExecutionInput {
   manifest: ApiSurfaceManifestBuildResult | undefined;
   reviewBotConfig: ReviewBotContext;
   cancellationSignal: AbortSignal | undefined;
-}
-
-interface SelectedAgentInput extends AgentExecutionInput {
-  target: PullRequestTarget;
 }
 
 export interface ReviewPoster {
@@ -283,15 +281,24 @@ export class ReviewExecutor {
         workspace.manifestRepos,
         reviewBotConfig,
       );
-      await this.#runSelectedAgents({
+      const agentOutputs = await this.#runSelectedAgents({
         context,
-        target,
         agents,
         workspace,
         manifest,
         reviewBotConfig,
         cancellationSignal,
       });
+      if (agentOutputs.length > 0) {
+        await this.#synthesizePersistAndPostReview({
+          context,
+          target,
+          agentOutputs,
+          changedLineCount: changedLines,
+          siblingShas: workspace.siblingShas,
+          cancellationSignal,
+        });
+      }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#store.markCompleted(jobId, this.#now());
@@ -331,26 +338,30 @@ export class ReviewExecutor {
 
   async #runSelectedAgents(input: {
     context: ReviewJobContext;
-    target: PullRequestTarget;
     agents: readonly AgentDefinition[];
     workspace: AgentWorkspace;
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<void> {
+  }): Promise<AgentReviewOutput[]> {
     const results = await Promise.allSettled(
       input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
     );
 
+    const outputs: AgentReviewOutput[] = [];
     for (const result of results) {
       if (result.status === 'rejected') {
         throw result.reason;
       }
+      if (result.value !== null) {
+        outputs.push(result.value);
+      }
     }
+    return outputs;
   }
 
-  async #runSelectedAgent(input: SelectedAgentInput): Promise<void> {
-    const { context, target, agent } = input;
+  async #runSelectedAgent(input: AgentExecutionInput): Promise<AgentReviewOutput | null> {
+    const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
     if (outcome.status !== 'completed') {
       await this.#store.recordAgentRun({
@@ -362,7 +373,7 @@ export class ReviewExecutor {
         findingCount: 0,
         error: outcome.error,
       });
-      return;
+      return null;
     }
 
     await this.#store.recordAgentRun({
@@ -375,21 +386,7 @@ export class ReviewExecutor {
       crossRepoSearch: outcome.payload.crossRepoSearch,
     });
 
-    await this.#throwIfCancelledOrSuperseded(context.job.id, input.cancellationSignal);
-    const persistedFindings = await this.#recordFindings(
-      context,
-      agent.key,
-      outcome.payload.findings,
-    );
-    await this.#throwIfCancelledOrSuperseded(context.job.id, input.cancellationSignal);
-    await this.#postReviewResult(
-      target,
-      agent.key,
-      persistedFindings,
-      input.workspace.siblingShas,
-      outcome.payload.summary,
-      outcome.payload.crossRepoSearch,
-    );
+    return { agentKey: agent.key, payload: outcome.payload };
   }
 
   async #executeAgent(input: AgentExecutionInput): Promise<AgentExecutionOutcome> {
@@ -524,44 +521,41 @@ export class ReviewExecutor {
     return manifest;
   }
 
-  async #recordFindings(
-    context: ReviewJobContext,
-    agentKey: string,
-    findings: Finding[],
-  ): Promise<PersistedFinding[]> {
-    const persistedFindings: PersistedFinding[] = [];
-    for (const finding of findings) {
-      const producedFinding: Finding = { ...finding, agentKey };
-      const id = await this.#store.recordFinding({
-        reviewJobId: context.job.id,
-        pullRequestId: context.pullRequest.id,
-        finding: producedFinding,
-      });
-      persistedFindings.push({ id, finding: producedFinding });
-    }
-    return persistedFindings;
+  async #synthesizePersistAndPostReview(input: {
+    context: ReviewJobContext;
+    target: PullRequestTarget;
+    agentOutputs: readonly AgentReviewOutput[];
+    changedLineCount: number;
+    siblingShas: SiblingShas;
+    cancellationSignal: AbortSignal | undefined;
+  }): Promise<void> {
+    const synthesized = synthesizeAgentOutputs({
+      agentOutputs: input.agentOutputs,
+      changedLineCount: input.changedLineCount,
+    });
+    await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const persistedFindings = await this.#store.recordSynthesizedReview({
+      reviewJobId: input.context.job.id,
+      pullRequestId: input.context.pullRequest.id,
+      confidenceScore: synthesized.confidenceScore,
+      findings: synthesized.findings,
+    });
+    await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    await this.#postReviewResult(
+      input.target,
+      persistedFindings,
+      input.siblingShas,
+      synthesized.summary,
+    );
   }
 
   async #postReviewResult(
     target: PullRequestTarget,
-    agentKey: string,
     findings: PersistedFinding[],
     siblingShas: SiblingShas,
-    summary: string | undefined,
-    crossRepoSearch: CrossRepoSearchRationale,
+    summary: string,
   ): Promise<void> {
-    const input: PostReviewResultInput = {
-      target,
-      agentKey,
-      findings,
-      siblingShas,
-      crossRepoSearch,
-    };
-    if (summary !== undefined) {
-      input.summary = summary;
-    }
-
-    const posted = await this.#poster.postReviewResult(input);
+    const posted = await this.#poster.postReviewResult({ target, findings, siblingShas, summary });
     for (const postedFinding of posted) {
       await this.#store.markFindingPosted(postedFinding.findingId, postedFinding.commentId);
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { record as recordAgentRun } from '../convex/agentRuns.js';
-import { listForPr, recordFinding } from '../convex/findings.js';
+import { listForPr, recordFinding, recordSynthesizedReview } from '../convex/findings.js';
 import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
 
 describe('Phase 2 Convex schema handlers', () => {
@@ -59,6 +59,49 @@ describe('Phase 2 Convex schema handlers', () => {
       }),
     ]);
     expect(findings[1]).not.toHaveProperty('crossRepoReferences');
+  });
+
+  it('records synthesized Review confidence and Findings in one mutation', async () => {
+    const ctx = fakeCtx();
+    const reviewJobId = await invoke(enqueue, ctx, {
+      pullRequestId: 'pullRequests:1',
+      repoId: 'repos:1',
+      headSha: 'head-sha',
+      trigger: 'mention',
+      agentKeys: ['logic'],
+    });
+
+    const findingIds = await invoke(recordSynthesizedReview, ctx, {
+      reviewJobId,
+      pullRequestId: 'pullRequests:1',
+      confidenceScore: 5,
+      findings: [
+        {
+          agentKey: 'logic',
+          severity: 'P0',
+          confidence: 5,
+          anchor: {
+            repo: 'acme/widget',
+            path: 'src/cache.ts',
+            lineStart: 12,
+            lineEnd: 12,
+          },
+          summary: 'The cache key ignores the tenant id.',
+          evidence: 'The lookup only uses userId.',
+          category: 'logic',
+        },
+      ],
+    });
+
+    expect(findingIds).toEqual(['findings:1']);
+    expect(ctx.db.getDoc(reviewJobId)).toEqual(expect.objectContaining({ confidenceScore: 5 }));
+    expect(await invoke(listForPr, ctx, { pullRequestId: 'pullRequests:1' })).toEqual([
+      expect.objectContaining({
+        _id: 'findings:1',
+        reviewJobId,
+        summary: 'The cache key ignores the tenant id.',
+      }),
+    ]);
   });
 
   it('persists review job confidence, agent run references, and sibling SHAs', async () => {

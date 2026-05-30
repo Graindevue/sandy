@@ -18,7 +18,7 @@ tables arrive in Phase 3. Convex adds `_id` and `_creationTime` to every row.
   `markSuperseded`, `getStatus`, and the `subscribePending` query the worker
   subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
-- **findings** — `recordFinding`, `listForPr`.
+- **findings** — `recordFinding`, `recordSynthesizedReview`, `listForPr`.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
   ReviewJobs claimed more than 30 minutes ago as `failed`.

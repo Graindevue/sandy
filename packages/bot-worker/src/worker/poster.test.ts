@@ -1,4 +1,4 @@
-import type { CrossRepoSearchRationale, Finding } from '@sandy/shared-types';
+import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
 import { PullRequestPoster } from './poster.js';
 
@@ -18,12 +18,6 @@ const baseFinding: Finding = {
   category: 'logic',
 };
 
-const skippedCrossRepoSearch: CrossRepoSearchRationale = {
-  status: 'skipped',
-  trigger: 'none',
-  rationale: 'Only tests changed; no cross-repo contract risk was detected.',
-};
-
 describe('PullRequestPoster', () => {
   it('posts inline comments with the load-bearing finding trailer', async () => {
     const github = new FakeGitHubReviewPoster();
@@ -31,10 +25,8 @@ describe('PullRequestPoster', () => {
 
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      agentKey: 'logic',
       siblingShas: {},
-      summary: 'One issue found.',
-      crossRepoSearch: skippedCrossRepoSearch,
+      summary: 'Confidence score: 2/5\n\nSandy review posted 1 finding.',
       findings: [{ id: 'finding-1', finding: baseFinding }],
     });
 
@@ -54,10 +46,8 @@ describe('PullRequestPoster', () => {
       },
     ]);
     expect(github.reviewComments[0]?.body).toContain('The cache key ignores the tenant id.');
-    expect(github.issueComments[0]?.body).toContain('Sandy logic review posted 1 finding.');
-    expect(github.issueComments[0]?.body).toContain(
-      'Cross-repo search: skipped (none) - Only tests changed; no cross-repo contract risk was detected.',
-    );
+    expect(github.issueComments[0]?.body).toContain('Confidence score: 2/5');
+    expect(github.issueComments[0]?.body).toContain('Sandy review posted 1 finding.');
   });
 
   it('posts a clean no-issues summary when there are no findings', async () => {
@@ -66,10 +56,8 @@ describe('PullRequestPoster', () => {
 
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      agentKey: 'logic',
       siblingShas: {},
-      summary: 'No correctness issues were found.',
-      crossRepoSearch: skippedCrossRepoSearch,
+      summary: 'Confidence score: 0/5\n\nSandy review: no findings posted.',
       findings: [],
     });
 
@@ -80,10 +68,7 @@ describe('PullRequestPoster', () => {
         owner: 'acme',
         repo: 'widget',
         issueNumber: 12,
-        body:
-          'Sandy logic review: no issues found.\n\n' +
-          'Cross-repo search: skipped (none) - Only tests changed; no cross-repo contract risk was detected.\n\n' +
-          'No correctness issues were found.',
+        body: 'Confidence score: 0/5\n\nSandy review: no findings posted.',
       },
     ]);
   });
@@ -95,10 +80,8 @@ describe('PullRequestPoster', () => {
 
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      agentKey: 'logic',
       siblingShas: {},
-      summary: 'Two issues found.',
-      crossRepoSearch: skippedCrossRepoSearch,
+      summary: 'Confidence score: 3/5\n\nSandy review posted 2 findings.',
       findings: [
         { id: 'finding-1', finding: baseFinding },
         {
@@ -114,7 +97,7 @@ describe('PullRequestPoster', () => {
 
     expect(posted).toEqual([{ findingId: 'finding-2', commentId: 101 }]);
     expect(github.reviewComments).toHaveLength(2);
-    expect(github.issueComments[0]?.body).toContain('Sandy logic review posted 2 findings.');
+    expect(github.issueComments[0]?.body).toContain('Sandy review posted 2 findings.');
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('finding finding-1'),
       expect.any(Error),
@@ -127,9 +110,8 @@ describe('PullRequestPoster', () => {
 
     await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
-      agentKey: 'logic',
       siblingShas: { 'acme/consumer': 'consumer-main-sha' },
-      crossRepoSearch: skippedCrossRepoSearch,
+      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
       findings: [
         {
           id: 'finding-1',
