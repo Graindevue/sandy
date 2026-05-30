@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildManifest } from '@sandy/manifest-builder';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { ConfigLoader } from './config/loader.js';
@@ -169,10 +168,12 @@ export async function main(): Promise<void> {
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
     manifestBuilder: {
-      buildManifest: (productId, repoShas) =>
-        buildManifest(productId, repoShas, {
+      buildManifest: async (productId, repoShas) => {
+        const { buildManifest } = await import('@sandy/manifest-builder');
+        return await buildManifest(productId, repoShas, {
           customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
-        }),
+        });
+      },
     },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
