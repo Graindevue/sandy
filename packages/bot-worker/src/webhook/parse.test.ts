@@ -215,6 +215,27 @@ describe('parseEventForDispatch — push hydration', () => {
 
     expect(event).toEqual({ kind: 'ignored', reason: 'push: no open pull request for head' });
   });
+
+  // Regression (Phase 1 acceptance, tony-co/sandy#9): the push path must invoke
+  // resolvePullRequestForPush as a *method* so `this` binds. The real
+  // GitHubAppClient resolver reads `this.#…`; a detached/unbound call threw
+  // "Cannot read properties of undefined (reading 'GitHubAppClient')". The
+  // plain-object mocks above never touch `this`, so only a class-based resolver
+  // exercises the binding.
+  it('resolves a push when the resolver method depends on `this`', async () => {
+    class ThisDependentResolver {
+      #pr = expectPullRequest(parseEvent('pull_request', pullRequestPayload('synchronize'))).pr;
+      async resolvePullRequest() {
+        return null;
+      }
+      async resolvePullRequestForPush() {
+        return this.#pr;
+      }
+    }
+
+    const event = await parseEventForDispatch('push', pushPayload(), new ThisDependentResolver());
+    expect(expectPush(event).pr.headSha).toBe('abc123');
+  });
 });
 
 describe('parseEvent — PR lifecycle state (finding #3)', () => {

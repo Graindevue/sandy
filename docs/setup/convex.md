@@ -34,7 +34,7 @@ watcher running while developing the backend.
 > just this line and `github-app.md` will fill in the rest:
 >
 > ```bash
-> # .config/.env — set this line (github-app.md adds the GitHub + Anthropic keys)
+> # .config/.env — set this line (github-app.md adds the GitHub + agent-auth keys)
 > CONVEX_URL=https://your-deployment.convex.cloud
 > ```
 

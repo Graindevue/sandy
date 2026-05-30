@@ -108,7 +108,7 @@ Agent keys are the file names (without `.md`) in `agents/` and
 
 | Key | Focus | Vendor / model |
 |-----|-------|----------------|
-| `logic` | Logic bugs, broken invariants, cross-file correctness | claude / opus |
+| `logic` | Logic bugs, broken invariants, cross-file correctness | codex / gpt-5.5 |
 | `security` | Auth, input validation, secrets, injection, data exposure | claude / opus |
 | `convex` | Convex query/mutation/schema correctness | claude / opus |
 | `nextjs` | Next.js Cache Components, async params, routing, server actions | claude / opus |

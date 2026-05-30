@@ -8,8 +8,11 @@
  * @module
  */
 
+import type * as agentRuns from "../agentRuns.js";
+import type * as crons from "../crons.js";
 import type * as findings from "../findings.js";
 import type * as pullRequests from "../pullRequests.js";
+import type * as reviewJobReaper from "../reviewJobReaper.js";
 import type * as reviewJobs from "../reviewJobs.js";
 import type * as validators from "../validators.js";
 
@@ -20,8 +23,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentRuns: typeof agentRuns;
+  crons: typeof crons;
   findings: typeof findings;
   pullRequests: typeof pullRequests;
+  reviewJobReaper: typeof reviewJobReaper;
   reviewJobs: typeof reviewJobs;
   validators: typeof validators;
 }>;

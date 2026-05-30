@@ -3,8 +3,8 @@
 # Purpose-built per ADR 0009 (NOT copied from graindevue). A lean image that
 # sandcastle launches via @sandy/apple-container-provider to run review Agents.
 # Ships the tools the default Agents declare (rg, tree-sitter, git, gh), plus
-# `opensrc` for framework-source lookup (ADR 0008) and the Claude agent CLI the
-# Phase 1 `logic` Agent uses (vendor: claude).
+# `opensrc` for framework-source lookup (ADR 0008) and the agent CLIs the review
+# Agents use — claude-code (vendor: claude) and codex (vendor: codex).
 #
 # Build with `pnpm sandcastle:build-image`, which aligns the image UID/GID to the
 # host so bind-mounted worktree files share an owner. The provider verifies the
@@ -42,14 +42,17 @@ RUN set -eux; \
   usermod -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent -m -l agent node
 
 # Global tooling: pnpm, opensrc (framework-source lookup), tree-sitter (the
-# `tree_sitter_query` Agent tool), and the Claude agent CLI (Phase 1 `logic`
-# Agent → vendor: claude). Pinned for reproducible builds; bump as needed once
-# the e2e setup (issue #9) confirms the exact CLIs sandcastle's providers invoke.
+# `tree_sitter_query` Agent tool), and the agent CLIs sandcastle's providers
+# invoke — claude-code (vendor: claude) and codex (vendor: codex). The codex pin
+# tracks the host CLI version (codex-cli 0.134.0) so a host `codex login`
+# auth.json stays format-compatible with the in-container `codex exec`. Pinned
+# for reproducible builds; bump as needed.
 RUN npm install -g \
   pnpm@10.0.0 \
   opensrc@0.7.2 \
   tree-sitter-cli@0.26.8 \
-  @anthropic-ai/claude-code@2.1.153
+  @anthropic-ai/claude-code@2.1.153 \
+  @openai/codex@0.134.0
 
 # A numeric USER is mandatory: the provider refuses an image whose USER is
 # missing or non-numeric, and checks that it matches the expected UID.

@@ -222,14 +222,15 @@ async function parseResolvablePushEvent(
   if ('reason' in facts) {
     return ignored(facts.reason);
   }
-  const resolvePullRequestForPush = resolver.resolvePullRequestForPush;
-  if (resolvePullRequestForPush === undefined) {
+  if (resolver.resolvePullRequestForPush === undefined) {
     return ignored('push: pull_request details unavailable');
   }
 
   let pr: PullRequestFacts | null;
   try {
-    pr = await resolvePullRequestForPush(facts.repo, facts.branch, facts.headSha);
+    // Call as a method (not a detached local) so `this` binds — the real
+    // GitHubAppClient resolver reads `this.#…`, which throws when unbound.
+    pr = await resolver.resolvePullRequestForPush(facts.repo, facts.branch, facts.headSha);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return ignored(`push: pull_request resolution failed: ${detail}`);
