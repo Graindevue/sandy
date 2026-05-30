@@ -1,0 +1,61 @@
+import type { Confidence, Finding } from '@sandy/shared-types';
+
+export interface BuildReviewSummaryInput {
+  findings: readonly Finding[];
+  rawFindingCount: number;
+  confidenceScore: Confidence;
+  agentSummaries: readonly string[];
+}
+
+export function buildReviewSummary(input: BuildReviewSummaryInput): string {
+  const parts = [
+    `Confidence score: ${input.confidenceScore}/5`,
+    buildHeadline(input.findings.length),
+  ];
+  const dedupSummary = buildDedupSummary(input.rawFindingCount, input.findings.length);
+  if (dedupSummary !== null) {
+    parts.push(dedupSummary);
+  }
+
+  const agentSummaries = cleanAgentSummaries(input.agentSummaries);
+  if (agentSummaries.length > 0) {
+    parts.push(`Agent summaries:\n${agentSummaries.map((summary) => `- ${summary}`).join('\n')}`);
+  }
+
+  if (input.findings.length > 0) {
+    parts.push(
+      `Top findings:\n${input.findings
+        .slice(0, 5)
+        .map((finding) => `- ${finding.severity} ${finding.category}: ${finding.summary}`)
+        .join('\n')}`,
+    );
+  }
+
+  return parts.join('\n\n');
+}
+
+function buildHeadline(findingCount: number): string {
+  if (findingCount === 0) {
+    return 'Sandy review: no findings posted.';
+  }
+
+  const noun = findingCount === 1 ? 'finding' : 'findings';
+  return `Sandy review posted ${findingCount} ${noun}.`;
+}
+
+function buildDedupSummary(rawFindingCount: number, findingCount: number): string | null {
+  if (rawFindingCount === findingCount) {
+    return null;
+  }
+
+  const postedNoun = findingCount === 1 ? 'finding' : 'findings';
+  return `Synthesized ${rawFindingCount} raw findings into ${findingCount} posted ${postedNoun}.`;
+}
+
+function cleanAgentSummaries(agentSummaries: readonly string[]): string[] {
+  return agentSummaries
+    .map((summary) => summary.trim())
+    .filter(
+      (summary, index, summaries) => summary.length > 0 && summaries.indexOf(summary) === index,
+    );
+}

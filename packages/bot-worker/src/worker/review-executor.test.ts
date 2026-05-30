@@ -101,6 +101,8 @@ describe('ReviewExecutor', () => {
     expect(runner.calls[0]?.botConfig).toEqual(botConfig);
     expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
     expect(poster.results[0]?.siblingShas).toEqual({});
+    expect(poster.results[0]?.summary).toContain('Confidence score: 2/5');
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 2 }]);
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
       {
@@ -167,9 +169,67 @@ describe('ReviewExecutor', () => {
         expect.objectContaining({ agentKey: 'security', status: 'completed', findingCount: 1 }),
       ]),
     );
-    expect(poster.results.map((result) => result.agentKey).sort()).toEqual(['logic', 'security']);
+    expect(poster.results).toHaveLength(1);
+    expect(poster.results[0]?.findings).toEqual([
+      { id: 'finding-1', finding },
+      { id: 'finding-2', finding: securityFinding },
+    ]);
+    expect(poster.results[0]?.summary).toContain('Sandy review posted 2 findings.');
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
+  });
+
+  it('dedupes cross-Agent Findings before persisting and posts one synthesized summary', async () => {
+    const duplicateSecurityFinding: Finding = {
+      ...finding,
+      severity: 'P0',
+      confidence: 5,
+      agentKey: 'security',
+      summary: 'Cache key ignores tenant id.',
+      evidence: 'The security Agent found tenant-scoped input dropped from the key.',
+      category: 'security',
+    };
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async ({ agent }) => {
+          if (agent.key === 'logic') {
+            return `<findings>{"summary":"Logic saw the cache issue.","findings":[${JSON.stringify(
+              finding,
+            )}]}</findings>`;
+          }
+          return `<findings>{"summary":"Security saw the cache issue.","findings":[${JSON.stringify(
+            duplicateSecurityFinding,
+          )}]}</findings>`;
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(store.recordedFindings).toEqual([
+      expect.objectContaining({
+        reviewJobId: 'job-1',
+        pullRequestId: 'pr-1',
+        finding: duplicateSecurityFinding,
+      }),
+    ]);
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 5 }]);
+    expect(poster.results).toHaveLength(1);
+    expect(poster.results[0]?.findings).toEqual([
+      { id: 'finding-1', finding: duplicateSecurityFinding },
+    ]);
+    expect(poster.results[0]?.summary).toContain(
+      'Synthesized 2 raw findings into 1 posted finding.',
+    );
   });
 
   it('records a failed Agent run without blocking other Agents from posting findings', async () => {
@@ -664,6 +724,7 @@ class FakeExecutionStore implements ReviewExecutionStore {
     builtAt: number;
   }> = [];
   recordedSiblingShas: { jobId: string; siblingShas: SiblingShas }[] = [];
+  confidenceScores: { jobId: string; confidenceScore: Finding['confidence'] }[] = [];
   recordedFindings: RecordFindingInput[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
   agentRuns: RecordAgentRunInput[] = [];
@@ -692,6 +753,13 @@ class FakeExecutionStore implements ReviewExecutionStore {
 
   async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
     this.recordedSiblingShas.push({ jobId, siblingShas });
+  }
+
+  async recordConfidenceScore(
+    jobId: string,
+    confidenceScore: Finding['confidence'],
+  ): Promise<void> {
+    this.confidenceScores.push({ jobId, confidenceScore });
   }
 
   async recordFinding(input: RecordFindingInput): Promise<string> {
@@ -780,7 +848,10 @@ class FakePoster implements ReviewPoster {
     input: Parameters<ReviewPoster['postReviewResult']>[0],
   ): Promise<{ findingId: string; commentId: number }[]> {
     this.results.push(input);
-    return [{ findingId: 'finding-1', commentId: 900 }];
+    return input.findings.map((finding, index) => ({
+      findingId: finding.id,
+      commentId: 900 + index,
+    }));
   }
 
   async postScopeDeclined(input: { changedLines: number; maxChangedLines: number }): Promise<void> {

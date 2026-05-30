@@ -49,11 +49,10 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  agentKey: string;
   findings: PersistedFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
-  summary?: string;
+  summary: string;
 }
 
 export interface PostScopeDeclinedInput {
@@ -91,7 +90,7 @@ export class PullRequestPoster {
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: buildSummaryBody(input.agentKey, input.findings.length, input.summary),
+      body: input.summary,
     });
 
     return posted;
@@ -166,28 +165,6 @@ function formatCrossRepoReference(reference: CrossRepoReference, siblingShas: Si
 
   const encodedPath = reference.path.split('/').map(encodeURIComponent).join('/');
   return `https://github.com/${reference.repo}/blob/${sha}/${encodedPath}#L${reference.line}`;
-}
-
-function buildSummaryBody(
-  agentKey: string,
-  findingCount: number,
-  summary: string | undefined,
-): string {
-  const headline = buildSummaryHeadline(agentKey, findingCount);
-  const trimmedSummary = summary?.trim();
-  if (trimmedSummary === undefined || trimmedSummary.length === 0) {
-    return headline;
-  }
-  return `${headline}\n\n${trimmedSummary}`;
-}
-
-function buildSummaryHeadline(agentKey: string, findingCount: number): string {
-  if (findingCount === 0) {
-    return `Sandy ${agentKey} review: no issues found.`;
-  }
-
-  const noun = findingCount === 1 ? 'finding' : 'findings';
-  return `Sandy ${agentKey} review posted ${findingCount} ${noun}.`;
 }
 
 function formatCount(value: number): string {

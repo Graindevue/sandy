@@ -15,6 +15,18 @@ describe('ConvexExecutionStore', () => {
     });
   });
 
+  it('records the synthesized confidence score on the ReviewJob', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordConfidenceScore('job-1', 4);
+
+    expect(client.mutations[0]?.args).toEqual({
+      jobId: 'job-1',
+      confidenceScore: 4,
+    });
+  });
+
   it('records a finding with anchor and cross-repo references intact', async () => {
     const client = new FakeConvexClient();
     const store = new ConvexExecutionStore(client);
