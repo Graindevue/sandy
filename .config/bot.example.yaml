@@ -1,0 +1,42 @@
+# Example .config/bot.yaml — copy to .config/bot.yaml and edit for your instance.
+#
+# Declares what Sandy reviews: your Products, the Repos each Product contains,
+# and (optionally) which Agents run per Product. A Repo is reviewed only if it
+# is declared here AND the Sandy GitHub App is installed on it.
+#
+# This example is committed (it is secret-free); your real .config/bot.yaml is
+# gitignored. Full schema reference: docs/setup/bot-yaml.md.
+# Domain vocabulary (Product / Repo / Agent): CONTEXT.md.
+
+products:
+  # A Product groups one or more Repos that form one logical software product.
+  # `slug` is a short, stable identifier used in logs and Convex — keep it
+  # lowercase and don't rename it later (renaming orphans existing records).
+  - slug: acme
+    name: Acme
+    repos:
+      # `owner`/`name` must match a repository the GitHub App is installed on.
+      # `fullName` ("owner/name") is derived by Sandy — you don't write it.
+      - owner: your-org
+        name: acme-backend
+        defaultBranch: main
+      - owner: your-org
+        name: acme-desktop
+        defaultBranch: main
+    # Optional: choose which Agents run for this Product, by Agent key (the file
+    # name without .md in agents/ or .config/agents/). Omit `agents` to use the
+    # default selection (every shipped Agent whose `defaultEnabled` is not false).
+    #
+    # Phase 1 runs only `logic` regardless of what you list here; listing more
+    # does no harm but won't fan out until a later phase.
+    agents:
+      - logic
+
+  # A second, unrelated Product. This one omits `agents`, so the default
+  # selection applies.
+  - slug: sandy
+    name: Sandy
+    repos:
+      - owner: your-org
+        name: sandy
+        defaultBranch: main

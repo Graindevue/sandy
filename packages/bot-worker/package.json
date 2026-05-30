@@ -1,0 +1,29 @@
+{
+  "name": "@sandy/bot-worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "start": "node ./dist/main.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ai-hero/sandcastle": "^0.6.4",
+    "@sandy/apple-container-provider": "workspace:*",
+    "@sandy/convex-backend": "workspace:*",
+    "@sandy/shared-types": "workspace:*",
+    "convex": "^1.39.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

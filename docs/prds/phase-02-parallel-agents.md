@@ -59,8 +59,8 @@ products:
     agents:
       enable: [logic, security, convex, nextjs]
       vendors:
-        logic: { vendor: claude, model: opus }
-        convex: { vendor: codex, model: gpt-5.5 }
+        logic: { vendor: codex, model: gpt-5.5 }
+        security: { vendor: claude, model: opus }
 ```
 
 Per-Repo `.bot/` reading enabled:

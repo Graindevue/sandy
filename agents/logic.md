@@ -1,8 +1,8 @@
 ---
 name: logic
 description: Reviews diffs for logic bugs, broken invariants, and cross-file/cross-repo correctness issues.
-vendor: claude
-model: opus
+vendor: codex
+model: gpt-5.5
 maxIterations: 30
 completionSignal: "</findings>"
 tools: [read_file, rg, tree_sitter_query, git_diff, gh]
@@ -38,23 +38,29 @@ Emit findings as JSON inside `<findings>...</findings>`:
 
 ```
 <findings>
-[
-  {
-    "severity": "P0" | "P1" | "P2",
-    "confidence": 0,
-    "path": "relative/path/from/repo/root.ts",
-    "lineStart": 42,
-    "lineEnd": 45,
-    "summary": "One sentence describing the bug",
-    "evidence": "Why this is a bug, with code quotes or rg results",
-    "suggestedFix": "Optional: how to fix",
-    "category": "logic"
-  }
-]
+{
+  "summary": "Optional one-paragraph summary of the review",
+  "findings": [
+    {
+      "severity": "P0" | "P1" | "P2",
+      "confidence": 0,
+      "location": {
+        "repo": "owner/name",
+        "path": "relative/path/from/repo/root.ts",
+        "lineStart": 42,
+        "lineEnd": 45
+      },
+      "summary": "One sentence describing the bug",
+      "evidence": "Why this is a bug, with code quotes or rg results",
+      "suggestedFix": "Optional: how to fix",
+      "category": "logic"
+    }
+  ]
+}
 </findings>
 ```
 
-Emit `<findings>[]</findings>` if you find nothing.
+Emit `<findings>{"findings":[]}</findings>` if you find nothing.
 
 ## Severity
 

@@ -12,8 +12,11 @@ build/
 coverage/
 .vitest-cache/
 
-# Per-instance configuration (user-specific)
-.config/
+# Per-instance configuration (user-specific). Everything under .config/ is
+# ignored EXCEPT the committed, secret-free example config that documents the
+# bot.yaml shape (.config/bot.example.yaml).
+.config/*
+!.config/bot.example.yaml
 
 # Env files
 .env
@@ -22,6 +25,11 @@ coverage/
 
 # Convex local state
 .convex/
+
+# Repo clones & per-Review worktrees (clone manager scratch space).
+# Defaults to ~/.sandy/repos, outside the repo; ignored here as defense-in-depth
+# in case SANDY_CLONE_DIR ever points at an in-repo path.
+.sandy/
 
 # Logs
 *.log

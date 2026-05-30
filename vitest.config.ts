@@ -5,7 +5,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['packages/*/src/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', '**/.config/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.config/**', '**/_generated/**'],
+    // Packages without tests yet (e.g. shared-types, convex-backend) shouldn't fail the run.
+    passWithNoTests: true,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
