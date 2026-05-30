@@ -19,6 +19,7 @@
     "@ai-hero/sandcastle": "^0.6.4",
     "@sandy/apple-container-provider": "workspace:*",
     "@sandy/convex-backend": "workspace:*",
+    "@sandy/manifest-builder": "workspace:*",
     "@sandy/shared-types": "workspace:*",
     "convex": "^1.39.0",
     "yaml": "^2.6.0"

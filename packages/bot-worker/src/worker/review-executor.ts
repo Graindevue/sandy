@@ -1,6 +1,8 @@
 import type {
   AgentDefinition,
   AgentRunStatus,
+  ApiSurfaceManifestBuildResult,
+  ApiSurfaceRepoInput,
   Confidence,
   Finding,
   ReviewJobStatus,
@@ -12,7 +14,22 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type { PersistedFinding, PostedFinding, PullRequestTarget } from './poster.js';
-import type { RunnerPullRequest } from './sandcastle-runner.js';
+import {
+  materializeReviewWorkspace,
+  type ProductRepoForReview,
+  type RepoForWorktree,
+  type ReviewCloneManager,
+  type ReviewWorktree,
+} from './review-workspace.js';
+import type { RunnerPullRequest, RunnerSiblingWorktree } from './sandcastle-runner.js';
+
+export type {
+  ProductRepoForReview,
+  RepoForWorktree,
+  ReviewCloneManager,
+  ReviewWorktree,
+  WorktreeRequest,
+} from './review-workspace.js';
 
 export interface ReviewJobContext {
   job: {
@@ -30,6 +47,12 @@ export interface ReviewJobContext {
     owner: string;
     name: string;
     defaultBranch: string;
+  };
+  product: {
+    id: string;
+    slug: string;
+    name: string;
+    repos: ProductRepoForReview[];
   };
   pullRequest: {
     id: string;
@@ -60,32 +83,17 @@ export interface RecordAgentRunInput {
 export interface ReviewExecutionStore {
   getReviewJobContext(jobId: string): Promise<ReviewJobContext | null>;
   getReviewJobStatus(jobId: string): Promise<ReviewJobStatus | null>;
+  recordApiSurfaceManifest(input: {
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }): Promise<void>;
   recordFinding(input: RecordFindingInput): Promise<string>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
   markCompleted(jobId: string, finishedAt: number): Promise<void>;
   markFailed(jobId: string, finishedAt: number, error: string): Promise<void>;
-}
-
-export interface ReviewWorktree {
-  path: string;
-}
-
-export interface ReviewCloneManager {
-  ensureCloned(repo: RepoForWorktree): Promise<unknown>;
-  createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
-  removeWorktree(worktree: ReviewWorktree): Promise<void>;
-}
-
-export interface RepoForWorktree {
-  owner: string;
-  name: string;
-  defaultBranch: string;
-}
-
-export interface WorktreeRequest {
-  reviewJobId: string;
-  sha: string;
 }
 
 export interface ReviewDiffInspector {
@@ -97,6 +105,8 @@ export interface ReviewAgentRunner {
     agent: AgentDefinition;
     worktreePath: string;
     pullRequest: RunnerPullRequest;
+    apiSurfaceManifest?: string;
+    siblingWorktrees?: readonly RunnerSiblingWorktree[];
     signal?: AbortSignal;
   }): Promise<string>;
 }
@@ -118,6 +128,13 @@ export interface ReviewPoster {
   }): Promise<void>;
 }
 
+export interface ReviewManifestBuilder {
+  buildManifest(
+    productId: string,
+    repoShas: readonly ApiSurfaceRepoInput[],
+  ): Promise<ApiSurfaceManifestBuildResult>;
+}
+
 export interface ReviewExecutorOptions {
   store: ReviewExecutionStore;
   cloneManager: ReviewCloneManager;
@@ -125,6 +142,7 @@ export interface ReviewExecutorOptions {
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
+  manifestBuilder?: ReviewManifestBuilder;
   cancellationRegistry?: ReviewCancellationRegistry;
   maxChangedLines?: number;
   now?: () => number;
@@ -139,6 +157,7 @@ export class ReviewExecutor {
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
+  readonly #manifestBuilder: ReviewManifestBuilder | null;
   readonly #cancellationRegistry: ReviewCancellationRegistry | null;
   readonly #maxChangedLines: number;
   readonly #now: () => number;
@@ -150,6 +169,7 @@ export class ReviewExecutor {
     this.#runner = options.runner;
     this.#poster = options.poster;
     this.#resolveAgent = options.resolveAgent;
+    this.#manifestBuilder = options.manifestBuilder ?? null;
     this.#cancellationRegistry = options.cancellationRegistry ?? null;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#now = options.now ?? Date.now;
@@ -157,7 +177,7 @@ export class ReviewExecutor {
 
   async executeClaimedJob(jobId: string): Promise<void> {
     let context: ReviewJobContext | null = null;
-    let worktree: ReviewWorktree | null = null;
+    const worktrees: ReviewWorktree[] = [];
     let agentKey: string | null = null;
     let agentStartedAt: number | null = null;
     let agentRunRecorded = false;
@@ -180,20 +200,24 @@ export class ReviewExecutor {
         return;
       }
 
-      await this.#cloneManager.ensureCloned(repo);
+      const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
+      worktrees.push(...workspace.worktrees);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      worktree = await this.#cloneManager.createWorktree(repo, {
-        reviewJobId: context.job.id,
-        sha: context.job.headSha,
-      });
+      const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
         agent,
-        worktreePath: worktree.path,
+        worktreePath: workspace.prWorktree.path,
         pullRequest: runnerPullRequest(context),
       };
+      if (manifest !== undefined) {
+        runInput.apiSurfaceManifest = manifest.markdown;
+      }
+      if (workspace.siblingWorktrees.length > 0) {
+        runInput.siblingWorktrees = workspace.siblingWorktrees;
+      }
       if (cancellationSignal !== undefined) {
         runInput.signal = cancellationSignal;
       }
@@ -234,7 +258,7 @@ export class ReviewExecutor {
       }
       await this.#store.markFailed(jobId, this.#now(), message);
     } finally {
-      if (worktree !== null) {
+      for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
       cancellation?.dispose();
@@ -270,6 +294,23 @@ export class ReviewExecutor {
       maxChangedLines: this.#maxChangedLines,
     });
     await this.#store.markCompleted(jobId, this.#now());
+  }
+
+  async #buildAndRecordManifest(
+    context: ReviewJobContext,
+    manifestRepos: readonly ApiSurfaceRepoInput[],
+  ): Promise<ApiSurfaceManifestBuildResult | undefined> {
+    if (this.#manifestBuilder === null) {
+      return undefined;
+    }
+    const manifest = await this.#manifestBuilder.buildManifest(context.product.id, manifestRepos);
+    await this.#store.recordApiSurfaceManifest({
+      productId: context.product.id,
+      repoShas: manifest.structured.repoShas,
+      markdown: manifest.markdown,
+      builtAt: manifest.structured.builtAt,
+    });
+    return manifest;
   }
 
   async #recordFindings(

@@ -35,10 +35,19 @@ export interface RunnerPullRequest {
   url: string;
 }
 
+export interface RunnerSiblingWorktree {
+  repo: string;
+  sha: string;
+  hostPath: string;
+  sandboxPath: string;
+}
+
 export interface RunLogicAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
+  apiSurfaceManifest?: string;
+  siblingWorktrees?: readonly RunnerSiblingWorktree[];
   signal?: AbortSignal;
 }
 
@@ -95,6 +104,13 @@ export class SandcastleRunner {
     const mounts: { hostPath: string; sandboxPath: string; readonly?: boolean }[] = [
       { hostPath: join(homedir(), '.opensrc'), sandboxPath: OPEN_SRC_SANDBOX_CACHE },
     ];
+    for (const sibling of input.siblingWorktrees ?? []) {
+      mounts.push({
+        hostPath: sibling.hostPath,
+        sandboxPath: sibling.sandboxPath,
+        readonly: true,
+      });
+    }
     // Codex authenticates from the operator's host ChatGPT login. Stage a
     // world-readable copy of the credential (see stageCodexAuth) and mount only
     // that, read-only, into the Agent's CODEX_HOME — HOME is /home/agent in the
@@ -184,6 +200,24 @@ async function createDefaultAppleContainer(
 
 export function buildReviewPrompt(input: RunLogicAgentInput): string {
   const pr = input.pullRequest;
+  const siblingContext =
+    input.siblingWorktrees === undefined || input.siblingWorktrees.length === 0
+      ? ''
+      : `
+Sibling Repo mounts:
+${input.siblingWorktrees
+  .map((sibling) => `- ${sibling.repo} @ ${sibling.sha}: ${sibling.sandboxPath}`)
+  .join('\n')}
+`;
+  const manifestContext =
+    input.apiSurfaceManifest === undefined
+      ? ''
+      : `
+API Surface Manifest context:
+Use this manifest as a trigger for Cross-Repo Search. It lists public surface and framework versions only; it does not enumerate callers.
+
+${input.apiSurfaceManifest.trim()}
+`;
   return `${input.agent.systemPrompt}
 
 Review PR #${pr.number}: ${pr.title}
@@ -192,6 +226,8 @@ Repository: ${pr.owner}/${pr.repo}
 PR URL: ${pr.url}
 Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
+${siblingContext}
+${manifestContext}
 
 You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>. Each finding must use an in-diff "anchor"; use "crossRepoReferences" only for confirmed affected sibling-Repo consumers:
 

@@ -80,7 +80,112 @@ describe('ReviewExecutor', () => {
     ]);
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
+  });
+
+  it('builds, records, and injects the ApiSurfaceManifest for every Product Repo', async () => {
+    const context = makeContext({
+      productRepos: [
+        {
+          id: 'repo-1',
+          owner: 'acme',
+          name: 'widget',
+          fullName: 'acme/widget',
+          defaultBranch: 'main',
+        },
+        {
+          id: 'repo-2',
+          owner: 'acme',
+          name: 'desktop',
+          fullName: 'acme/desktop',
+          defaultBranch: 'main',
+        },
+      ],
+    });
+    const store = new FakeExecutionStore(context);
+    const cloneManager = new FakeCloneManager();
+    cloneManager.defaultBranchShas.set('acme/desktop', 'def456');
+    let runnerInput: unknown;
+    const manifestBuilds: unknown[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager,
+      poster: new FakePoster(),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runLogicAgent: async (input) => {
+          runnerInput = input;
+          return '<findings>{"findings":[]}</findings>';
+        },
+      },
+      manifestBuilder: {
+        buildManifest: async (productId, repoShas) => {
+          manifestBuilds.push({ productId, repoShas });
+          return {
+            markdown: '# API Surface Manifest\n\n## acme/widget\n',
+            structured: {
+              productId,
+              builtAt: 1234,
+              repoShas: repoShas.map((repo) => ({ repo: repo.fullName, sha: repo.sha })),
+              repos: [],
+            },
+          };
+        },
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(cloneManager.ensured).toEqual([
+      { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+      { owner: 'acme', name: 'desktop', defaultBranch: 'main' },
+    ]);
+    expect(cloneManager.defaultBranchResolutions).toEqual([
+      { owner: 'acme', name: 'desktop', defaultBranch: 'main' },
+    ]);
+    expect(manifestBuilds).toEqual([
+      {
+        productId: 'product-1',
+        repoShas: [
+          expect.objectContaining({
+            fullName: 'acme/widget',
+            sha: 'abc123',
+            worktreePath: '/tmp/worktree/acme/widget/job-1',
+          }),
+          expect.objectContaining({
+            fullName: 'acme/desktop',
+            sha: 'def456',
+            worktreePath: '/tmp/worktree/acme/desktop/job-1',
+          }),
+        ],
+      },
+    ]);
+    expect(store.recordedManifests).toEqual([
+      {
+        productId: 'product-1',
+        repoShas: [
+          { repo: 'acme/widget', sha: 'abc123' },
+          { repo: 'acme/desktop', sha: 'def456' },
+        ],
+        markdown: '# API Surface Manifest\n\n## acme/widget\n',
+        builtAt: 1234,
+      },
+    ]);
+    expect(runnerInput).toMatchObject({
+      worktreePath: '/tmp/worktree/acme/widget/job-1',
+      apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n',
+      siblingWorktrees: [
+        {
+          repo: 'acme/desktop',
+          sha: 'def456',
+          hostPath: '/tmp/worktree/acme/desktop/job-1',
+          sandboxPath: '/workspace/acme/desktop',
+        },
+      ],
+    });
+    expect(cloneManager.removed).toEqual(['acme/desktop@job-1', 'acme/widget@job-1']);
   });
 
   it('marks the job failed cleanly when Agent output is malformed', async () => {
@@ -110,7 +215,7 @@ describe('ReviewExecutor', () => {
     });
     expect(store.failed[0]).toMatchObject({ jobId: 'job-1', finishedAt: 300 });
     expect(store.failed[0]?.error).toContain('FindingsPayload must be an object');
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
   it('declines oversized diffs without creating a worktree or running an Agent', async () => {
@@ -175,7 +280,7 @@ describe('ReviewExecutor', () => {
     expect(store.agentRuns).toEqual([]);
     expect(store.completed).toEqual([]);
     expect(store.failed).toEqual([]);
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
   it('checks job status before posting so stale findings are not commented', async () => {
@@ -203,7 +308,7 @@ describe('ReviewExecutor', () => {
     expect(poster.results).toEqual([]);
     expect(store.completed).toEqual([]);
     expect(store.failed).toEqual([]);
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
   it('honors cancellation that arrives during the final stale-result check before posting', async () => {
@@ -239,7 +344,7 @@ describe('ReviewExecutor', () => {
     expect(store.postedFindings).toEqual([]);
     expect(store.completed).toEqual([]);
     expect(store.failed).toEqual([]);
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
   it('does not start an Agent when superseded after creating the worktree', async () => {
@@ -277,11 +382,13 @@ describe('ReviewExecutor', () => {
     expect(store.recordedFindings).toEqual([]);
     expect(store.completed).toEqual([]);
     expect(store.failed).toEqual([]);
-    expect(cloneManager.removed).toEqual(['job-1']);
+    expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 });
 
-function makeContext(): ReviewJobContext {
+function makeContext(
+  options: { productRepos?: ReviewJobContext['product']['repos'] } = {},
+): ReviewJobContext {
   return {
     job: {
       id: 'job-1',
@@ -298,6 +405,20 @@ function makeContext(): ReviewJobContext {
       owner: 'acme',
       name: 'widget',
       defaultBranch: 'main',
+    },
+    product: {
+      id: 'product-1',
+      slug: 'acme',
+      name: 'Acme',
+      repos: options.productRepos ?? [
+        {
+          id: 'repo-1',
+          owner: 'acme',
+          name: 'widget',
+          fullName: 'acme/widget',
+          defaultBranch: 'main',
+        },
+      ],
     },
     pullRequest: {
       id: 'pr-1',
@@ -316,6 +437,7 @@ function nextNow(values: number[]): () => number {
 }
 
 class FakeExecutionStore {
+  recordedManifests: unknown[] = [];
   recordedFindings: unknown[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
   agentRuns: unknown[] = [];
@@ -331,6 +453,10 @@ class FakeExecutionStore {
 
   async getReviewJobStatus(): Promise<typeof this.status> {
     return this.status;
+  }
+
+  async recordApiSurfaceManifest(input: unknown): Promise<void> {
+    this.recordedManifests.push(input);
   }
 
   async recordFinding(input: unknown): Promise<string> {
@@ -372,22 +498,42 @@ function deferred<T>(): {
 class FakeCloneManager {
   ensured: unknown[] = [];
   created: unknown[] = [];
+  defaultBranchResolutions: unknown[] = [];
+  defaultBranchShas = new Map<string, string>();
   removed: string[] = [];
 
-  async ensureCloned(repo: unknown): Promise<void> {
+  async ensureCloned(repo: { owner: string; name: string; defaultBranch: string }): Promise<void> {
     this.ensured.push(repo);
   }
 
-  async createWorktree(
-    repo: unknown,
-    request: unknown,
-  ): Promise<{ reviewJobId: string; path: string }> {
-    this.created.push({ repo, request });
-    return { reviewJobId: 'job-1', path: '/tmp/worktree/job-1' };
+  async resolveDefaultBranchSha(repo: { owner: string; name: string }): Promise<string> {
+    this.defaultBranchResolutions.push(repo);
+    return this.defaultBranchShas.get(`${repo.owner}/${repo.name}`) ?? 'default-sha';
   }
 
-  async removeWorktree(worktree: { reviewJobId: string }): Promise<void> {
-    this.removed.push(worktree.reviewJobId);
+  async createWorktree(
+    repo: { owner: string; name: string; defaultBranch: string },
+    request: { reviewJobId: string; sha: string },
+  ): Promise<{
+    repo: { owner: string; name: string; defaultBranch: string };
+    reviewJobId: string;
+    path: string;
+    sha: string;
+  }> {
+    this.created.push({ repo, request });
+    return {
+      repo,
+      reviewJobId: request.reviewJobId,
+      sha: request.sha,
+      path: `/tmp/worktree/${repo.owner}/${repo.name}/${request.reviewJobId}`,
+    };
+  }
+
+  async removeWorktree(worktree: {
+    repo: { owner: string; name: string };
+    reviewJobId: string;
+  }): Promise<void> {
+    this.removed.push(`${worktree.repo.owner}/${worktree.repo.name}@${worktree.reviewJobId}`);
   }
 }
 

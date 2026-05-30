@@ -2,10 +2,15 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { buildManifest } from '@sandy/manifest-builder';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { ConfigLoader } from './config/loader.js';
-import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
+import {
+  defaultCloneBaseDir,
+  defaultConfigLoaderOptions,
+  defaultCustomExtractorsDir,
+} from './config/paths.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
@@ -163,6 +168,12 @@ export async function main(): Promise<void> {
     poster,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
+    manifestBuilder: {
+      buildManifest: (productId, repoShas) =>
+        buildManifest(productId, repoShas, {
+          customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
+        }),
+    },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
   const claimant = new ReviewClaimant({

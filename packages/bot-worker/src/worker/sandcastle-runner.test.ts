@@ -52,6 +52,15 @@ describe('SandcastleRunner', () => {
         title: 'Fix cache key',
         url: 'https://github.com/acme/widget/pull/12',
       },
+      apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n\n### npm Exports\n',
+      siblingWorktrees: [
+        {
+          repo: 'acme/desktop',
+          sha: 'def456',
+          hostPath: '/tmp/sandy/worktrees/desktop/job-1',
+          sandboxPath: '/workspace/acme/desktop',
+        },
+      ],
     });
 
     expect(stdout).toBe('<findings>{"findings":[]}</findings>');
@@ -62,6 +71,11 @@ describe('SandcastleRunner', () => {
         env: { ANTHROPIC_API_KEY: 'sk-test' },
         mounts: expect.arrayContaining([
           expect.objectContaining({ sandboxPath: '/home/agent/.opensrc' }),
+          expect.objectContaining({
+            hostPath: '/tmp/sandy/worktrees/desktop/job-1',
+            sandboxPath: '/workspace/acme/desktop',
+            readonly: true,
+          }),
         ]),
       }),
     ]);
@@ -77,6 +91,10 @@ describe('SandcastleRunner', () => {
       signal: abortController.signal,
     });
     expect(runCalls[0]?.prompt).toContain('PR #12: Fix cache key');
+    expect(runCalls[0]?.prompt).toContain('# API Surface Manifest');
+    expect(runCalls[0]?.prompt).toContain('Use this manifest as a trigger');
+    expect(runCalls[0]?.prompt).toContain('Sibling Repo mounts');
+    expect(runCalls[0]?.prompt).toContain('/workspace/acme/desktop');
     expect(runCalls[0]?.prompt).toContain('<findings>');
   });
 });

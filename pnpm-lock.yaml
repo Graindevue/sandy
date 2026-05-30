@@ -51,6 +51,9 @@ importers:
       '@sandy/convex-backend':
         specifier: workspace:*
         version: link:../convex-backend
+      '@sandy/manifest-builder':
+        specifier: workspace:*
+        version: link:../manifest-builder
       '@sandy/shared-types':
         specifier: workspace:*
         version: link:../shared-types
@@ -74,6 +77,15 @@ importers:
       '@sandy/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+
+  packages/manifest-builder:
+    dependencies:
+      '@sandy/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      tsx:
+        specifier: ^4.20.0
+        version: 4.22.3
 
   packages/shared-types: {}
 

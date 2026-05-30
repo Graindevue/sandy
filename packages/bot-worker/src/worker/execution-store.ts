@@ -29,6 +29,9 @@ const refs = {
   agentRuns: {
     record: makeFunctionReference<'mutation'>('agentRuns:record'),
   },
+  apiSurfaceManifests: {
+    record: makeFunctionReference<'mutation'>('apiSurfaceManifests:record'),
+  },
 };
 
 export class ConvexExecutionStore implements ReviewExecutionStore {
@@ -89,6 +92,15 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
       args.error = input.error;
     }
     await this.#client.mutation(refs.agentRuns.record, args);
+  }
+
+  async recordApiSurfaceManifest(input: {
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }): Promise<void> {
+    await this.#client.mutation(refs.apiSurfaceManifests.record, input);
   }
 
   async markCompleted(jobId: string, finishedAt: number): Promise<void> {

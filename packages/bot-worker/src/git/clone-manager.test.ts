@@ -116,6 +116,16 @@ describe('CloneManager', () => {
     expect(type).toBe('commit');
   });
 
+  it('resolves the fetched default branch SHA for sibling manifest worktrees', async () => {
+    const origin = await makeOrigin();
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({ baseDir, cloneUrl: () => origin.url });
+    await manager.ensureCloned(REPO);
+    const newSha = await origin.commit('second', 'feature.ts', 'export const x = 1;\n');
+
+    await expect(manager.resolveDefaultBranchSha(REPO)).resolves.toBe(newSha);
+  });
+
   it('materializes a per-Review worktree checked out at the given SHA', async () => {
     const origin = await makeOrigin();
     const firstSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
