@@ -13,6 +13,7 @@ import {
   type SandboxProvider,
 } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
+import type { ReviewBotContext } from '../config/review-bot-context.js';
 
 export interface AppleContainerRunnerOptions {
   readonly imageName?: string;
@@ -41,12 +42,6 @@ export interface RunLogicAgentInput {
   pullRequest: RunnerPullRequest;
   botConfig?: ReviewBotContext;
   signal?: AbortSignal;
-}
-
-export interface ReviewBotContext {
-  repoRules: string | null;
-  productRules: string | null;
-  ignorePatterns: readonly string[];
 }
 
 type SandcastleRun = (options: RunOptions) => Promise<Pick<RunResult, 'stdout'>>;

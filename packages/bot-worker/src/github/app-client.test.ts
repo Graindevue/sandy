@@ -68,7 +68,7 @@ describe('GitHubAppClient', () => {
           pullNumber: 12,
           headSha: 'abc123',
         },
-        { ignorePatterns: ['generated/**', '*.snap'] },
+        ['generated/**', '*.snap'],
       ),
     ).resolves.toBe(5);
   });

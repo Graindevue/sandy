@@ -1,6 +1,4 @@
-export interface DiffIgnoreOptions {
-  ignorePatterns?: readonly string[];
-}
+import { matchesGlob } from 'node:path';
 
 export function parseIgnoreGitignore(contents: string): string[] {
   return contents
@@ -13,17 +11,12 @@ export function isIgnoredPath(path: string, patterns: readonly string[] = []): b
   const normalizedPath = normalizePath(path);
   let ignored = false;
   for (const rawPattern of patterns) {
-    const pattern = parseIgnoreLine(rawPattern);
-    if (pattern === null) {
+    const parsed = parseIgnorePattern(rawPattern);
+    if (parsed === null) {
       continue;
     }
-    const negated = pattern.startsWith('!');
-    const effectivePattern = negated ? pattern.slice(1) : pattern;
-    if (effectivePattern.length === 0) {
-      continue;
-    }
-    if (matchesPattern(normalizedPath, effectivePattern)) {
-      ignored = !negated;
+    if (matchesPattern(normalizedPath, parsed.pattern)) {
+      ignored = !parsed.negated;
     }
   }
   return ignored;
@@ -34,10 +27,21 @@ function parseIgnoreLine(raw: string): string | null {
   if (trimmed.length === 0 || trimmed.startsWith('#')) {
     return null;
   }
-  if (trimmed.startsWith('\\#') || trimmed.startsWith('\\!')) {
-    return trimmed.slice(1);
-  }
   return trimmed;
+}
+
+function parseIgnorePattern(raw: string): { pattern: string; negated: boolean } | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (trimmed.startsWith('\\#') || trimmed.startsWith('\\!')) {
+    return { pattern: trimmed.slice(1), negated: false };
+  }
+
+  const negated = trimmed.startsWith('!');
+  const pattern = negated ? trimmed.slice(1) : trimmed;
+  return pattern.length === 0 ? null : { pattern, negated };
 }
 
 function matchesPattern(path: string, rawPattern: string): boolean {
@@ -51,20 +55,19 @@ function matchesPattern(path: string, rawPattern: string): boolean {
 
   if (!anchored && !pattern.includes('/')) {
     return path.split('/').some((segment, index, segments) => {
-      if (!globMatches(segment, pattern)) {
+      if (!matchesGlob(segment, pattern)) {
         return false;
       }
       return !directoryOnly || index < segments.length - 1;
     });
   }
 
-  const expression = globToRegExp(pattern);
   const candidates = anchored ? [path] : pathSuffixes(path);
   return candidates.some((candidate) => {
     if (directoryOnly) {
-      return expression.test(candidate) || candidate.startsWith(`${pattern}/`);
+      return matchesGlob(candidate, pattern) || matchesGlob(candidate, `${pattern}/**`);
     }
-    return expression.test(candidate);
+    return matchesGlob(candidate, pattern);
   });
 }
 
@@ -77,38 +80,6 @@ function pathSuffixes(path: string): string[] {
   return suffixes;
 }
 
-function globMatches(value: string, pattern: string): boolean {
-  return globToRegExp(pattern).test(value);
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let source = '^';
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    const next = pattern[index + 1];
-    if (char === '*' && next === '*') {
-      source += '.*';
-      index += 1;
-      continue;
-    }
-    if (char === '*') {
-      source += '[^/]*';
-      continue;
-    }
-    if (char === '?') {
-      source += '[^/]';
-      continue;
-    }
-    source += escapeRegExp(char ?? '');
-  }
-  source += '$';
-  return new RegExp(source);
-}
-
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/^\.\/+/, '');
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }

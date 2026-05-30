@@ -1,5 +1,5 @@
 import { createSign } from 'node:crypto';
-import { type DiffIgnoreOptions, isIgnoredPath } from '../config/ignore.js';
+import { isIgnoredPath } from '../config/ignore.js';
 import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
 import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
@@ -56,7 +56,7 @@ export class GitHubAppClient
 
   async changedLineCount(
     target: PullRequestTarget,
-    options: DiffIgnoreOptions = {},
+    ignorePatterns: readonly string[] = [],
   ): Promise<number> {
     let total = 0;
     let page = 1;
@@ -69,10 +69,7 @@ export class GitHubAppClient
       for (const file of files) {
         if (typeof file === 'object' && file !== null) {
           const filename = (file as { filename?: unknown }).filename;
-          if (
-            typeof filename === 'string' &&
-            isIgnoredPath(filename, options.ignorePatterns ?? [])
-          ) {
+          if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
             continue;
           }
           const additions = Number((file as { additions?: unknown }).additions ?? 0);

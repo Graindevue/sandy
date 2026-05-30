@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 import { parseIgnoreGitignore } from './ignore.js';
+import type { ReviewBotContext } from './review-bot-context.js';
 
 export interface RepoBotConfig {
   repo: RepoConfig;
@@ -11,10 +12,7 @@ export interface RepoBotConfig {
   ignorePatterns: string[];
 }
 
-export interface ReviewBotConfig {
-  repoRules: string | null;
-  productRules: string | null;
-  ignorePatterns: string[];
+export interface ReviewBotConfig extends ReviewBotContext {
   repos: RepoBotConfig[];
 }
 

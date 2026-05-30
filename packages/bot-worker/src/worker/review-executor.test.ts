@@ -71,7 +71,7 @@ describe('ReviewExecutor', () => {
     expect(store.recordedFindings).toEqual([
       expect.objectContaining({ reviewJobId: 'job-1', pullRequestId: 'pr-1', agentKey: 'logic' }),
     ]);
-    expect(diffInspector.calls[0]?.options).toEqual({ ignorePatterns: ['generated/**'] });
+    expect(diffInspector.calls[0]?.ignorePatterns).toEqual(['generated/**']);
     expect(runner.calls[0]?.botConfig).toEqual(botConfig);
     expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
@@ -413,12 +413,12 @@ class FakePoster {
 }
 
 class FakeDiffInspector {
-  calls: { target: unknown; options: unknown }[] = [];
+  calls: { target: unknown; ignorePatterns: unknown }[] = [];
 
   constructor(private readonly changedLines: number) {}
 
-  async changedLineCount(target: unknown, options?: unknown): Promise<number> {
-    this.calls.push({ target, options });
+  async changedLineCount(target: unknown, ignorePatterns?: unknown): Promise<number> {
+    this.calls.push({ target, ignorePatterns });
     return this.changedLines;
   }
 }

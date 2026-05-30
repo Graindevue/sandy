@@ -4,7 +4,7 @@ import type {
   Finding,
   ReviewJobStatus,
 } from '@sandy/shared-types';
-import type { DiffIgnoreOptions } from '../config/ignore.js';
+import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
 import {
   isReviewSupersededError,
   type ReviewCancellationRegistry,
@@ -12,7 +12,7 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type { PersistedFinding, PostedFinding, PullRequestTarget } from './poster.js';
-import type { ReviewBotContext, RunnerPullRequest } from './sandcastle-runner.js';
+import type { RunnerPullRequest } from './sandcastle-runner.js';
 
 export interface ReviewJobContext {
   job: {
@@ -87,7 +87,7 @@ export interface WorktreeRequest {
 }
 
 export interface ReviewDiffInspector {
-  changedLineCount(target: PullRequestTarget, options?: DiffIgnoreOptions): Promise<number>;
+  changedLineCount(target: PullRequestTarget, ignorePatterns?: readonly string[]): Promise<number>;
 }
 
 export interface ReviewAgentRunner {
@@ -136,11 +136,6 @@ export interface ReviewExecutorOptions {
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
-const EMPTY_REVIEW_BOT_CONFIG: ReviewBotContext = {
-  repoRules: null,
-  productRules: null,
-  ignorePatterns: [],
-};
 
 export class ReviewExecutor {
   readonly #store: ReviewExecutionStore;
@@ -149,9 +144,9 @@ export class ReviewExecutor {
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
-  readonly #resolveReviewBotConfig:
-    | ((input: ResolveReviewBotConfigInput) => Promise<ReviewBotContext>)
-    | null;
+  readonly #resolveReviewBotConfig: (
+    input: ResolveReviewBotConfigInput,
+  ) => Promise<ReviewBotContext>;
   readonly #cancellationRegistry: ReviewCancellationRegistry | null;
   readonly #maxChangedLines: number;
   readonly #now: () => number;
@@ -163,7 +158,7 @@ export class ReviewExecutor {
     this.#runner = options.runner;
     this.#poster = options.poster;
     this.#resolveAgent = options.resolveAgent;
-    this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? null;
+    this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? resolveEmptyReviewBotContext;
     this.#cancellationRegistry = options.cancellationRegistry ?? null;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#now = options.now ?? Date.now;
@@ -185,10 +180,10 @@ export class ReviewExecutor {
       const repo = repoForWorktree(context);
       const agent = this.#requiredAgent(repo, agentKey);
       const target = pullRequestTarget(context);
-      const preflightBotConfig = await this.#reviewBotConfig({ context, repo });
+      const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
       const changedLines = await this.#diffInspector.changedLineCount(
         target,
-        diffIgnoreOptions(preflightBotConfig),
+        preflightBotConfig.ignorePatterns,
       );
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
@@ -205,7 +200,7 @@ export class ReviewExecutor {
         sha: context.job.headSha,
       });
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const reviewBotConfig = await this.#reviewBotConfig({
+      const reviewBotConfig = await this.#resolveReviewBotConfig({
         context,
         repo,
         worktreePath: worktree.path,
@@ -276,12 +271,6 @@ export class ReviewExecutor {
       );
     }
     return agent;
-  }
-
-  async #reviewBotConfig(input: ResolveReviewBotConfigInput): Promise<ReviewBotContext> {
-    return this.#resolveReviewBotConfig === null
-      ? EMPTY_REVIEW_BOT_CONFIG
-      : await this.#resolveReviewBotConfig(input);
   }
 
   async #completeScopeDecline(
@@ -402,10 +391,10 @@ function runnerPullRequest(context: ReviewJobContext): RunnerPullRequest {
   };
 }
 
-function diffIgnoreOptions(config: ReviewBotContext): DiffIgnoreOptions | undefined {
-  return config.ignorePatterns.length === 0 ? undefined : { ignorePatterns: config.ignorePatterns };
-}
-
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function resolveEmptyReviewBotContext(): Promise<ReviewBotContext> {
+  return EMPTY_REVIEW_BOT_CONTEXT;
 }

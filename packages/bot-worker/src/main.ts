@@ -8,6 +8,7 @@ import { BotConfigReader } from './config/bot-config-reader.js';
 import type { ProductConfig, RepoConfig } from './config/bot-yaml.js';
 import { ConfigLoader } from './config/loader.js';
 import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
+import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
@@ -17,11 +18,7 @@ import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { type RepoForWorktree, ReviewExecutor } from './worker/review-executor.js';
-import {
-  type ReviewBotContext,
-  SANDY_WORKER_CONTAINER_PREFIX,
-  SandcastleRunner,
-} from './worker/sandcastle-runner.js';
+import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './worker/sandcastle-runner.js';
 
 /** Resolved worker configuration, read once from the environment at startup. */
 export interface WorkerConfig {
@@ -348,7 +345,7 @@ export async function resolveReviewBotConfig(
 ): Promise<ReviewBotContext> {
   const resolved = loader.resolveForRepo(repo.owner, repo.name);
   if (resolved === null) {
-    return { repoRules: null, productRules: null, ignorePatterns: [] };
+    return EMPTY_REVIEW_BOT_CONTEXT;
   }
   const options =
     worktreePath === undefined
