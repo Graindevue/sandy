@@ -1,0 +1,27 @@
+{
+  "name": "@sandy/manifest-builder",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "types": "./src/main.ts",
+  "exports": {
+    ".": {
+      "types": "./src/main.ts",
+      "default": "./dist/main.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc --noEmit -p tsconfig.json",
+    "test": "cd ../.. && vitest run packages/manifest-builder/src/main.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@sandy/shared-types": "workspace:*",
+    "tsx": "^4.20.0"
+  }
+}

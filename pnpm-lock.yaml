@@ -75,6 +75,15 @@ importers:
         specifier: workspace:*
         version: link:../shared-types
 
+  packages/manifest-builder:
+    dependencies:
+      '@sandy/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+      tsx:
+        specifier: ^4.20.0
+        version: 4.22.3
+
   packages/shared-types: {}
 
 packages:

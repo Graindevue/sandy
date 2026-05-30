@@ -1,6 +1,8 @@
 import type {
   AgentDefinition,
   AgentRunStatus,
+  ApiSurfaceManifestBuildResult,
+  ApiSurfaceRepoInput,
   Finding,
   ReviewJobStatus,
 } from '@sandy/shared-types';
@@ -27,6 +29,12 @@ export interface ReviewJobContext {
     name: string;
     defaultBranch: string;
   };
+  product: {
+    id: string;
+    slug: string;
+    name: string;
+    repos: ProductRepoForReview[];
+  };
   pullRequest: {
     id: string;
     number: number;
@@ -35,6 +43,14 @@ export interface ReviewJobContext {
     title: string;
     url: string;
   };
+}
+
+export interface ProductRepoForReview {
+  id: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  defaultBranch: string;
 }
 
 export interface RecordFindingInput {
@@ -57,6 +73,12 @@ export interface RecordAgentRunInput {
 export interface ReviewExecutionStore {
   getReviewJobContext(jobId: string): Promise<ReviewJobContext | null>;
   getReviewJobStatus(jobId: string): Promise<ReviewJobStatus | null>;
+  recordApiSurfaceManifest(input: {
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }): Promise<void>;
   recordFinding(input: RecordFindingInput): Promise<string>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
@@ -70,6 +92,7 @@ export interface ReviewWorktree {
 
 export interface ReviewCloneManager {
   ensureCloned(repo: RepoForWorktree): Promise<unknown>;
+  resolveDefaultBranchSha(repo: RepoForWorktree): Promise<string>;
   createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
   removeWorktree(worktree: ReviewWorktree): Promise<void>;
 }
@@ -94,6 +117,7 @@ export interface ReviewAgentRunner {
     agent: AgentDefinition;
     worktreePath: string;
     pullRequest: RunnerPullRequest;
+    apiSurfaceManifest?: string;
     signal?: AbortSignal;
   }): Promise<string>;
 }
@@ -114,6 +138,13 @@ export interface ReviewPoster {
   }): Promise<void>;
 }
 
+export interface ReviewManifestBuilder {
+  buildManifest(
+    productId: string,
+    repoShas: readonly ApiSurfaceRepoInput[],
+  ): Promise<ApiSurfaceManifestBuildResult>;
+}
+
 export interface ReviewExecutorOptions {
   store: ReviewExecutionStore;
   cloneManager: ReviewCloneManager;
@@ -121,6 +152,7 @@ export interface ReviewExecutorOptions {
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
+  manifestBuilder?: ReviewManifestBuilder;
   cancellationRegistry?: ReviewCancellationRegistry;
   maxChangedLines?: number;
   now?: () => number;
@@ -135,6 +167,7 @@ export class ReviewExecutor {
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
+  readonly #manifestBuilder: ReviewManifestBuilder | null;
   readonly #cancellationRegistry: ReviewCancellationRegistry | null;
   readonly #maxChangedLines: number;
   readonly #now: () => number;
@@ -146,6 +179,7 @@ export class ReviewExecutor {
     this.#runner = options.runner;
     this.#poster = options.poster;
     this.#resolveAgent = options.resolveAgent;
+    this.#manifestBuilder = options.manifestBuilder ?? null;
     this.#cancellationRegistry = options.cancellationRegistry ?? null;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#now = options.now ?? Date.now;
@@ -153,7 +187,7 @@ export class ReviewExecutor {
 
   async executeClaimedJob(jobId: string): Promise<void> {
     let context: ReviewJobContext | null = null;
-    let worktree: ReviewWorktree | null = null;
+    const worktrees: ReviewWorktree[] = [];
     let agentKey: string | null = null;
     let agentStartedAt: number | null = null;
     let agentRunRecorded = false;
@@ -176,20 +210,21 @@ export class ReviewExecutor {
         return;
       }
 
-      await this.#cloneManager.ensureCloned(repo);
+      const materialized = await this.#materializeReviewWorktrees(context);
+      worktrees.push(...materialized.worktrees);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      worktree = await this.#cloneManager.createWorktree(repo, {
-        reviewJobId: context.job.id,
-        sha: context.job.headSha,
-      });
+      const manifest = await this.#buildAndRecordManifest(context, materialized.manifestRepos);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
 
       agentStartedAt = this.#now();
       const runInput: ReviewAgentRunInput = {
         agent,
-        worktreePath: worktree.path,
+        worktreePath: materialized.prWorktree.path,
         pullRequest: runnerPullRequest(context),
       };
+      if (manifest !== undefined) {
+        runInput.apiSurfaceManifest = manifest.markdown;
+      }
       if (cancellationSignal !== undefined) {
         runInput.signal = cancellationSignal;
       }
@@ -224,7 +259,7 @@ export class ReviewExecutor {
       }
       await this.#store.markFailed(jobId, this.#now(), message);
     } finally {
-      if (worktree !== null) {
+      for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
       cancellation?.dispose();
@@ -260,6 +295,67 @@ export class ReviewExecutor {
       maxChangedLines: this.#maxChangedLines,
     });
     await this.#store.markCompleted(jobId, this.#now());
+  }
+
+  async #materializeReviewWorktrees(context: ReviewJobContext): Promise<{
+    prWorktree: ReviewWorktree;
+    worktrees: ReviewWorktree[];
+    manifestRepos: ApiSurfaceRepoInput[];
+  }> {
+    const currentRepo = repoForWorktree(context);
+    const productRepos = productReposForContext(context);
+    const worktrees: ReviewWorktree[] = [];
+    const manifestRepos: ApiSurfaceRepoInput[] = [];
+    let prWorktree: ReviewWorktree | null = null;
+
+    for (const productRepo of productRepos) {
+      const repo = repoForProductRepo(productRepo);
+      await this.#cloneManager.ensureCloned(repo);
+      const sha = sameRepo(repo, currentRepo)
+        ? context.job.headSha
+        : await this.#cloneManager.resolveDefaultBranchSha(repo);
+      const worktree = await this.#cloneManager.createWorktree(repo, {
+        reviewJobId: context.job.id,
+        sha,
+      });
+      worktrees.push(worktree);
+      if (sameRepo(repo, currentRepo)) {
+        prWorktree = worktree;
+      }
+      manifestRepos.push({
+        owner: productRepo.owner,
+        name: productRepo.name,
+        fullName: productRepo.fullName,
+        defaultBranch: productRepo.defaultBranch,
+        worktreePath: worktree.path,
+        sha,
+      });
+    }
+
+    if (prWorktree === null) {
+      throw new Error(
+        `Product ${context.product.slug} does not include reviewed Repo ${currentRepo.owner}/${currentRepo.name}`,
+      );
+    }
+
+    return { prWorktree, worktrees, manifestRepos };
+  }
+
+  async #buildAndRecordManifest(
+    context: ReviewJobContext,
+    manifestRepos: readonly ApiSurfaceRepoInput[],
+  ): Promise<ApiSurfaceManifestBuildResult | undefined> {
+    if (this.#manifestBuilder === null) {
+      return undefined;
+    }
+    const manifest = await this.#manifestBuilder.buildManifest(context.product.id, manifestRepos);
+    await this.#store.recordApiSurfaceManifest({
+      productId: context.product.id,
+      repoShas: manifest.structured.repoShas,
+      markdown: manifest.markdown,
+      builtAt: manifest.structured.builtAt,
+    });
+    return manifest;
   }
 
   async #recordFindings(
@@ -336,6 +432,32 @@ function requireLogicAgentKey(context: ReviewJobContext): string {
     );
   }
   return 'logic';
+}
+
+function productReposForContext(context: ReviewJobContext): ProductRepoForReview[] {
+  if (context.product.repos.length > 0) {
+    return context.product.repos;
+  }
+  return [
+    {
+      id: context.repo.id,
+      owner: context.repo.owner,
+      name: context.repo.name,
+      fullName: `${context.repo.owner}/${context.repo.name}`,
+      defaultBranch: context.repo.defaultBranch,
+    },
+  ];
+}
+
+function repoForProductRepo(repo: ProductRepoForReview): RepoForWorktree {
+  return { owner: repo.owner, name: repo.name, defaultBranch: repo.defaultBranch };
+}
+
+function sameRepo(left: RepoForWorktree, right: RepoForWorktree): boolean {
+  return (
+    left.owner.toLowerCase() === right.owner.toLowerCase() &&
+    left.name.toLowerCase() === right.name.toLowerCase()
+  );
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {

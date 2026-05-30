@@ -107,6 +107,17 @@ export class CloneManager {
   }
 
   /**
+   * Resolve the Repo's current default-branch HEAD after fetching origin. Used
+   * by per-Review manifest builds so sibling Repo surfaces are pinned to the
+   * exact SHA the manifest describes.
+   */
+  async resolveDefaultBranchSha(repo: RepoIdentity): Promise<string> {
+    const dest = this.repoPath(repo);
+    await this.fetch(repo);
+    return (await this.#git(dest, ['rev-parse', `origin/${repo.defaultBranch}`])).trim();
+  }
+
+  /**
    * Materialize an isolated worktree for one Review, checked out at the exact
    * `sha`. Fetches first so a SHA pushed since the last `fetch` is present, then
    * adds a detached worktree pinned to that commit. Worktrees live under

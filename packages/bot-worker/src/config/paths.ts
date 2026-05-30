@@ -34,3 +34,8 @@ export function defaultCloneBaseDir(env: NodeJS.ProcessEnv): string {
   }
   return join(homedir(), '.sandy', 'repos');
 }
+
+/** Default per-instance custom Extractor directory. */
+export function defaultCustomExtractorsDir(repoRoot: string): string {
+  return join(repoRoot, '.config', 'extractors');
+}

@@ -80,7 +80,7 @@ Granularity and false-positive control: a changed contract item produces **one**
 
 ## Extractor
 
-Code that produces a section of the ApiSurfaceManifest from one Repo. Default Extractors ship with Sandy (`extractors/`); custom Extractors live in `.config/extractors/` and are loaded at startup via dynamic import.
+Code that produces a section of the ApiSurfaceManifest from one Repo. Default Extractors ship with Sandy in `packages/manifest-builder/src/extractors/` (documented in `extractors/`); custom Extractors live in `.config/extractors/` and are loaded via dynamic import.
 
 ## Synthesizer
 

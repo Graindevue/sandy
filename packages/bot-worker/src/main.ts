@@ -1,11 +1,19 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { AgentDefinition } from '@sandy/shared-types';
+import type {
+  AgentDefinition,
+  ApiSurfaceManifestBuildResult,
+  ApiSurfaceRepoInput,
+} from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { ConfigLoader } from './config/loader.js';
-import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
+import {
+  defaultCloneBaseDir,
+  defaultConfigLoaderOptions,
+  defaultCustomExtractorsDir,
+} from './config/paths.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
@@ -163,6 +171,10 @@ export async function main(): Promise<void> {
     poster,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
+    manifestBuilder: {
+      buildManifest: (productId, repoShas) =>
+        buildApiSurfaceManifest(repoRoot, productId, repoShas),
+    },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
   });
   const claimant = new ReviewClaimant({
@@ -268,6 +280,32 @@ function isNotFound(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === 'ENOENT'
   );
+}
+
+async function buildApiSurfaceManifest(
+  repoRoot: string,
+  productId: string,
+  repoShas: readonly ApiSurfaceRepoInput[],
+): Promise<ApiSurfaceManifestBuildResult> {
+  const modulePath = manifestBuilderModulePath(repoRoot);
+  const module = (await import(pathToFileURL(modulePath).href)) as {
+    buildManifest(
+      productId: string,
+      repoShas: readonly ApiSurfaceRepoInput[],
+      options: { customExtractorsDir: string },
+    ): Promise<ApiSurfaceManifestBuildResult>;
+  };
+  return await module.buildManifest(productId, repoShas, {
+    customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
+  });
+}
+
+function manifestBuilderModulePath(repoRoot: string): string {
+  const built = resolve(repoRoot, 'packages/manifest-builder/dist/main.js');
+  if (existsSync(built)) {
+    return built;
+  }
+  return resolve(repoRoot, 'packages/manifest-builder/src/main.ts');
 }
 
 /**

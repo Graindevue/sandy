@@ -88,4 +88,18 @@ export default defineSchema({
     findingCount: v.number(),
     error: v.optional(v.string()),
   }).index('by_review_job', ['reviewJobId']),
+
+  apiSurfaceManifests: defineTable({
+    productId: v.id('products'),
+    repoShas: v.array(
+      v.object({
+        repo: v.string(),
+        sha: v.string(),
+      }),
+    ),
+    markdown: v.string(),
+    builtAt: v.number(),
+  })
+    .index('by_product', ['productId'])
+    .index('by_product_and_built_at', ['productId', 'builtAt']),
 });

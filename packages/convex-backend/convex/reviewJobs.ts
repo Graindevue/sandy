@@ -125,6 +125,14 @@ export const getForWorker = query({
     if (repo === null || pullRequest === null) {
       return null;
     }
+    const product = await ctx.db.get(repo.productId);
+    if (product === null) {
+      return null;
+    }
+    const productRepos = await ctx.db
+      .query('repos')
+      .withIndex('by_product', (q) => q.eq('productId', repo.productId))
+      .collect();
     return {
       job: {
         id: job._id,
@@ -138,6 +146,18 @@ export const getForWorker = query({
         owner: repo.owner,
         name: repo.name,
         defaultBranch: repo.defaultBranch,
+      },
+      product: {
+        id: product._id,
+        slug: product.slug,
+        name: product.name,
+        repos: productRepos.map((productRepo) => ({
+          id: productRepo._id,
+          owner: productRepo.owner,
+          name: productRepo.name,
+          fullName: productRepo.fullName,
+          defaultBranch: productRepo.defaultBranch,
+        })),
       },
       pullRequest: {
         id: pullRequest._id,

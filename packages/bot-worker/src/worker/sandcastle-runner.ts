@@ -39,6 +39,7 @@ export interface RunLogicAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
+  apiSurfaceManifest?: string;
   signal?: AbortSignal;
 }
 
@@ -184,6 +185,15 @@ async function createDefaultAppleContainer(
 
 export function buildReviewPrompt(input: RunLogicAgentInput): string {
   const pr = input.pullRequest;
+  const manifestContext =
+    input.apiSurfaceManifest === undefined
+      ? ''
+      : `
+API Surface Manifest context:
+Use this manifest as a trigger for Cross-Repo Search. It lists public surface and framework versions only; it does not enumerate callers.
+
+${input.apiSurfaceManifest.trim()}
+`;
   return `${input.agent.systemPrompt}
 
 Review PR #${pr.number}: ${pr.title}
@@ -192,6 +202,7 @@ Repository: ${pr.owner}/${pr.repo}
 PR URL: ${pr.url}
 Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
+${manifestContext}
 
 You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>:
 
