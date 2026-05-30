@@ -202,7 +202,7 @@ export function buildReviewPrompt(input: RunAgentInput): string {
       : `
 Sibling Repo mounts:
 ${input.siblingWorktrees
-  .map((sibling) => `- ${sibling.repo} @ ${sibling.sha}: ${sibling.sandboxPath}`)
+  .map((sibling) => `- ${sibling.sandboxPath} -> ${sibling.repo} @ ${sibling.sha}`)
   .join('\n')}
 `;
   const manifestContext =
@@ -226,11 +226,26 @@ ${siblingContext}
 ${manifestContext}
 ${formatReviewBotContext(input.botConfig)}
 
+Cross-Repo Search contract:
+- The reviewed Repo (${pr.owner}/${pr.repo}) is your current working directory. Sibling Repos, when present, are mounted read-only at the paths listed above; each mount maps to the shown owner/name Repo at its recorded default-branch SHA.
+- Primary trigger: run Cross-Repo Search when the PR diff changes, removes, or adds a public-surface item listed in the API Surface Manifest. Include old deleted names from the diff, because the Manifest is built at the PR head and may only list the new surface.
+- Secondary diff-judgment trigger: run targeted Cross-Repo Search when the diff is likely to affect a sibling Repo's behavior or assumptions even if the Manifest does not model it, including auth, routes, data shape or semantics, events, config, permissions, storage paths, generated artifacts, and shared conventions.
+- Skip Cross-Repo Search for CSS-only, test-only, or otherwise local-only changes unless the diff suggests a cross-repo contract risk.
+- Search siblings with rg/read_file against the mounted code, not from the Manifest alone. Confirm each hit is a real usage: resolved import, actual call site, or key lookup. Use tree_sitter_query for structural confirmation when a symbol is too generic to grep safely. Never report coincidental string matches.
+- Emit one Finding per changed contract item and put all confirmed sibling consumers in crossRepoReferences; do not emit one Finding per reference. Let severity reflect the true confirmed consumer count even if the rendered reference list is later capped. Frame these as cross-repo contract drift judged against sibling main/default branch. This rule is symmetric: producer-side removals/renames and consumer-side use of symbols absent from sibling main can both be Findings.
+- Always fill crossRepoSearch in the JSON output: say why you searched siblings, or say that no cross-repo contract risk was detected.
+
 You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>. Each finding must use an in-diff "anchor"; use "crossRepoReferences" only for confirmed affected sibling-Repo consumers:
 
 <findings>
 {
   "summary": "Optional one-paragraph review summary",
+  "crossRepoSearch": {
+    "status": "searched" | "skipped",
+    "trigger": "manifest" | "diff-judgment" | "none",
+    "rationale": "Why you searched sibling Repos, or why no cross-repo contract risk was detected.",
+    "searchedRepos": ["owner/name"]
+  },
   "findings": []
 }
 </findings>

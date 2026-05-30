@@ -99,7 +99,13 @@ describe('SandcastleRunner', () => {
     expect(runCalls[0]?.prompt).toContain('# API Surface Manifest');
     expect(runCalls[0]?.prompt).toContain('Use this manifest as a trigger');
     expect(runCalls[0]?.prompt).toContain('Sibling Repo mounts');
-    expect(runCalls[0]?.prompt).toContain('/workspace/acme/desktop');
+    expect(runCalls[0]?.prompt).toContain('/workspace/acme/desktop -> acme/desktop');
+    expect(runCalls[0]?.prompt).toContain('Primary trigger');
+    expect(runCalls[0]?.prompt).toContain('Secondary diff-judgment trigger');
+    expect(runCalls[0]?.prompt).toContain('CSS-only, test-only');
+    expect(runCalls[0]?.prompt).toContain('tree_sitter_query');
+    expect(runCalls[0]?.prompt).toContain('"crossRepoSearch"');
+    expect(runCalls[0]?.prompt).toContain('"trigger": "manifest" | "diff-judgment" | "none"');
     expect(runCalls[0]?.prompt).toContain('Product Rules');
     expect(runCalls[0]?.prompt).toContain('- API errors expose stable codes.');
     expect(runCalls[0]?.prompt).toContain('Repo-local Rules');

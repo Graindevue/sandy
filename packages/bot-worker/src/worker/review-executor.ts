@@ -4,6 +4,7 @@ import type {
   ApiSurfaceManifestBuildResult,
   ApiSurfaceRepoInput,
   Confidence,
+  CrossRepoSearchRationale,
   Finding,
   FindingsPayload,
   ReviewJobStatus,
@@ -80,6 +81,7 @@ export interface RecordAgentRunInput {
   startedAt: number;
   finishedAt: number;
   findingCount: number;
+  crossRepoSearch?: CrossRepoSearchRationale;
   error?: string;
 }
 
@@ -158,6 +160,7 @@ export interface ReviewPoster {
     findings: PersistedFinding[];
     siblingShas: SiblingShas;
     summary?: string;
+    crossRepoSearch?: CrossRepoSearchRationale;
   }): Promise<PostedFinding[]>;
   postScopeDeclined(input: {
     target: PullRequestTarget;
@@ -363,6 +366,7 @@ export class ReviewExecutor {
       startedAt: outcome.startedAt,
       finishedAt: outcome.finishedAt,
       findingCount: outcome.payload.findings.length,
+      crossRepoSearch: outcome.payload.crossRepoSearch,
     });
 
     await this.#throwIfCancelledOrSuperseded(context.job.id, input.cancellationSignal);
@@ -378,6 +382,7 @@ export class ReviewExecutor {
       persistedFindings,
       input.workspace.siblingShas,
       outcome.payload.summary,
+      outcome.payload.crossRepoSearch,
     );
   }
 
@@ -537,6 +542,7 @@ export class ReviewExecutor {
     findings: PersistedFinding[],
     siblingShas: SiblingShas,
     summary: string | undefined,
+    crossRepoSearch: CrossRepoSearchRationale | undefined,
   ): Promise<void> {
     const input: {
       target: PullRequestTarget;
@@ -544,9 +550,13 @@ export class ReviewExecutor {
       findings: PersistedFinding[];
       siblingShas: SiblingShas;
       summary?: string;
+      crossRepoSearch?: CrossRepoSearchRationale;
     } = { target, agentKey, findings, siblingShas };
     if (summary !== undefined) {
       input.summary = summary;
+    }
+    if (crossRepoSearch !== undefined) {
+      input.crossRepoSearch = crossRepoSearch;
     }
 
     const posted = await this.#poster.postReviewResult(input);

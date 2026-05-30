@@ -1,6 +1,8 @@
 import type {
   AgentRunStatus,
   Confidence,
+  CrossRepoSearchStatus,
+  CrossRepoSearchTrigger,
   PullRequestState,
   ReviewJobStatus,
   ReviewTrigger,
@@ -69,6 +71,20 @@ export const crossRepoReference = v.object({
   repo: v.string(),
   path: v.string(),
   line: v.number(),
+});
+
+export const crossRepoSearchRationale = v.object({
+  status: v.union(
+    v.literal('searched' satisfies CrossRepoSearchStatus),
+    v.literal('skipped' satisfies CrossRepoSearchStatus),
+  ),
+  trigger: v.union(
+    v.literal('manifest' satisfies CrossRepoSearchTrigger),
+    v.literal('diff-judgment' satisfies CrossRepoSearchTrigger),
+    v.literal('none' satisfies CrossRepoSearchTrigger),
+  ),
+  rationale: v.string(),
+  searchedRepos: v.optional(v.array(v.string())),
 });
 
 export const siblingShas = v.record(v.string(), v.string());

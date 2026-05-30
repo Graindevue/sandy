@@ -41,18 +41,25 @@ RUN set -eux; \
   fi; \
   usermod -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent -m -l agent node
 
-# Global tooling: pnpm, opensrc (framework-source lookup), tree-sitter (the
-# `tree_sitter_query` Agent tool), and the agent CLIs sandcastle's providers
-# invoke — claude-code (vendor: claude) and codex (vendor: codex). The codex pin
-# tracks the host CLI version (codex-cli 0.134.0) so a host `codex login`
-# auth.json stays format-compatible with the in-container `codex exec`. Pinned
-# for reproducible builds; bump as needed.
-RUN npm install -g \
+# Global tooling: pnpm, opensrc (framework-source lookup), tree-sitter parser
+# deps for the `tree_sitter_query` Agent tool, and the agent CLIs sandcastle's
+# providers invoke — claude-code (vendor: claude) and codex (vendor: codex). The
+# codex pin tracks the host CLI version (codex-cli 0.134.0) so a host
+# `codex login` auth.json stays format-compatible with the in-container
+# `codex exec`. Pinned for reproducible builds; bump as needed.
+RUN CXXFLAGS="-std=c++20" npm install -g \
   pnpm@10.0.0 \
   opensrc@0.7.2 \
   tree-sitter-cli@0.26.8 \
+  tree-sitter@0.21.1 \
+  tree-sitter-javascript@0.23.1 \
+  tree-sitter-typescript@0.23.2 \
   @anthropic-ai/claude-code@2.1.153 \
-  @openai/codex@0.134.0
+  @openai/codex@0.134.0 \
+  && CXXFLAGS="-std=c++20" npm rebuild -g tree-sitter tree-sitter-javascript tree-sitter-typescript
+
+COPY tree_sitter_query.mjs /usr/local/bin/tree_sitter_query
+RUN chmod 0755 /usr/local/bin/tree_sitter_query
 
 # A numeric USER is mandatory: the provider refuses an image whose USER is
 # missing or non-numeric, and checks that it matches the expected UID.

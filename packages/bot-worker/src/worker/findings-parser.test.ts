@@ -8,6 +8,12 @@ describe('parseFindingsPayload', () => {
       <findings>
       {
         "summary": "One real issue.",
+        "crossRepoSearch": {
+          "status": "searched",
+          "trigger": "manifest",
+          "rationale": "The diff renamed a Convex query listed in the Manifest, so sibling consumers were checked.",
+          "searchedRepos": ["acme/consumer"]
+        },
         "findings": [
           {
             "severity": "P1",
@@ -38,6 +44,13 @@ describe('parseFindingsPayload', () => {
     `);
 
     expect(payload.summary).toBe('One real issue.');
+    expect(payload.crossRepoSearch).toEqual({
+      status: 'searched',
+      trigger: 'manifest',
+      rationale:
+        'The diff renamed a Convex query listed in the Manifest, so sibling consumers were checked.',
+      searchedRepos: ['acme/consumer'],
+    });
     expect(payload.findings).toHaveLength(1);
     expect(payload.findings[0]).toMatchObject({
       severity: 'P1',
@@ -56,6 +69,11 @@ describe('parseFindingsPayload', () => {
 
   it('validates an anchor-only same-Repo finding without cross-repo references', () => {
     const payload = parseFindingsPayload(`<findings>{
+      "crossRepoSearch": {
+        "status": "skipped",
+        "trigger": "none",
+        "rationale": "Only tests changed; no cross-repo contract risk was detected."
+      },
       "findings": [{
         "severity": "P2",
         "confidence": 3,
@@ -91,6 +109,11 @@ describe('parseFindingsPayload', () => {
   it('rejects malformed output with an actionable error', () => {
     expect(() =>
       parseFindingsPayload(`<findings>{
+        "crossRepoSearch": {
+          "status": "skipped",
+          "trigger": "none",
+          "rationale": "No cross-repo contract risk was detected."
+        },
         "findings": [{
           "severity": "P9",
           "confidence": 4,
@@ -112,13 +135,21 @@ describe('parseFindingsPayload', () => {
   it('uses the final findings block when earlier narration contains an example', () => {
     const payload = parseFindingsPayload(`
       Example:
-      <findings>{"summary":"Example only.","findings":[]}</findings>
+      <findings>{"summary":"Example only.","crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"Example only."},"findings":[]}</findings>
 
       Final answer:
-      <findings>{"summary":"Real result.","findings":[]}</findings>
+      <findings>{"summary":"Real result.","crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"No cross-repo contract risk was detected."},"findings":[]}</findings>
     `);
 
-    expect(payload).toEqual({ summary: 'Real result.', findings: [] });
+    expect(payload).toEqual({
+      summary: 'Real result.',
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'No cross-repo contract risk was detected.',
+      },
+      findings: [],
+    });
   });
 
   it('rejects output with no findings tag', () => {

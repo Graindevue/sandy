@@ -1,4 +1,9 @@
-import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
+import type {
+  CrossRepoReference,
+  CrossRepoSearchRationale,
+  Finding,
+  SiblingShas,
+} from '@sandy/shared-types';
 
 export interface PullRequestTarget {
   owner: string;
@@ -54,6 +59,7 @@ export interface PostReviewResultInput {
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary?: string;
+  crossRepoSearch?: CrossRepoSearchRationale;
 }
 
 export interface PostScopeDeclinedInput {
@@ -91,7 +97,12 @@ export class PullRequestPoster {
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: buildSummaryBody(input.agentKey, input.findings.length, input.summary),
+      body: buildSummaryBody(
+        input.agentKey,
+        input.findings.length,
+        input.summary,
+        input.crossRepoSearch,
+      ),
     });
 
     return posted;
@@ -172,13 +183,17 @@ function buildSummaryBody(
   agentKey: string,
   findingCount: number,
   summary: string | undefined,
+  crossRepoSearch: CrossRepoSearchRationale | undefined,
 ): string {
-  const headline = buildSummaryHeadline(agentKey, findingCount);
-  const trimmedSummary = summary?.trim();
-  if (trimmedSummary === undefined || trimmedSummary.length === 0) {
-    return headline;
+  const parts = [buildSummaryHeadline(agentKey, findingCount)];
+  if (crossRepoSearch !== undefined) {
+    parts.push(formatCrossRepoSearch(crossRepoSearch));
   }
-  return `${headline}\n\n${trimmedSummary}`;
+  const trimmedSummary = summary?.trim();
+  if (trimmedSummary !== undefined && trimmedSummary.length > 0) {
+    parts.push(trimmedSummary);
+  }
+  return parts.join('\n\n');
 }
 
 function buildSummaryHeadline(agentKey: string, findingCount: number): string {
@@ -188,6 +203,14 @@ function buildSummaryHeadline(agentKey: string, findingCount: number): string {
 
   const noun = findingCount === 1 ? 'finding' : 'findings';
   return `Sandy ${agentKey} review posted ${findingCount} ${noun}.`;
+}
+
+function formatCrossRepoSearch(search: CrossRepoSearchRationale): string {
+  const repos =
+    search.searchedRepos === undefined || search.searchedRepos.length === 0
+      ? ''
+      : ` Repos: ${search.searchedRepos.join(', ')}.`;
+  return `Cross-repo search: ${search.status} (${search.trigger}) - ${search.rationale}${repos}`;
 }
 
 function formatCount(value: number): string {

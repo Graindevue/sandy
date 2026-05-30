@@ -1,8 +1,22 @@
-import type { Confidence, Finding, FindingsPayload, Severity } from '@sandy/shared-types';
+import type {
+  Confidence,
+  CrossRepoSearchRationale,
+  CrossRepoSearchStatus,
+  CrossRepoSearchTrigger,
+  Finding,
+  FindingsPayload,
+  Severity,
+} from '@sandy/shared-types';
 
 const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/gi;
 const SEVERITIES = new Set<Severity>(['P0', 'P1', 'P2']);
 const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
+const CROSS_REPO_SEARCH_STATUSES = new Set<CrossRepoSearchStatus>(['searched', 'skipped']);
+const CROSS_REPO_SEARCH_TRIGGERS = new Set<CrossRepoSearchTrigger>([
+  'manifest',
+  'diff-judgment',
+  'none',
+]);
 
 /**
  * Extract and validate the structured payload an Agent emits. This intentionally
@@ -35,6 +49,10 @@ function validatePayload(value: unknown): FindingsPayload {
 
   const payload: FindingsPayload = {
     findings: object.findings.map((finding, index) => validateFinding(finding, index)),
+    crossRepoSearch: validateCrossRepoSearch(
+      object.crossRepoSearch,
+      'FindingsPayload.crossRepoSearch',
+    ),
   };
 
   if (object.summary !== undefined) {
@@ -45,6 +63,31 @@ function validatePayload(value: unknown): FindingsPayload {
   }
 
   return payload;
+}
+
+function validateCrossRepoSearch(value: unknown, where: string): CrossRepoSearchRationale {
+  const object = requireObject(value, where);
+  const status = requireCrossRepoSearchStatus(object.status, `${where}.status`);
+  const trigger = requireCrossRepoSearchTrigger(object.trigger, `${where}.trigger`);
+  const rationale = requireString(object.rationale, `${where}.rationale`);
+  const result: CrossRepoSearchRationale = { status, trigger, rationale };
+
+  if (status === 'skipped' && trigger !== 'none') {
+    throw new Error(`${where}.trigger must be "none" when status is "skipped"`);
+  }
+  if (status === 'searched' && trigger === 'none') {
+    throw new Error(`${where}.trigger must be "manifest" or "diff-judgment" when searched`);
+  }
+  if (object.searchedRepos !== undefined) {
+    if (!Array.isArray(object.searchedRepos)) {
+      throw new Error(`${where}.searchedRepos must be an array when provided`);
+    }
+    result.searchedRepos = object.searchedRepos.map((repo, index) =>
+      requireString(repo, `${where}.searchedRepos[${index}]`),
+    );
+  }
+
+  return result;
 }
 
 function validateFinding(value: unknown, index: number): Finding {
@@ -147,4 +190,18 @@ function requireConfidence(value: unknown, where: string): Confidence {
     throw new Error(`${where} must be an integer from 0 to 5`);
   }
   return value as Confidence;
+}
+
+function requireCrossRepoSearchStatus(value: unknown, where: string): CrossRepoSearchStatus {
+  if (!CROSS_REPO_SEARCH_STATUSES.has(value as CrossRepoSearchStatus)) {
+    throw new Error(`${where} must be one of searched, skipped`);
+  }
+  return value as CrossRepoSearchStatus;
+}
+
+function requireCrossRepoSearchTrigger(value: unknown, where: string): CrossRepoSearchTrigger {
+  if (!CROSS_REPO_SEARCH_TRIGGERS.has(value as CrossRepoSearchTrigger)) {
+    throw new Error(`${where} must be one of manifest, diff-judgment, none`);
+  }
+  return value as CrossRepoSearchTrigger;
 }

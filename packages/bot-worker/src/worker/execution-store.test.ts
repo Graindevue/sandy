@@ -66,6 +66,39 @@ describe('ConvexExecutionStore', () => {
       category: 'logic',
     });
   });
+
+  it('records an Agent run with Cross-Repo Search rationale', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordAgentRun({
+      reviewJobId: 'job-1',
+      agentKey: 'logic',
+      status: 'completed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only CSS changed; no cross-repo contract risk was detected.',
+      },
+    });
+
+    expect(client.mutations[0]?.args).toEqual({
+      reviewJobId: 'job-1',
+      agentKey: 'logic',
+      status: 'completed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only CSS changed; no cross-repo contract risk was detected.',
+      },
+    });
+  });
 });
 
 class FakeConvexClient implements ConvexExecutionClient {

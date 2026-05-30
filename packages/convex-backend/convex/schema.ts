@@ -4,6 +4,7 @@ import {
   agentRunStatus,
   confidence,
   crossRepoReference,
+  crossRepoSearchRationale,
   findingAnchor,
   pullRequestState,
   reviewJobStatus,
@@ -91,6 +92,7 @@ export default defineSchema({
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
     findingCount: v.number(),
+    crossRepoSearch: v.optional(crossRepoSearchRationale),
     error: v.optional(v.string()),
   }).index('by_review_job', ['reviewJobId']),
 

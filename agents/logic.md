@@ -40,6 +40,12 @@ Emit findings as JSON inside `<findings>...</findings>`:
 <findings>
 {
   "summary": "Optional one-paragraph summary of the review",
+  "crossRepoSearch": {
+    "status": "searched" | "skipped",
+    "trigger": "manifest" | "diff-judgment" | "none",
+    "rationale": "Why you searched sibling Repos, or why no cross-repo contract risk was detected.",
+    "searchedRepos": ["owner/name"]
+  },
   "findings": [
     {
       "severity": "P0" | "P1" | "P2",
@@ -69,7 +75,7 @@ Emit findings as JSON inside `<findings>...</findings>`:
 ```
 
 Omit `crossRepoReferences` for same-Repo findings.
-Emit `<findings>{"findings":[]}</findings>` if you find nothing.
+Emit `<findings>{"crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"No cross-repo contract risk was detected."},"findings":[]}</findings>` if you find nothing.
 
 ## Severity
 

@@ -28,6 +28,11 @@ describe('PullRequestPoster', () => {
       agentKey: 'logic',
       siblingShas: {},
       summary: 'One issue found.',
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only tests changed; no cross-repo contract risk was detected.',
+      },
       findings: [{ id: 'finding-1', finding: baseFinding }],
     });
 
@@ -48,6 +53,9 @@ describe('PullRequestPoster', () => {
     ]);
     expect(github.reviewComments[0]?.body).toContain('The cache key ignores the tenant id.');
     expect(github.issueComments[0]?.body).toContain('Sandy logic review posted 1 finding.');
+    expect(github.issueComments[0]?.body).toContain(
+      'Cross-repo search: skipped (none) - Only tests changed; no cross-repo contract risk was detected.',
+    );
   });
 
   it('posts a clean no-issues summary when there are no findings', async () => {

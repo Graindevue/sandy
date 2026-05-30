@@ -84,6 +84,12 @@ describe('Phase 2 Convex schema handlers', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 1,
+      crossRepoSearch: {
+        status: 'searched',
+        trigger: 'manifest',
+        rationale: 'A Manifest-listed Convex query changed, so sibling consumers were searched.',
+        searchedRepos: ['acme/consumer'],
+      },
     });
 
     expect(ctx.db.getDoc(reviewJobId)).toEqual(
@@ -91,6 +97,16 @@ describe('Phase 2 Convex schema handlers', () => {
         confidenceScore: 4,
         agentRuns: [agentRunId],
         siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
+      }),
+    );
+    expect(ctx.db.getDoc(agentRunId)).toEqual(
+      expect.objectContaining({
+        crossRepoSearch: {
+          status: 'searched',
+          trigger: 'manifest',
+          rationale: 'A Manifest-listed Convex query changed, so sibling consumers were searched.',
+          searchedRepos: ['acme/consumer'],
+        },
       }),
     );
   });

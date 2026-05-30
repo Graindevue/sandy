@@ -58,15 +58,19 @@ const securityFinding: Finding = {
   category: 'security',
 };
 
+const skippedCrossRepoSearch = {
+  status: 'skipped' as const,
+  trigger: 'none' as const,
+  rationale: 'No cross-repo contract risk was detected.',
+};
+
 describe('ReviewExecutor', () => {
   it('runs the Agent, persists findings, posts comments, and completes the job', async () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const diffInspector = new FakeDiffInspector(42);
-    const runner = new FakeRunner(
-      `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
-    );
+    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'));
     const botConfig = {
       repoRules: '- Keep cache keys tenant-scoped.',
       productRules: '- API errors expose stable codes.',
@@ -100,6 +104,7 @@ describe('ReviewExecutor', () => {
     expect(diffInspector.calls[0]?.ignorePatterns).toEqual(['generated/**']);
     expect(runner.calls[0]?.botConfig).toEqual(botConfig);
     expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
+    expect(poster.results[0]?.crossRepoSearch).toEqual(skippedCrossRepoSearch);
     expect(poster.results[0]?.siblingShas).toEqual({});
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
@@ -110,6 +115,7 @@ describe('ReviewExecutor', () => {
         startedAt: 100,
         finishedAt: 200,
         findingCount: 1,
+        crossRepoSearch: skippedCrossRepoSearch,
       },
     ]);
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
@@ -133,10 +139,10 @@ describe('ReviewExecutor', () => {
           runnerCalls.push(agent.key);
           if (agent.key === 'logic') {
             await securityStarted.promise;
-            return `<findings>{"findings":[${JSON.stringify(finding)}]}</findings>`;
+            return findingsOutput([finding]);
           }
           securityStarted.resolve();
-          return `<findings>{"findings":[${JSON.stringify(securityFinding)}]}</findings>`;
+          return findingsOutput([securityFinding]);
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -184,7 +190,7 @@ describe('ReviewExecutor', () => {
           if (agent.key === 'logic') {
             throw new Error('container exited with status 1');
           }
-          return `<findings>{"findings":[${JSON.stringify(securityFinding)}]}</findings>`;
+          return findingsOutput([securityFinding]);
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -226,7 +232,7 @@ describe('ReviewExecutor', () => {
           if (agent.key === 'logic') {
             return await new Promise<string>(() => {});
           }
-          return '<findings>{"findings":[]}</findings>';
+          return findingsOutput([]);
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -284,7 +290,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async (input) => {
           runnerInput = input;
-          return '<findings>{"findings":[]}</findings>';
+          return findingsOutput([]);
         },
       },
       manifestBuilder: {
@@ -412,8 +418,7 @@ describe('ReviewExecutor', () => {
       poster,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () =>
-          `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
+        runAgent: async () => findingsOutput([finding], 'One issue.'),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -429,6 +434,7 @@ describe('ReviewExecutor', () => {
         startedAt: 100,
         finishedAt: 200,
         findingCount: 1,
+        crossRepoSearch: skippedCrossRepoSearch,
       },
     ]);
     expect(poster.results).toEqual([]);
@@ -516,7 +522,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async () => {
           store.status = 'superseded';
-          return `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`;
+          return findingsOutput([finding], 'One issue.');
         },
       },
       resolveAgent: () => logicAgent,
@@ -552,8 +558,7 @@ describe('ReviewExecutor', () => {
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () =>
-          `<findings>{"summary":"One issue.","findings":[${JSON.stringify(finding)}]}</findings>`,
+        runAgent: async () => findingsOutput([finding], 'One issue.'),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -589,7 +594,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async () => {
           runnerCalls += 1;
-          return '<findings>{"findings":[]}</findings>';
+          return findingsOutput([]);
         },
       },
       resolveAgent: () => logicAgent,
@@ -654,6 +659,21 @@ function makeContext(
 function nextNow(values: number[]): () => number {
   const copy = [...values];
   return () => copy.shift() ?? values.at(-1) ?? 0;
+}
+
+function findingsOutput(findings: Finding[], summary?: string): string {
+  const payload: {
+    findings: Finding[];
+    crossRepoSearch: typeof skippedCrossRepoSearch;
+    summary?: string;
+  } = {
+    findings,
+    crossRepoSearch: skippedCrossRepoSearch,
+  };
+  if (summary !== undefined) {
+    payload.summary = summary;
+  }
+  return `<findings>${JSON.stringify(payload)}</findings>`;
 }
 
 class FakeExecutionStore implements ReviewExecutionStore {

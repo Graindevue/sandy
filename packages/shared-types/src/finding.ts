@@ -53,12 +53,29 @@ export interface Finding {
   category: FindingCategory;
 }
 
+/** Whether and why an Agent performed Cross-Repo Search for one Review run. */
+export type CrossRepoSearchStatus = 'searched' | 'skipped';
+
+/** Which part of the Cross-Repo Search contract caused the Agent's decision. */
+export type CrossRepoSearchTrigger = 'manifest' | 'diff-judgment' | 'none';
+
+export interface CrossRepoSearchRationale {
+  status: CrossRepoSearchStatus;
+  trigger: CrossRepoSearchTrigger;
+  /** Human-readable reason the Agent searched, or why it skipped. */
+  rationale: string;
+  /** Owner/name Repos actually searched. Omit or leave empty when skipped. */
+  searchedRepos?: string[];
+}
+
 /**
  * The JSON block an Agent emits inside `<findings>…</findings>`. Parsed and
  * validated by the worker's findings-parser before any Finding is posted.
  */
 export interface FindingsPayload {
   findings: Finding[];
+  /** Required audit signal for Cross-Repo Search trigger/skip behavior. */
+  crossRepoSearch: CrossRepoSearchRationale;
   /** Optional one-paragraph summary the Agent may emit alongside its findings. */
   summary?: string;
 }
