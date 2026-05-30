@@ -137,6 +137,53 @@ describe('PullRequestPoster', () => {
     expect(github.reviewComments[0]?.repo).toBe('widget');
   });
 
+  it('routes cross-repo findings through the reviewed PR anchor only', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    await poster.postReviewResult({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
+      summary: 'Confidence score: 3/5\n\nSandy review posted 1 finding.',
+      findings: [
+        {
+          id: 'finding-1',
+          finding: {
+            ...baseFinding,
+            anchor: {
+              repo: 'acme/widget',
+              path: 'src/api.ts',
+              lineStart: 41,
+              lineEnd: 41,
+            },
+            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
+          },
+        },
+      ],
+    });
+
+    expect(github.reviewComments).toEqual([
+      expect.objectContaining({
+        owner: 'acme',
+        repo: 'widget',
+        pullNumber: 12,
+        commitId: 'abc123',
+        path: 'src/api.ts',
+        line: 41,
+      }),
+    ]);
+    expect(github.reviewComments[0]?.body).toContain(
+      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
+    );
+    expect(github.issueComments).toEqual([
+      expect.objectContaining({
+        owner: 'acme',
+        repo: 'widget',
+        issueNumber: 12,
+      }),
+    ]);
+  });
+
   it('caps rendered cross-repo references and summarizes overflow by repo', () => {
     const references = Array.from({ length: 12 }, (_, index) => ({
       repo: index === 11 ? 'acme/mobile' : 'acme/consumer',
