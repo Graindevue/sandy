@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { record as recordAgentRun } from '../convex/agentRuns.js';
 import { listForPr, recordFinding } from '../convex/findings.js';
-import { enqueue } from '../convex/reviewJobs.js';
+import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
 
 describe('Phase 2 Convex schema handlers', () => {
   it('round-trips anchor-only and cross-repo Findings', async () => {
@@ -72,6 +72,11 @@ describe('Phase 2 Convex schema handlers', () => {
       agentKeys: ['logic', 'convex'],
       siblingShas: { 'acme/consumer': 'consumer-main-sha' },
     });
+    await invoke(setConfidenceScore, ctx, { jobId: reviewJobId, confidenceScore: 4 });
+    await invoke(setSiblingShas, ctx, {
+      jobId: reviewJobId,
+      siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
+    });
     const agentRunId = await invoke(recordAgentRun, ctx, {
       reviewJobId,
       agentKey: 'logic',
@@ -83,9 +88,9 @@ describe('Phase 2 Convex schema handlers', () => {
 
     expect(ctx.db.getDoc(reviewJobId)).toEqual(
       expect.objectContaining({
-        confidenceScore: 0,
+        confidenceScore: 4,
         agentRuns: [agentRunId],
-        siblingShas: { 'acme/consumer': 'consumer-main-sha' },
+        siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
       }),
     );
   });

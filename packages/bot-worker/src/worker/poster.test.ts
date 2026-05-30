@@ -26,6 +26,7 @@ describe('PullRequestPoster', () => {
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
       agentKey: 'logic',
+      siblingShas: {},
       summary: 'One issue found.',
       findings: [{ id: 'finding-1', finding: baseFinding }],
     });
@@ -56,6 +57,7 @@ describe('PullRequestPoster', () => {
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
       agentKey: 'logic',
+      siblingShas: {},
       summary: 'No correctness issues were found.',
       findings: [],
     });
@@ -80,6 +82,7 @@ describe('PullRequestPoster', () => {
     const posted = await poster.postReviewResult({
       target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
       agentKey: 'logic',
+      siblingShas: {},
       summary: 'Two issues found.',
       findings: [
         { id: 'finding-1', finding: baseFinding },
@@ -100,6 +103,30 @@ describe('PullRequestPoster', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('finding finding-1'),
       expect.any(Error),
+    );
+  });
+
+  it('renders cross-repo references as pinned GitHub permalinks', async () => {
+    const github = new FakeGitHubReviewPoster();
+    const poster = new PullRequestPoster(github);
+
+    await poster.postReviewResult({
+      target: { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'abc123' },
+      agentKey: 'logic',
+      siblingShas: { 'acme/consumer': 'consumer-main-sha' },
+      findings: [
+        {
+          id: 'finding-1',
+          finding: {
+            ...baseFinding,
+            crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
+          },
+        },
+      ],
+    });
+
+    expect(github.reviewComments[0]?.body).toContain(
+      'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31',
     );
   });
 

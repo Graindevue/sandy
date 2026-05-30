@@ -63,9 +63,10 @@ describe('ReviewExecutor', () => {
       },
     ]);
     expect(store.recordedFindings).toEqual([
-      expect.objectContaining({ reviewJobId: 'job-1', pullRequestId: 'pr-1', agentKey: 'logic' }),
+      expect.objectContaining({ reviewJobId: 'job-1', pullRequestId: 'pr-1', finding }),
     ]);
     expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
+    expect(poster.results[0]?.siblingShas).toEqual({});
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
       {

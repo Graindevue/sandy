@@ -1,4 +1,4 @@
-import type { Finding } from '@sandy/shared-types';
+import type { CrossRepoReference, Finding } from '@sandy/shared-types';
 
 export interface PullRequestTarget {
   owner: string;
@@ -51,6 +51,8 @@ export interface PostReviewResultInput {
   target: PullRequestTarget;
   agentKey: string;
   findings: PersistedFinding[];
+  /** Sibling Repo SHAs pinned when the ReviewJob started. */
+  siblingShas: Record<string, string>;
   summary?: string;
 }
 
@@ -77,7 +79,7 @@ export class PullRequestPoster {
     for (const persisted of input.findings) {
       try {
         const comment = await this.#github.createPullRequestReviewComment(
-          buildReviewCommentInput(input.target, persisted),
+          buildReviewCommentInput(input.target, persisted, input.siblingShas),
         );
         posted.push({ findingId: persisted.id, commentId: comment.id });
       } catch (error) {
@@ -111,6 +113,7 @@ export class PullRequestPoster {
 function buildReviewCommentInput(
   target: PullRequestTarget,
   persisted: PersistedFinding,
+  siblingShas: Record<string, string>,
 ): ReviewCommentInput {
   const { finding } = persisted;
   const base: ReviewCommentInput = {
@@ -119,7 +122,7 @@ function buildReviewCommentInput(
     pullNumber: target.pullNumber,
     commitId: target.headSha,
     path: finding.anchor.path,
-    body: formatFindingBody(persisted),
+    body: formatFindingBody(persisted, siblingShas),
     line: finding.anchor.lineEnd,
     side: 'RIGHT',
   };
@@ -132,7 +135,10 @@ function buildReviewCommentInput(
   return base;
 }
 
-export function formatFindingBody({ id, finding }: PersistedFinding): string {
+export function formatFindingBody(
+  { id, finding }: PersistedFinding,
+  siblingShas: Record<string, string>,
+): string {
   const parts = [
     `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
     finding.summary,
@@ -144,12 +150,25 @@ export function formatFindingBody({ id, finding }: PersistedFinding): string {
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(
       `Cross-repo references:\n${finding.crossRepoReferences
-        .map((reference) => `- ${reference.repo}/${reference.path}:${reference.line}`)
+        .map((reference) => `- ${formatCrossRepoReference(reference, siblingShas)}`)
         .join('\n')}`,
     );
   }
   parts.push(`<!-- bot:finding=${id} -->`);
   return parts.join('\n\n');
+}
+
+function formatCrossRepoReference(
+  reference: CrossRepoReference,
+  siblingShas: Record<string, string>,
+): string {
+  const sha = siblingShas[reference.repo];
+  if (sha === undefined) {
+    return `${reference.repo}/${reference.path}:${reference.line}`;
+  }
+
+  const encodedPath = reference.path.split('/').map(encodeURIComponent).join('/');
+  return `https://github.com/${reference.repo}/blob/${sha}/${encodedPath}#L${reference.line}`;
 }
 
 function buildSummaryBody(

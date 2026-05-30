@@ -32,7 +32,6 @@ describe('ConvexExecutionStore', () => {
     await store.recordFinding({
       reviewJobId: 'job-1',
       pullRequestId: 'pr-1',
-      agentKey: 'logic',
       finding,
     });
 

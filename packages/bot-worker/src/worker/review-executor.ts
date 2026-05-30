@@ -44,7 +44,6 @@ export interface ReviewJobContext {
 export interface RecordFindingInput {
   reviewJobId: string;
   pullRequestId: string;
-  agentKey: string;
   finding: Finding;
 }
 
@@ -109,6 +108,7 @@ export interface ReviewPoster {
     target: PullRequestTarget;
     agentKey: string;
     findings: PersistedFinding[];
+    siblingShas: Record<string, string>;
     summary?: string;
   }): Promise<PostedFinding[]>;
   postScopeDeclined(input: {
@@ -215,7 +215,13 @@ export class ReviewExecutor {
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const persistedFindings = await this.#recordFindings(context, agentKey, payload.findings);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      await this.#postReviewResult(target, agentKey, persistedFindings, payload.summary);
+      await this.#postReviewResult(
+        target,
+        agentKey,
+        persistedFindings,
+        context.job.siblingShas,
+        payload.summary,
+      );
 
       await this.#store.markCompleted(jobId, this.#now());
     } catch (error) {
@@ -277,7 +283,6 @@ export class ReviewExecutor {
       const id = await this.#store.recordFinding({
         reviewJobId: context.job.id,
         pullRequestId: context.pullRequest.id,
-        agentKey,
         finding: producedFinding,
       });
       persistedFindings.push({ id, finding: producedFinding });
@@ -289,14 +294,16 @@ export class ReviewExecutor {
     target: PullRequestTarget,
     agentKey: string,
     findings: PersistedFinding[],
+    siblingShas: Record<string, string>,
     summary: string | undefined,
   ): Promise<void> {
     const input: {
       target: PullRequestTarget;
       agentKey: string;
       findings: PersistedFinding[];
+      siblingShas: Record<string, string>;
       summary?: string;
-    } = { target, agentKey, findings };
+    } = { target, agentKey, findings, siblingShas };
     if (summary !== undefined) {
       input.summary = summary;
     }

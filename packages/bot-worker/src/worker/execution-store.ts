@@ -55,7 +55,7 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     const args: Record<string, unknown> = {
       reviewJobId: input.reviewJobId,
       pullRequestId: input.pullRequestId,
-      agentKey: input.agentKey,
+      agentKey: finding.agentKey,
       severity: finding.severity,
       confidence: finding.confidence,
       anchor: finding.anchor,
