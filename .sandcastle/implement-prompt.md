@@ -53,7 +53,11 @@ During implementation:
 - Format touched files with `pnpm lint:fix` (Biome).
 - Convex code lives in `packages/convex-backend/convex/`. Never hand-edit
   `convex/_generated/` — run the package's codegen (`pnpm --filter
-  @sandy/convex-backend build`) instead. Note this needs a Convex deployment.
+  @sandy/convex-backend build`) instead. The sandbox setup hook has already
+  configured a login-free anonymous local Convex backend, so codegen works here
+  (ADR 0013). **If you change `convex/schema.ts` or any function signature,
+  re-run codegen and commit the regenerated `convex/_generated/`** — otherwise
+  type-check passes against stale generated types and the drift is invisible.
 
 # FEEDBACK LOOPS
 
