@@ -162,8 +162,7 @@ const hooks = {
         timeoutMs: 600_000,
       },
       {
-        command:
-          'pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
+        command: 'pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
         timeoutMs: 600_000,
       },
     ],
