@@ -11,13 +11,11 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
-import { computeConfidenceScore } from '../synthesizer/score.js';
-import { buildReviewSummary } from '../synthesizer/summary.js';
 import {
-  filterSuppressedFindings,
-  stripSuppressionWeights,
-} from '../synthesizer/suppression-filter.js';
-import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
+  type AgentReviewOutput,
+  synthesizeAgentOutputs,
+  synthesizePostableReview,
+} from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
@@ -561,20 +559,17 @@ export class ReviewExecutor {
     const archetypeAssignedFindings =
       await this.#archetypeAssigner.assignArchetypes(persistedFindings);
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const postableFindings = stripSuppressionWeights(
-      filterSuppressedFindings(archetypeAssignedFindings),
-    );
-    const postableSummary = buildPostableSummary({
+    const postable = synthesizePostableReview({
+      archetypeAssignedFindings,
       agentOutputs: input.agentOutputs,
       changedLineCount: input.changedLineCount,
       rawFindingCount: synthesized.rawFindingCount,
-      findings: postableFindings,
     });
     await this.#postReviewResult(
       input.target,
-      postableFindings,
+      postable.findings,
       input.siblingShas,
-      postableSummary,
+      postable.summary,
     );
   }
 
@@ -598,30 +593,6 @@ export class ReviewExecutor {
       throw new ReviewSupersededError(jobId);
     }
   }
-}
-
-function buildPostableSummary(input: {
-  agentOutputs: readonly AgentReviewOutput[];
-  changedLineCount: number;
-  rawFindingCount: number;
-  findings: readonly ArchetypeStampedFinding[];
-}): string {
-  const findings = input.findings.map(({ finding }) => finding);
-  return buildReviewSummary({
-    findings,
-    rawFindingCount: input.rawFindingCount,
-    confidenceScore: computeConfidenceScore({
-      findings,
-      changedLineCount: input.changedLineCount,
-    }),
-    agentSummaries: input.agentOutputs.flatMap(({ payload }) =>
-      payload.summary === undefined ? [] : [payload.summary],
-    ),
-    crossRepoSearches: input.agentOutputs.map(({ agentKey, payload }) => ({
-      agentKey,
-      crossRepoSearch: payload.crossRepoSearch,
-    })),
-  });
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {

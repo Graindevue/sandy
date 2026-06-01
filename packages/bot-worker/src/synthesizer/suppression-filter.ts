@@ -5,16 +5,16 @@ import type {
 
 export const SUPPRESSION_WEIGHT_THRESHOLD = 0.7;
 
-export function filterSuppressedFindings(
-  findings: readonly ArchetypeAssignedFinding[],
-): ArchetypeAssignedFinding[] {
-  return findings.filter(
-    ({ archetypeSuppressionWeight }) => archetypeSuppressionWeight < SUPPRESSION_WEIGHT_THRESHOLD,
-  );
-}
-
-export function stripSuppressionWeights(
+export function selectPostableFindings(
   findings: readonly ArchetypeAssignedFinding[],
 ): ArchetypeStampedFinding[] {
-  return findings.map(({ id, archetypeId, finding }) => ({ id, archetypeId, finding }));
+  const postable: ArchetypeStampedFinding[] = [];
+
+  for (const { id, archetypeId, archetypeSuppressionWeight, finding } of findings) {
+    if (archetypeSuppressionWeight < SUPPRESSION_WEIGHT_THRESHOLD) {
+      postable.push({ id, archetypeId, finding });
+    }
+  }
+
+  return postable;
 }

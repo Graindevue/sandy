@@ -1,7 +1,7 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import type { ArchetypeAssignedFinding } from '../worker/review-findings.js';
-import { filterSuppressedFindings } from './suppression-filter.js';
+import { selectPostableFindings } from './suppression-filter.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -19,15 +19,22 @@ const baseFinding: Finding = {
   category: 'logic',
 };
 
-describe('filterSuppressedFindings', () => {
+describe('selectPostableFindings', () => {
   it('drops Findings whose Archetype suppression weight is at or above the threshold', () => {
     const findings = [
       assignedFinding('below-threshold', 0.69),
       assignedFinding('at-threshold', 0.7),
       assignedFinding('above-threshold', 1),
+      assignedFinding('not-a-number', Number.NaN),
     ];
 
-    expect(filterSuppressedFindings(findings)).toEqual([findings[0]]);
+    expect(selectPostableFindings(findings)).toEqual([
+      {
+        id: 'below-threshold',
+        archetypeId: 'archetype-below-threshold',
+        finding: { ...baseFinding, summary: 'Finding below-threshold' },
+      },
+    ]);
   });
 });
 

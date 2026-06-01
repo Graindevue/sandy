@@ -174,10 +174,7 @@ export const persistAssignment = internalMutation({
         throw new Error(`Finding ${findingId} references missing Archetype ${finding.archetypeId}`);
       }
       await ctx.db.patch(findingId, { embedding });
-      return {
-        archetypeId: finding.archetypeId,
-        suppressionWeight: archetype.suppressionWeight,
-      };
+      return assignmentResultFor(archetype);
     }
 
     const productId = await productIdForFinding(ctx, finding.pullRequestId);
@@ -194,20 +191,21 @@ export const persistAssignment = internalMutation({
           count: matched.count + 1,
           exampleFindingIds,
         });
-        return { archetypeId: matchedArchetypeId, suppressionWeight: matched.suppressionWeight };
+        return assignmentResultFor(matched);
       }
     }
 
+    const suppressionWeight = 0;
     const archetypeId = await ctx.db.insert('archetypes', {
       productId,
       label: labelFromFindingSummary(finding.summary),
       exemplarEmbedding: embedding,
       exampleFindingIds: [findingId],
       count: 1,
-      suppressionWeight: 0,
+      suppressionWeight,
     });
     await ctx.db.patch(findingId, { embedding, archetypeId });
-    return { archetypeId, suppressionWeight: 0 };
+    return { archetypeId, suppressionWeight };
   },
 });
 
@@ -278,6 +276,13 @@ function appendExampleFindingId(
     return existing;
   }
   return [...existing, findingId].slice(0, MAX_EXAMPLE_FINDING_IDS);
+}
+
+function assignmentResultFor(archetype: {
+  _id: Id<'archetypes'>;
+  suppressionWeight: number;
+}): AssignmentResult {
+  return { archetypeId: archetype._id, suppressionWeight: archetype.suppressionWeight };
 }
 
 function ensureEmbeddingDimensions(embedding: number[]): void {
