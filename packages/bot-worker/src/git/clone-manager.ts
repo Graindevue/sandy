@@ -102,8 +102,25 @@ export class CloneManager {
    * branches and prunes deleted refs so the local clone tracks the remote.
    */
   async fetch(repo: RepoIdentity): Promise<void> {
-    const dest = this.repoPath(repo);
-    await this.#git(dest, ['fetch', '--prune', 'origin']);
+    await this.#refreshOrigin(repo);
+    await this.#git(this.repoPath(repo), ['fetch', '--prune', 'origin']);
+  }
+
+  /**
+   * Re-point `origin` at a freshly resolved clone URL before fetching. `cloneUrl`
+   * bakes a GitHub App installation token into the URL, and those tokens expire
+   * after ~1h; the long-lived clone's stored `origin` would otherwise keep the
+   * token minted at first clone, so every fetch past the first hour fails auth.
+   * Resolving `cloneUrl` per fetch re-mints the token (the app client caches and
+   * refreshes it on expiry). A no-op rewrite for tokenless URLs (e.g. tests).
+   */
+  async #refreshOrigin(repo: RepoIdentity): Promise<void> {
+    await this.#git(this.repoPath(repo), [
+      'remote',
+      'set-url',
+      'origin',
+      await this.#cloneUrl(repo),
+    ]);
   }
 
   /**
@@ -127,8 +144,9 @@ export class CloneManager {
   async createWorktree(repo: RepoIdentity, request: WorktreeRequest): Promise<Worktree> {
     const repoDir = this.repoPath(repo);
     // Pull the requested commit in case it landed after the last fetch (e.g. a
-    // mention arrives before the push webhook); a no-op if already present.
-    await this.#git(repoDir, ['fetch', '--prune', 'origin']);
+    // mention arrives before the push webhook); a no-op if already present. Goes
+    // through fetch() so origin's (expiring) App token is refreshed first.
+    await this.fetch(repo);
 
     const path = this.worktreePath(repo, request.reviewJobId);
     await mkdir(join(this.#baseDir, '.worktrees', repo.owner, repo.name), { recursive: true });
