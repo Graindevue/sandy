@@ -37,6 +37,27 @@ describe('FindingArchetypeAssigner', () => {
       },
     ]);
   });
+
+  it('passes Findings through without learning metadata when assignment fails', async () => {
+    const logger = new FakeLogger();
+    const assigner = new FindingArchetypeAssigner(
+      new ThrowingEmbedder(),
+      new FakeArchetypeStore(),
+      {
+        logger,
+      },
+    );
+
+    const stamped = await assigner.assignArchetypes([{ id: 'finding-1', finding }]);
+
+    expect(stamped).toEqual([{ id: 'finding-1', archetypeSuppressionWeight: 0, finding }]);
+    expect(logger.warnings).toEqual([
+      [
+        'Skipping Finding archetype assignment; posting review without learning metadata',
+        expect.any(Error),
+      ],
+    ]);
+  });
 });
 
 class FakeEmbedder {
@@ -45,6 +66,12 @@ class FakeEmbedder {
   async embedFindingSummary(summary: string): Promise<number[]> {
     this.summaries.push(summary);
     return [0.1, 0.2, 0.3];
+  }
+}
+
+class ThrowingEmbedder {
+  async embedFindingSummary(): Promise<number[]> {
+    throw new Error('Ollama embedding request failed: connect ECONNREFUSED 127.0.0.1:11434');
   }
 }
 
@@ -57,5 +84,13 @@ class FakeArchetypeStore {
   }): Promise<{ archetypeId: string; suppressionWeight: number }> {
     this.assignments.push(input);
     return { archetypeId: `archetype-${this.assignments.length}`, suppressionWeight: 0.25 };
+  }
+}
+
+class FakeLogger {
+  readonly warnings: unknown[][] = [];
+
+  warn(...args: unknown[]): void {
+    this.warnings.push(args);
   }
 }

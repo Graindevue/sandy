@@ -17,7 +17,7 @@ import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { FindingArchetypeAssigner } from './learning/archetype-assigner.js';
-import { OllamaFindingEmbedder } from './learning/embed.js';
+import { DEFAULT_OLLAMA_HOST, OllamaFindingEmbedder } from './learning/embed.js';
 import {
   inferPrMergeStateSignals,
   startMergeStateSignalCron,
@@ -52,7 +52,6 @@ const DEFAULT_PORT = 3007;
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const DEFAULT_MAX_CHANGED_LINES = 5000;
 const DEFAULT_MAX_CONCURRENT_JOBS = 1;
-const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
 const APPLE_CONTAINER_PROVIDER_PACKAGE = '@sandy/apple-container-provider';
 

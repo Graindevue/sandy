@@ -1,5 +1,5 @@
 import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
-import type { ArchetypeStampedFinding } from './review-findings.js';
+import type { PostableFinding } from './review-findings.js';
 
 export interface PullRequestTarget {
   owner: string;
@@ -48,7 +48,7 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  findings: readonly ArchetypeStampedFinding[];
+  findings: readonly PostableFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary: string;
@@ -74,7 +74,7 @@ export class PullRequestPoster {
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
     const inlinePosted: PostedFinding[] = [];
-    const summaryOnly: ArchetypeStampedFinding[] = [];
+    const summaryOnly: PostableFinding[] = [];
 
     for (const persisted of input.findings) {
       if (!isReviewedRepoAnchor(input.target, persisted.finding.anchor.repo)) {
@@ -124,7 +124,7 @@ export class PullRequestPoster {
 
 function buildReviewCommentInput(
   target: PullRequestTarget,
-  persisted: ArchetypeStampedFinding,
+  persisted: PostableFinding,
   siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
@@ -161,7 +161,7 @@ function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): bo
 
 function appendSummaryOnlyFindings(
   summary: string,
-  findings: readonly ArchetypeStampedFinding[],
+  findings: readonly PostableFinding[],
   siblingShas: SiblingShas,
 ): string {
   if (findings.length === 0) {
@@ -176,16 +176,14 @@ function appendSummaryOnlyFindings(
   ].join('\n\n');
 }
 
-function formatSummaryOnlyFinding(
-  { id, archetypeId, finding }: ArchetypeStampedFinding,
-  siblingShas: SiblingShas,
-): string {
+function formatSummaryOnlyFinding(postable: PostableFinding, siblingShas: SiblingShas): string {
+  const { finding } = postable;
   const parts = [
     formatFindingHeading(finding),
     `Anchor: ${formatAnchor(finding.anchor)}`,
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, archetypeId, finding, siblingShas),
+    ...formatFindingDetailSections(postable, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -199,15 +197,13 @@ function formatAnchor(anchor: Finding['anchor']): string {
   return `${anchor.repo}/${anchor.path}:${line}`;
 }
 
-export function formatFindingBody(
-  { id, archetypeId, finding }: ArchetypeStampedFinding,
-  siblingShas: SiblingShas,
-): string {
+export function formatFindingBody(postable: PostableFinding, siblingShas: SiblingShas): string {
+  const { finding } = postable;
   const parts = [
     formatFindingHeading(finding),
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, archetypeId, finding, siblingShas),
+    ...formatFindingDetailSections(postable, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -218,11 +214,10 @@ function formatFindingHeading(finding: Finding): string {
 }
 
 function formatFindingDetailSections(
-  id: string,
-  archetypeId: string | undefined,
-  finding: Finding,
+  postable: PostableFinding,
   siblingShas: SiblingShas,
 ): string[] {
+  const { id, finding } = postable;
   const parts: string[] = [];
 
   if (finding.suggestedFix !== undefined) {
@@ -231,7 +226,7 @@ function formatFindingDetailSections(
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
-  parts.push(formatCommentTrailer(id, archetypeId));
+  parts.push(formatCommentTrailer(id, postable.archetypeId));
 
   return parts;
 }

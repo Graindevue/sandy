@@ -36,6 +36,18 @@ describe('selectPostableFindings', () => {
       },
     ]);
   });
+
+  it('keeps pass-through Findings postable when learning assignment is unavailable', () => {
+    expect(
+      selectPostableFindings([
+        {
+          id: 'finding-1',
+          archetypeSuppressionWeight: 0,
+          finding: baseFinding,
+        },
+      ]),
+    ).toEqual([{ id: 'finding-1', finding: baseFinding }]);
+  });
 });
 
 function assignedFinding(id: string, archetypeSuppressionWeight: number): ArchetypeAssignedFinding {

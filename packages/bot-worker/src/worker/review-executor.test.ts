@@ -138,31 +138,6 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
-  it('posts findings without learning metadata when archetype assignment fails', async () => {
-    const store = new FakeExecutionStore(makeContext());
-    const poster = new FakePoster();
-    const executor = new ReviewExecutor({
-      store,
-      cloneManager: new FakeCloneManager(),
-      poster,
-      archetypeAssigner: new ThrowingArchetypeAssigner(),
-      diffInspector: { changedLineCount: async () => 42 },
-      runner: new FakeRunner(findingsOutput([finding], 'One issue.')),
-      resolveAgent: () => logicAgent,
-      now: nextNow([100, 200, 300]),
-    });
-
-    await executor.executeClaimedJob('job-1');
-
-    expect(store.recordedFindings).toEqual([
-      expect.objectContaining({ reviewJobId: 'job-1', pullRequestId: 'pr-1', finding }),
-    ]);
-    expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
-    expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
-    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
-    expect(store.failed).toEqual([]);
-  });
-
   it('runs selected Agents concurrently and records each Agent result', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const cloneManager = new FakeCloneManager();
@@ -902,12 +877,6 @@ class FakeArchetypeAssigner implements ReviewArchetypeAssigner {
       archetypeId: `archetype-${index + 1}`,
       archetypeSuppressionWeight: this.suppressionWeights[index] ?? 0,
     }));
-  }
-}
-
-class ThrowingArchetypeAssigner implements ReviewArchetypeAssigner {
-  async assignArchetypes(): Promise<ArchetypeAssignedFinding[]> {
-    throw new Error('Ollama embedding request failed: connect ECONNREFUSED 127.0.0.1:11434');
   }
 }
 

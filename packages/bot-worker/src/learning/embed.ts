@@ -1,4 +1,4 @@
-const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
+export const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
 const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
 const NOMIC_EMBED_TEXT_DIMENSIONS = 768;
 

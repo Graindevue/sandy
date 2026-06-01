@@ -51,7 +51,10 @@ Stored in Convex; persists across PRs for learning purposes.
 
 ## Archetype
 
-A cluster of Findings that are semantically similar. Identified via embedding similarity (cosine > 0.85) on Finding summaries using `text-embedding-3-small`. Carries a `suppressionWeight` that the Synthesizer applies at posting time. Mutable state in Convex — not version-controlled.
+A cluster of Findings that are semantically similar. Identified via embedding
+similarity (cosine > 0.85) on Finding summaries using local Ollama
+`nomic-embed-text`. Carries a `suppressionWeight` that the Synthesizer applies at
+posting time. Mutable state in Convex — not version-controlled.
 
 ## Rule
 
@@ -105,7 +108,11 @@ A 👍 or 👎 emoji reaction (or a reply, or an inferred merge-state signal) at
 
 ## Comment Trailer
 
-The HTML comment `<!-- bot:finding=<id> archetype=<id> -->` Sandy appends to every posted Finding. Lets the reaction webhook map back to records. Load-bearing — do not remove.
+The HTML comment Sandy appends to every posted Finding. The full learning
+trailer is `<!-- bot:finding=<id> archetype=<id> -->`; if learning assignment is
+temporarily unavailable, Sandy still emits `<!-- bot:finding=<id> -->` so the
+reaction webhook can map feedback back to the Finding. Load-bearing — do not
+remove.
 
 ## Sticky Opt-In
 

@@ -1,8 +1,5 @@
 import type { Confidence, Finding, FindingsPayload } from '@sandy/shared-types';
-import type {
-  ArchetypeAssignedFinding,
-  ArchetypeStampedFinding,
-} from '../worker/review-findings.js';
+import type { ArchetypeAssignedFinding, PostableFinding } from '../worker/review-findings.js';
 import { type DedupFindingsOptions, dedupeFindings } from './dedup.js';
 import { computeConfidenceScore } from './score.js';
 import { type AgentCrossRepoSearchSummary, buildReviewSummary } from './summary.js';
@@ -42,7 +39,7 @@ export interface SynthesizedReview {
 }
 
 export interface PostableReview {
-  findings: ArchetypeStampedFinding[];
+  findings: PostableFinding[];
   summary: string;
 }
 

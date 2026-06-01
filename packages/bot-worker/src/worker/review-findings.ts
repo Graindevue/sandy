@@ -6,9 +6,15 @@ export interface PersistedFinding {
 }
 
 export interface ArchetypeStampedFinding extends PersistedFinding {
-  archetypeId?: string;
+  archetypeId: string;
 }
 
-export interface ArchetypeAssignedFinding extends ArchetypeStampedFinding {
-  archetypeSuppressionWeight: number;
+export interface UnassignedFinding extends PersistedFinding {
+  archetypeId?: never;
 }
+
+export type ArchetypeAssignedFinding = (ArchetypeStampedFinding | UnassignedFinding) & {
+  archetypeSuppressionWeight: number;
+};
+
+export type PostableFinding = ArchetypeStampedFinding | UnassignedFinding;

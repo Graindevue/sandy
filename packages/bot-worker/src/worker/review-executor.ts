@@ -31,8 +31,8 @@ import type {
 } from './poster.js';
 import type {
   ArchetypeAssignedFinding,
-  ArchetypeStampedFinding,
   PersistedFinding,
+  PostableFinding,
 } from './review-findings.js';
 import {
   materializeReviewWorkspace,
@@ -556,7 +556,8 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const archetypeAssignedFindings = await this.#assignArchetypesOrPassThrough(persistedFindings);
+    const archetypeAssignedFindings =
+      await this.#archetypeAssigner.assignArchetypes(persistedFindings);
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
     const postable = synthesizePostableReview({
       archetypeAssignedFindings,
@@ -572,23 +573,9 @@ export class ReviewExecutor {
     );
   }
 
-  async #assignArchetypesOrPassThrough(
-    findings: readonly PersistedFinding[],
-  ): Promise<ArchetypeAssignedFinding[]> {
-    try {
-      return await this.#archetypeAssigner.assignArchetypes(findings);
-    } catch (error) {
-      console.warn(
-        'Skipping Finding archetype assignment; posting review without learning metadata',
-        error,
-      );
-      return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
-    }
-  }
-
   async #postReviewResult(
     target: PullRequestTarget,
-    findings: ArchetypeStampedFinding[],
+    findings: PostableFinding[],
     siblingShas: SiblingShas,
     summary: string,
   ): Promise<void> {

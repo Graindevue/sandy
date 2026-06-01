@@ -11,16 +11,42 @@ export interface ArchetypeAssignmentStore {
   }): Promise<{ archetypeId: string; suppressionWeight: number }>;
 }
 
+export interface FindingArchetypeAssignerLogger {
+  warn(message: string, ...args: unknown[]): void;
+}
+
+const defaultLogger: FindingArchetypeAssignerLogger = console;
+
 export class FindingArchetypeAssigner {
   readonly #embedder: FindingSummaryEmbedder;
   readonly #store: ArchetypeAssignmentStore;
+  readonly #logger: FindingArchetypeAssignerLogger;
 
-  constructor(embedder: FindingSummaryEmbedder, store: ArchetypeAssignmentStore) {
+  constructor(
+    embedder: FindingSummaryEmbedder,
+    store: ArchetypeAssignmentStore,
+    options: { logger?: FindingArchetypeAssignerLogger } = {},
+  ) {
     this.#embedder = embedder;
     this.#store = store;
+    this.#logger = options.logger ?? defaultLogger;
   }
 
   async assignArchetypes(
+    findings: readonly PersistedFinding[],
+  ): Promise<ArchetypeAssignedFinding[]> {
+    try {
+      return await this.#assignAllArchetypes(findings);
+    } catch (error) {
+      this.#logger.warn(
+        'Skipping Finding archetype assignment; posting review without learning metadata',
+        error,
+      );
+      return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
+    }
+  }
+
+  async #assignAllArchetypes(
     findings: readonly PersistedFinding[],
   ): Promise<ArchetypeAssignedFinding[]> {
     const stamped: ArchetypeAssignedFinding[] = [];
