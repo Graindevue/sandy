@@ -65,23 +65,22 @@ worker's `CONVEX_URL` at whichever deployment you intend to run against.
 
 ## 3. What gets deployed
 
-The Phase 1 schema and the worker's mutations/queries — six tables, plus
-`enqueue`/`claim`/`record`-style functions — are inventoried in the package's own
+The schema tables and the worker's mutations/queries — `enqueue`/`claim`/
+`record`-style functions — are inventoried in the package's own
 [`README.md`](../../packages/convex-backend/README.md) and
 [`convex/schema.ts`](../../packages/convex-backend/convex/schema.ts). This doc
-deploys them; it doesn't restate the list.
+deploys them; it doesn't restate the list. Phase 3 learning-loop tables
+(`archetypes`, `reactions`, and `suggestedRules`) are present; their functions
+ship in later Phase 3 slices.
 
-Two scoping notes to set expectations: the Archetype, Reaction, and
-SuggestedRule tables are **not** in this schema — they arrive in Phase 3 with the
-learning loop. The `reapStuckJobs` cron does ship in Phase 1 operational
-hardening: it runs every 5 minutes and marks ReviewJobs left `running` for more
-than 30 minutes as `failed`.
+The `reapStuckJobs` cron runs every 5 minutes and marks ReviewJobs left
+`running` for more than 30 minutes as `failed`.
 
 ## 4. Verify
 
 The Convex dashboard (`npx convex dashboard` from
-`packages/convex-backend`, or <https://dashboard.convex.dev>) should show the six
-tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
+`packages/convex-backend`, or <https://dashboard.convex.dev>) should show the
+schema tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
 functions under **Functions**, plus the `reapStuckJobs` cron under **Cron Jobs**.
 The tables are empty until Sandy observes its first PR.
 
