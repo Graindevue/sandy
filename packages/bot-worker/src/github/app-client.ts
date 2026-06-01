@@ -1,6 +1,11 @@
 import { createSign } from 'node:crypto';
 import { isIgnoredPath } from '../config/ignore.js';
 import type {
+  MergeStateCommit,
+  MergeStateCommitFile,
+  MergeStateGitHub,
+} from '../learning/merge-state-inferrer.js';
+import type {
   CommentReaction,
   ReactionCaptureComment,
   ReactionCaptureCommentKind,
@@ -36,7 +41,12 @@ const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export class GitHubAppClient
-  implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver, ReactionCaptureGitHub
+  implements
+    GitHubReviewPoster,
+    ReviewDiffInspector,
+    PullRequestResolver,
+    ReactionCaptureGitHub,
+    MergeStateGitHub
 {
   readonly #appId: string;
   readonly #privateKey: string;
@@ -183,6 +193,30 @@ export class GitHubAppClient
       }
       return await this.#listReactionsByKind(input.repo, input.commentId, 'issue_comment');
     }
+  }
+
+  async listPullRequestCommits(input: {
+    repo: RepoRef;
+    pullNumber: number;
+  }): Promise<MergeStateCommit[]> {
+    const raw = await this.#listPaginated<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/commits`,
+    );
+    return raw.map(parsePullRequestCommit).filter(isDefined);
+  }
+
+  async listCommitFiles(input: {
+    repo: RepoRef;
+    commitSha: string;
+  }): Promise<MergeStateCommitFile[]> {
+    const raw = await this.#installationRequest<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/commits/${input.commitSha}`,
+    );
+    return parseCommitFiles(raw);
   }
 
   async cloneUrlForRepo(repo: RepoForWorktree): Promise<string> {
@@ -423,10 +457,14 @@ function parseReactionCaptureComment(
   if (typeof raw !== 'object' || raw === null) {
     return undefined;
   }
-  const object = raw as { id?: unknown; body?: unknown };
-  return typeof object.id === 'number' && typeof object.body === 'string'
+  const object = raw as { id?: unknown; body?: unknown; created_at?: unknown };
+  if (typeof object.id !== 'number' || typeof object.body !== 'string') {
+    return undefined;
+  }
+  const createdAt = parseTimestamp(object.created_at);
+  return createdAt === undefined
     ? { id: object.id, body: object.body, kind }
-    : undefined;
+    : { id: object.id, body: object.body, kind, createdAt };
 }
 
 function parseCommentReaction(raw: unknown): CommentReaction | undefined {
@@ -435,6 +473,56 @@ function parseCommentReaction(raw: unknown): CommentReaction | undefined {
   }
   const content = (raw as { content?: unknown }).content;
   return typeof content === 'string' ? { content } : undefined;
+}
+
+function parsePullRequestCommit(raw: unknown): MergeStateCommit | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as {
+    sha?: unknown;
+    commit?: { committer?: { date?: unknown }; author?: { date?: unknown } };
+  };
+  if (typeof object.sha !== 'string') {
+    return undefined;
+  }
+  const committedAt =
+    parseTimestamp(object.commit?.committer?.date) ?? parseTimestamp(object.commit?.author?.date);
+  return committedAt === undefined ? undefined : { sha: object.sha, committedAt };
+}
+
+function parseCommitFiles(raw: unknown): MergeStateCommitFile[] {
+  if (typeof raw !== 'object' || raw === null) {
+    return [];
+  }
+  const files = (raw as { files?: unknown }).files;
+  return Array.isArray(files) ? files.map(parseCommitFile).filter(isDefined) : [];
+}
+
+function parseCommitFile(raw: unknown): MergeStateCommitFile | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as { filename?: unknown; previous_filename?: unknown; patch?: unknown };
+  if (typeof object.filename !== 'string') {
+    return undefined;
+  }
+  const file: MergeStateCommitFile = { filename: object.filename };
+  if (typeof object.previous_filename === 'string') {
+    file.previousFilename = object.previous_filename;
+  }
+  if (typeof object.patch === 'string') {
+    file.patch = object.patch;
+  }
+  return file;
+}
+
+function parseTimestamp(raw: unknown): number | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const timestamp = Date.parse(raw);
+  return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
 function isDefined<T>(value: T | undefined): value is T {

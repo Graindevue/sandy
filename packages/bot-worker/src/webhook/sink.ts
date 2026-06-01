@@ -2,6 +2,11 @@ import { api } from '@sandy/convex-backend/api';
 import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ConvexHttpClient } from 'convex/browser';
 import type {
+  MergeStateReactionKind,
+  MergeStateStore,
+  MergeStateTarget,
+} from '../learning/merge-state-inferrer.js';
+import type {
   CapturedReactionKind,
   ReactionCaptureStore,
   ReactionTarget,
@@ -66,7 +71,7 @@ export interface EnqueueSupersedingResult {
  * the `as never` casts re-brand them to the generated `Id<…>` types the API
  * expects (a Convex client convention — runtime ids are plain strings).
  */
-export class ConvexSink implements ReviewSink, ReactionCaptureStore {
+export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateStore {
   readonly #client: ConvexHttpClient;
 
   constructor(client: ConvexHttpClient) {
@@ -153,6 +158,47 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore {
     await this.#client.mutation(api.reactions.recordReaction, {
       findingId: input.findingId as never,
       kind: input.kind,
+    });
+  }
+
+  async listMergeStateTargetsForPr(pullRequestId: string): Promise<MergeStateTarget[]> {
+    const findings = await this.#client.query(api.findings.listForPr, {
+      pullRequestId: pullRequestId as never,
+    });
+    return findings.map((finding) =>
+      finding.githubCommentId === undefined
+        ? { findingId: finding._id, anchor: finding.anchor }
+        : {
+            findingId: finding._id,
+            githubCommentId: finding.githubCommentId,
+            anchor: finding.anchor,
+          },
+    );
+  }
+
+  async recordMergeStateReaction(input: {
+    findingId: string;
+    kind: MergeStateReactionKind;
+  }): Promise<boolean> {
+    return await this.#client.mutation(api.reactions.recordMergeStateReaction, {
+      findingId: input.findingId as never,
+      kind: input.kind,
+    });
+  }
+
+  async listMergedPullRequestsForMergeStateBackfill(
+    limit: number,
+  ): Promise<Array<{ pullRequestId: string; repo: RepoRef; pullNumber: number }>> {
+    return await this.#client.query(api.pullRequests.listMergedForMergeStateBackfill, { limit });
+  }
+
+  async markMergeStateSignalsRolledUp(input: {
+    pullRequestId: string;
+    rolledUpAt: number;
+  }): Promise<void> {
+    await this.#client.mutation(api.pullRequests.markMergeStateSignalsRolledUp, {
+      pullRequestId: input.pullRequestId as never,
+      rolledUpAt: input.rolledUpAt,
     });
   }
 }

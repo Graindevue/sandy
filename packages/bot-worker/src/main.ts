@@ -18,6 +18,10 @@ import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { FindingArchetypeAssigner } from './learning/archetype-assigner.js';
 import { OpenAIFindingEmbedder } from './learning/embed.js';
+import {
+  inferPrMergeStateSignals,
+  startMergeStateSignalCron,
+} from './learning/merge-state-inferrer.js';
 import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
@@ -164,6 +168,7 @@ export async function main(): Promise<void> {
     appId: config.githubAppId,
     privateKey: await readPrivateKey(repoRoot, config.githubPrivateKeyPath),
   });
+  startMergeStateSignalCron({ store: sink, github, logger: console });
   const cloneManager = new CloneManager({
     baseDir: defaultCloneBaseDir(process.env),
     cloneUrl: (repo) => github.cloneUrlForRepo(repo),
@@ -225,14 +230,27 @@ export async function main(): Promise<void> {
       },
     },
     reactionCapturer: {
-      async capturePrCloseReactions({ repo, pullNumber, pullRequestId }) {
-        return await captureCloseReactions({
+      async capturePrCloseReactions({ repo, pullNumber, pullRequestId, merged }) {
+        const closeReactions = await captureCloseReactions({
           repo,
           pullNumber,
           pullRequestId,
           store: sink,
           github,
         });
+        if (!merged) {
+          return closeReactions;
+        }
+
+        const mergeState = await inferPrMergeStateSignals({
+          repo,
+          pullNumber,
+          pullRequestId,
+          store: sink,
+          github,
+        });
+        await sink.markMergeStateSignalsRolledUp({ pullRequestId, rolledUpAt: Date.now() });
+        return { recorded: closeReactions.recorded + mergeState.recorded };
       },
     },
   });

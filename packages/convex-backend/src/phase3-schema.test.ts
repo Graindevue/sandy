@@ -33,6 +33,12 @@ describe('Phase 3 Convex schema foundation', () => {
     expectIndexes(table('findings'), [
       { indexDescriptor: 'by_archetype', fields: ['archetypeId'] },
     ]);
+    expectIndexes(table('pullRequests'), [
+      {
+        indexDescriptor: 'by_state_and_merge_state_signals_rolled_up_at',
+        fields: ['state', 'mergeStateSignalsRolledUpAt'],
+      },
+    ]);
   });
 
   it('defines learning-loop table fields and Finding extensions', () => {
@@ -46,6 +52,9 @@ describe('Phase 3 Convex schema foundation', () => {
     for (const tableName of learningLoopTables) {
       expect(table(tableName).documentType.value).not.toHaveProperty('createdAt');
     }
+    expect(table('pullRequests').documentType.value.mergeStateSignalsRolledUpAt).toEqual(
+      optional({ type: 'number' }),
+    );
   });
 });
 

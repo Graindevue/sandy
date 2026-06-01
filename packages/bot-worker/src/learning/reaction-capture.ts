@@ -13,6 +13,7 @@ export interface ReactionCaptureComment {
   id: number;
   body: string;
   kind: ReactionCaptureCommentKind;
+  createdAt?: number;
 }
 
 export interface CommentReaction {

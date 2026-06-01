@@ -86,6 +86,43 @@ export const get = query({
   },
 });
 
+/** Merged PRs whose passive merge-state signals have not been rolled up yet. */
+export const listMergedForMergeStateBackfill = query({
+  args: { limit: v.optional(v.number()) },
+  returns: v.array(
+    v.object({
+      pullRequestId: v.id('pullRequests'),
+      repo: v.object({ owner: v.string(), name: v.string() }),
+      pullNumber: v.number(),
+    }),
+  ),
+  handler: async (ctx, { limit }) => {
+    const pullRequests = await ctx.db
+      .query('pullRequests')
+      .withIndex('by_state_and_merge_state_signals_rolled_up_at', (q) =>
+        q.eq('state', 'merged').eq('mergeStateSignalsRolledUpAt', undefined),
+      )
+      .take(clampBackfillLimit(limit));
+
+    const result: Array<{
+      pullRequestId: (typeof pullRequests)[number]['_id'];
+      repo: { owner: string; name: string };
+      pullNumber: number;
+    }> = [];
+    for (const pullRequest of pullRequests) {
+      const repo = await ctx.db.get(pullRequest.repoId);
+      if (repo !== null) {
+        result.push({
+          pullRequestId: pullRequest._id,
+          repo: { owner: repo.owner, name: repo.name },
+          pullNumber: pullRequest.number,
+        });
+      }
+    }
+    return result;
+  },
+});
+
 /** Set the Sticky Opt-In `reviewActive` flag for a PR. */
 export const setReviewActive = mutation({
   args: { pullRequestId: v.id('pullRequests'), active: v.boolean() },
@@ -101,7 +138,24 @@ export const clearOnClose = mutation({
   args: { pullRequestId: v.id('pullRequests') },
   returns: v.null(),
   handler: async (ctx, { pullRequestId }) => {
-    await ctx.db.patch(pullRequestId, { state: 'closed', reviewActive: false });
+    await ctx.db.patch(pullRequestId, { reviewActive: false });
     return null;
   },
 });
+
+/** Mark that merge-state inference completed for a merged PR. */
+export const markMergeStateSignalsRolledUp = mutation({
+  args: { pullRequestId: v.id('pullRequests'), rolledUpAt: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { pullRequestId, rolledUpAt }) => {
+    await ctx.db.patch(pullRequestId, { mergeStateSignalsRolledUpAt: rolledUpAt });
+    return null;
+  },
+});
+
+function clampBackfillLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    return 25;
+  }
+  return Math.min(Math.max(Math.trunc(limit), 1), 100);
+}

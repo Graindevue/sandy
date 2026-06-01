@@ -39,6 +39,7 @@ export interface PrCloseReactionCapturer {
     repo: RepoRef;
     pullNumber: number;
     pullRequestId: string;
+    merged: boolean;
   }): Promise<{ recorded: number } | undefined>;
 }
 
@@ -106,6 +107,7 @@ export async function dispatchEvent(
       repo,
       pullNumber: pr.number,
       pullRequestId,
+      merged: pr.state === 'merged',
     });
     if (captureResult !== undefined) {
       logger.info(

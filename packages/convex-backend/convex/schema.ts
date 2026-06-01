@@ -50,7 +50,13 @@ export default defineSchema({
     author: v.string(),
     url: v.string(),
     reviewActive: v.boolean(),
-  }).index('by_repo_and_number', ['repoId', 'number']),
+    mergeStateSignalsRolledUpAt: v.optional(v.number()),
+  })
+    .index('by_repo_and_number', ['repoId', 'number'])
+    .index('by_state_and_merge_state_signals_rolled_up_at', [
+      'state',
+      'mergeStateSignalsRolledUpAt',
+    ]),
 
   reviewJobs: defineTable({
     pullRequestId: v.id('pullRequests'),

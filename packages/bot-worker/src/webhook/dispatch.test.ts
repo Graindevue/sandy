@@ -190,7 +190,12 @@ describe('dispatchEvent', () => {
 
   it('captures bot comment reactions when a PR closes', async () => {
     const sink = new FakeSink(true);
-    const captured: Array<{ repo: RepoRef; pullNumber: number; pullRequestId: string }> = [];
+    const captured: Array<{
+      repo: RepoRef;
+      pullNumber: number;
+      pullRequestId: string;
+      merged: boolean;
+    }> = [];
 
     const outcome = await dispatchEvent(pr('closed'), sink, silentLogger, {
       reactionCapturer: {
@@ -207,9 +212,27 @@ describe('dispatchEvent', () => {
         repo: BASE_REPO,
         pullNumber: 7,
         pullRequestId: 'pr:repo:tony-co/sandy#7',
+        merged: false,
       },
     ]);
     expect(sink.clearCalls).toEqual(['pr:repo:tony-co/sandy#7']);
+  });
+
+  it('tells the close-time capture pass when the PR was merged', async () => {
+    const sink = new FakeSink(true);
+    const captured: Array<{ merged: boolean }> = [];
+
+    await dispatchEvent(pr('closed', { state: 'merged' }), sink, silentLogger, {
+      reactionCapturer: {
+        async capturePrCloseReactions(input) {
+          captured.push({ merged: input.merged });
+          return { recorded: 0 };
+        },
+      },
+    });
+
+    expect(captured).toEqual([{ merged: true }]);
+    expect(sink.upserts[0]?.state).toBe('merged');
   });
 
   // AC: a fork PR is declined with a documented-limitation message, not reviewed.

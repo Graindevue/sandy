@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { record as recordAgentRun } from '../convex/agentRuns.js';
 import { listForPr, recordFinding, recordSynthesizedReview } from '../convex/findings.js';
+import { clearOnClose } from '../convex/pullRequests.js';
 import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
 
 describe('Phase 2 Convex schema handlers', () => {
@@ -151,6 +152,28 @@ describe('Phase 2 Convex schema handlers', () => {
           searchedRepos: ['acme/consumer'],
         },
       }),
+    );
+  });
+
+  it('clears reviewActive without clobbering a merged PR state', async () => {
+    const ctx = fakeCtx();
+    const pullRequestId = await ctx.db.insert('pullRequests', {
+      repoId: 'repos:1',
+      number: 12,
+      state: 'merged',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'PR',
+      author: 'octocat',
+      url: 'https://example.test/pr/12',
+      reviewActive: true,
+    });
+
+    await invoke(clearOnClose, ctx, { pullRequestId });
+
+    expect(ctx.db.getDoc(pullRequestId)).toEqual(
+      expect.objectContaining({ state: 'merged', reviewActive: false }),
     );
   });
 });
