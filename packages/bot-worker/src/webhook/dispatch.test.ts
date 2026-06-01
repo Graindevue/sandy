@@ -188,6 +188,30 @@ describe('dispatchEvent', () => {
     expect(sink.upserts[0]?.state).toBe('closed');
   });
 
+  it('captures bot comment reactions when a PR closes', async () => {
+    const sink = new FakeSink(true);
+    const captured: Array<{ repo: RepoRef; pullNumber: number; pullRequestId: string }> = [];
+
+    const outcome = await dispatchEvent(pr('closed'), sink, silentLogger, {
+      reactionCapturer: {
+        async capturePrCloseReactions(input) {
+          captured.push(input);
+          return { recorded: 1 };
+        },
+      },
+    });
+
+    expect(outcome).toMatchObject({ action: 'cleared' });
+    expect(captured).toEqual([
+      {
+        repo: BASE_REPO,
+        pullNumber: 7,
+        pullRequestId: 'pr:repo:tony-co/sandy#7',
+      },
+    ]);
+    expect(sink.clearCalls).toEqual(['pr:repo:tony-co/sandy#7']);
+  });
+
   // AC: a fork PR is declined with a documented-limitation message, not reviewed.
   it('declines a fork PR on mention without upserting or enqueuing', async () => {
     const warn = vi.fn();

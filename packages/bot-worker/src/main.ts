@@ -16,6 +16,7 @@ import {
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
+import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
 import { ReviewCancellationCoordinator } from './worker/cancellation.js';
@@ -210,6 +211,17 @@ export async function main(): Promise<void> {
           repo: repo.name,
           issueNumber: pullNumber,
           body,
+        });
+      },
+    },
+    reactionCapturer: {
+      async capturePrCloseReactions({ repo, pullNumber, pullRequestId }) {
+        return await captureCloseReactions({
+          repo,
+          pullNumber,
+          pullRequestId,
+          store: sink,
+          github,
         });
       },
     },

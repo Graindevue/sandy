@@ -1,6 +1,11 @@
 import { api } from '@sandy/convex-backend/api';
 import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ConvexHttpClient } from 'convex/browser';
+import type {
+  CapturedReactionKind,
+  ReactionCaptureStore,
+  ReactionTarget,
+} from '../learning/reaction-capture.js';
 import type { RepoRef } from './events.js';
 
 /**
@@ -61,7 +66,7 @@ export interface EnqueueSupersedingResult {
  * the `as never` casts re-brand them to the generated `Id<…>` types the API
  * expects (a Convex client convention — runtime ids are plain strings).
  */
-export class ConvexSink implements ReviewSink {
+export class ConvexSink implements ReviewSink, ReactionCaptureStore {
   readonly #client: ConvexHttpClient;
 
   constructor(client: ConvexHttpClient) {
@@ -131,5 +136,23 @@ export class ConvexSink implements ReviewSink {
       agentKeys: input.agentKeys,
       supersededAt: Date.now(),
     })) as EnqueueSupersedingResult;
+  }
+
+  async listReactionTargetsForPr(pullRequestId: string): Promise<ReactionTarget[]> {
+    const findings = await this.#client.query(api.findings.listForPr, {
+      pullRequestId: pullRequestId as never,
+    });
+    return findings.map((finding) =>
+      finding.githubCommentId === undefined
+        ? { findingId: finding._id }
+        : { findingId: finding._id, githubCommentId: finding.githubCommentId },
+    );
+  }
+
+  async recordReaction(input: { findingId: string; kind: CapturedReactionKind }): Promise<void> {
+    await this.#client.mutation(api.reactions.recordReaction, {
+      findingId: input.findingId as never,
+      kind: input.kind,
+    });
   }
 }
