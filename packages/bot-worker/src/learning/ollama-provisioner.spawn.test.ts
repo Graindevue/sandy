@@ -1,4 +1,4 @@
-import { type ChildProcess, execFile, spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,14 +7,12 @@ vi.mock('node:child_process', async () => {
 
   return {
     ...actual,
-    execFile: vi.fn(),
     spawn: vi.fn(),
   };
 });
 
 import { provisionOllamaEmbeddingBackend } from './ollama-provisioner.js';
 
-const mockExecFile = vi.mocked(execFile);
 const mockSpawn = vi.mocked(spawn);
 
 describe('provisionOllamaEmbeddingBackend default daemon start', () => {
@@ -22,41 +20,51 @@ describe('provisionOllamaEmbeddingBackend default daemon start', () => {
     vi.clearAllMocks();
   });
 
-  it('starts ollama serve with the resolved OLLAMA_HOST', async () => {
-    mockExecFile.mockImplementation(((binary, args, callback) => {
-      expect(binary).toBe('ollama');
-      expect(args).toEqual(['--version']);
-      callback?.(null, '', '');
-      return fakeDaemon();
-    }) as typeof execFile);
+  it('starts ollama serve with the resolved OLLAMA_HOST and inherited environment', async () => {
     mockSpawn.mockReturnValue(fakeDaemon());
+    const passthroughKey = 'SANDY_OLLAMA_PROVISIONER_TEST';
+    const previousPassthroughValue = process.env[passthroughKey];
+    process.env[passthroughKey] = 'preserved';
 
-    let tagsAttempts = 0;
-    const result = await provisionOllamaEmbeddingBackend({
-      host: 'http://127.0.0.1:11555/',
-      fetch: async (input) => {
-        expect(input).toBe('http://127.0.0.1:11555/api/tags');
-        tagsAttempts += 1;
-        if (tagsAttempts === 1) {
-          throw new Error('connect ECONNREFUSED 127.0.0.1:11555');
-        }
-        return tagsResponse(['nomic-embed-text:latest']);
-      },
-      logger: new FakeLogger(),
-      retryDelaysMs: [1],
-      sleep: async () => {},
-    });
+    try {
+      let tagsAttempts = 0;
+      const result = await provisionOllamaEmbeddingBackend({
+        host: 'http://127.0.0.1:11555/',
+        fetch: async (input) => {
+          expect(input).toBe('http://127.0.0.1:11555/api/tags');
+          tagsAttempts += 1;
+          if (tagsAttempts === 1) {
+            throw new Error('connect ECONNREFUSED 127.0.0.1:11555');
+          }
+          return tagsResponse(['nomic-embed-text:latest']);
+        },
+        logger: new FakeLogger(),
+        retryDelaysMs: [1],
+        runOllamaVersion: async () => {},
+        sleep: async () => {},
+      });
 
-    expect(result.ready).toBe(true);
-    expect(mockSpawn).toHaveBeenCalledWith(
-      'ollama',
-      ['serve'],
-      expect.objectContaining({
-        detached: true,
-        env: expect.objectContaining({ OLLAMA_HOST: 'http://127.0.0.1:11555' }),
-        stdio: 'ignore',
-      }),
-    );
+      expect(result.ready).toBe(true);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'ollama',
+        ['serve'],
+        expect.objectContaining({
+          detached: true,
+          env: expect.objectContaining({
+            OLLAMA_HOST: 'http://127.0.0.1:11555',
+            [passthroughKey]: 'preserved',
+          }),
+          stdio: 'ignore',
+        }),
+      );
+    } finally {
+      if (previousPassthroughValue === undefined) {
+        delete process.env[passthroughKey];
+      } else {
+        process.env[passthroughKey] = previousPassthroughValue;
+      }
+    }
   });
 });
 
