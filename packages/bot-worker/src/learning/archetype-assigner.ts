@@ -42,7 +42,7 @@ export class FindingArchetypeAssigner {
         'Skipping Finding archetype assignment; posting review without learning metadata',
         error,
       );
-      return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
+      return withoutArchetypeMetadata(findings);
     }
   }
 
@@ -64,10 +64,16 @@ export class FindingArchetypeAssigner {
   }
 }
 
-export class DisabledArchetypeAssigner {
+export const disabledArchetypeAssigner = {
   async assignArchetypes(
     findings: readonly PersistedFinding[],
   ): Promise<ArchetypeAssignedFinding[]> {
-    return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
-  }
+    return withoutArchetypeMetadata(findings);
+  },
+};
+
+function withoutArchetypeMetadata(
+  findings: readonly PersistedFinding[],
+): ArchetypeAssignedFinding[] {
+  return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
 }

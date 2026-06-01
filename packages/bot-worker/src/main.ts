@@ -17,7 +17,7 @@ import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import {
-  DisabledArchetypeAssigner,
+  disabledArchetypeAssigner,
   FindingArchetypeAssigner,
 } from './learning/archetype-assigner.js';
 import { DEFAULT_OLLAMA_HOST, OllamaFindingEmbedder } from './learning/embed.js';
@@ -206,7 +206,7 @@ export async function main(): Promise<void> {
         new OllamaFindingEmbedder({ host: ollama.host, model: ollama.model }),
         executionStore,
       )
-    : new DisabledArchetypeAssigner();
+    : disabledArchetypeAssigner;
   const executor = new ReviewExecutor({
     store: executionStore,
     cloneManager,

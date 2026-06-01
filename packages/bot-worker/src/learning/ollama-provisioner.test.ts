@@ -28,6 +28,15 @@ describe('provisionOllamaEmbeddingBackend', () => {
     expect(logger.warnings).toEqual([]);
   });
 
+  it('recognizes model identifiers from the Ollama tags response', async () => {
+    const result = await provisionOllamaEmbeddingBackend({
+      fetch: async () => tagsResponse([{ model: 'nomic-embed-text:latest' }]),
+      logger: new FakeLogger(),
+    });
+
+    expect(result.ready).toBe(true);
+  });
+
   it('pulls nomic-embed-text when Ollama is reachable but the model is missing', async () => {
     const logger = new FakeLogger();
     const calls: Array<{ url: string; body: unknown }> = [];
@@ -138,10 +147,10 @@ describe('provisionOllamaEmbeddingBackend', () => {
   });
 });
 
-function tagsResponse(models: string[]): Response {
+function tagsResponse(models: Array<string | { name?: string; model?: string }>): Response {
   return new Response(
     JSON.stringify({
-      models: models.map((name) => ({ name })),
+      models: models.map((model) => (typeof model === 'string' ? { name: model } : model)),
     }),
     { status: 200 },
   );

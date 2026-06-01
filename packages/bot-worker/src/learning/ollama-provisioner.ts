@@ -1,27 +1,16 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { setTimeout as defaultSleep } from 'node:timers/promises';
-import { TextDecoder } from 'node:util';
 import { normalizeOllamaHost, OLLAMA_EMBEDDING_MODEL } from './embed.js';
+import {
+  type FetchLike,
+  hasOllamaModel,
+  type OllamaModelNamesResult,
+  pullOllamaModel,
+  readOllamaModelNames,
+} from './ollama-api.js';
 
 const OLLAMA_BINARY = 'ollama';
 const DEFAULT_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000] as const;
-
-type FetchLike = typeof fetch;
-
-interface OllamaTagsResponse {
-  models?: unknown;
-}
-
-interface OllamaModel {
-  name?: string;
-  model?: string;
-}
-
-interface TagsResult {
-  ok: boolean;
-  models?: OllamaModel[];
-  error?: string;
-}
 
 export type OllamaProvisioningResult =
   | {
@@ -73,8 +62,8 @@ export async function provisionOllamaEmbeddingBackend(
   const runOllamaVersion = options.runOllamaVersion ?? defaultRunOllamaVersion;
   const startOllama = options.startOllama ?? defaultStartOllama;
 
-  let tags = await readTags(fetcher, host);
-  if (!tags.ok) {
+  let models = await readOllamaModelNames(fetcher, host);
+  if (!models.ok) {
     const binaryAvailable = await hasOllamaBinary(binary, runOllamaVersion);
     if (!binaryAvailable) {
       const reason = '`ollama` binary not found on PATH';
@@ -91,25 +80,25 @@ export async function provisionOllamaEmbeddingBackend(
       return disabled(host, model, started.reason, logger);
     }
 
-    tags = await waitForTags({
+    models = await waitForModelNames({
       fetcher,
       host,
       retryDelaysMs,
       sleep,
     });
-    if (!tags.ok) {
+    if (!models.ok) {
       return disabled(
         host,
         model,
-        `Ollama did not become reachable at ${host}: ${tags.error ?? 'unknown error'}`,
+        `Ollama did not become reachable at ${host}: ${models.error}`,
         logger,
       );
     }
   }
 
-  if (!hasModel(tags.models ?? [], model)) {
+  if (!hasOllamaModel(models.modelNames, model)) {
     logger.info(`Ollama model ${model} is missing; pulling it now.`);
-    const pulled = await pullModel({ fetcher, host, model, logger });
+    const pulled = await pullOllamaModel({ fetcher, host, model, logger });
     if (!pulled.ok) {
       return disabled(host, model, pulled.reason, logger);
     }
@@ -128,174 +117,24 @@ function disabled(
   return { ready: false, host, model, reason };
 }
 
-async function waitForTags(input: {
+async function waitForModelNames(input: {
   fetcher: FetchLike;
   host: string;
   retryDelaysMs: readonly number[];
   sleep: (ms: number) => Promise<void>;
-}): Promise<TagsResult> {
-  let lastResult: TagsResult = { ok: false, error: 'Ollama did not become reachable' };
+}): Promise<OllamaModelNamesResult> {
+  let lastResult: OllamaModelNamesResult = {
+    ok: false,
+    error: 'Ollama did not become reachable',
+  };
   for (const delayMs of input.retryDelaysMs) {
     await input.sleep(delayMs);
-    lastResult = await readTags(input.fetcher, input.host);
+    lastResult = await readOllamaModelNames(input.fetcher, input.host);
     if (lastResult.ok) {
       return lastResult;
     }
   }
   return lastResult;
-}
-
-async function readTags(fetcher: FetchLike, host: string): Promise<TagsResult> {
-  try {
-    const response = await fetcher(`${host}/api/tags`);
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: `Ollama tags request failed with ${response.status}: ${await response.text()}`,
-      };
-    }
-    const body = (await response.json()) as OllamaTagsResponse;
-    return { ok: true, models: parseModels(body.models) };
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) };
-  }
-}
-
-async function pullModel(input: {
-  fetcher: FetchLike;
-  host: string;
-  model: string;
-  logger: OllamaProvisionerLogger;
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
-  try {
-    const response = await input.fetcher(`${input.host}/api/pull`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ name: input.model, stream: true }),
-    });
-    if (!response.ok) {
-      return {
-        ok: false,
-        reason: `Ollama model ${input.model} pull failed with ${response.status}: ${await response.text()}`,
-      };
-    }
-    await logPullProgress(response, input.model, input.logger);
-    return { ok: true };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: `Ollama model ${input.model} pull failed: ${errorMessage(error)}`,
-    };
-  }
-}
-
-async function logPullProgress(
-  response: Response,
-  model: string,
-  logger: OllamaProvisionerLogger,
-): Promise<void> {
-  if (response.body === null) {
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let lastStatus: string | null = null;
-
-  for (;;) {
-    const read = await reader.read();
-    if (read.done) {
-      break;
-    }
-    buffer += decoder.decode(read.value, { stream: true });
-    const flushed = logCompleteProgressLines(buffer, model, logger, lastStatus);
-    buffer = flushed.remainder;
-    lastStatus = flushed.lastStatus;
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim().length > 0) {
-    logProgressLine(buffer, model, logger, lastStatus);
-  }
-}
-
-function logCompleteProgressLines(
-  buffer: string,
-  model: string,
-  logger: OllamaProvisionerLogger,
-  lastStatus: string | null,
-): { remainder: string; lastStatus: string | null } {
-  const lines = buffer.split(/\r?\n/);
-  const remainder = lines.pop() ?? '';
-  let status = lastStatus;
-  for (const line of lines) {
-    status = logProgressLine(line, model, logger, status);
-  }
-  return { remainder, lastStatus: status };
-}
-
-function logProgressLine(
-  raw: string,
-  model: string,
-  logger: OllamaProvisionerLogger,
-  lastStatus: string | null,
-): string | null {
-  const line = raw.trim();
-  if (line.length === 0) {
-    return lastStatus;
-  }
-
-  const status = pullStatus(line);
-  if (status === null || status === lastStatus) {
-    return lastStatus;
-  }
-
-  logger.info(`Ollama pull ${model}: ${status}`);
-  return status;
-}
-
-function pullStatus(line: string): string | null {
-  try {
-    const parsed = JSON.parse(line) as { status?: unknown };
-    return typeof parsed.status === 'string' ? parsed.status : null;
-  } catch {
-    return line;
-  }
-}
-
-function parseModels(value: unknown): OllamaModel[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => parseModel(item)).filter((item): item is OllamaModel => item !== null);
-}
-
-function parseModel(value: unknown): OllamaModel | null {
-  if (typeof value !== 'object' || value === null) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const model: OllamaModel = {};
-  if (typeof record.name === 'string') {
-    model.name = record.name;
-  }
-  if (typeof record.model === 'string') {
-    model.model = record.model;
-  }
-  return model;
-}
-
-function hasModel(models: readonly OllamaModel[], model: string): boolean {
-  return models.some((entry) =>
-    [entry.name, entry.model].some((name) => typeof name === 'string' && matchesModel(name, model)),
-  );
-}
-
-function matchesModel(name: string, model: string): boolean {
-  return name === model || name === `${model}:latest` || name.startsWith(`${model}:`);
 }
 
 async function hasOllamaBinary(
