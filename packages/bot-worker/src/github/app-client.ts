@@ -1,4 +1,5 @@
 import { createSign } from 'node:crypto';
+import { isIgnoredPath } from '../config/ignore.js';
 import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
 import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
@@ -53,7 +54,10 @@ export class GitHubAppClient
         }));
   }
 
-  async changedLineCount(target: PullRequestTarget): Promise<number> {
+  async changedLineCount(
+    target: PullRequestTarget,
+    ignorePatterns: readonly string[] = [],
+  ): Promise<number> {
     let total = 0;
     let page = 1;
     while (true) {
@@ -64,6 +68,10 @@ export class GitHubAppClient
       );
       for (const file of files) {
         if (typeof file === 'object' && file !== null) {
+          const filename = (file as { filename?: unknown }).filename;
+          if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
+            continue;
+          }
           const additions = Number((file as { additions?: unknown }).additions ?? 0);
           const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
           total += additions + deletions;

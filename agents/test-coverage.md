@@ -37,7 +37,7 @@ You are reviewing a pull request for **test coverage gaps and test-quality issue
 
 ## Output
 
-Same JSON-block format. Use `"category": "test-coverage"`.
+Same JSON-block format. Use `"agentKey": "test-coverage"` and `"category": "test-coverage"`.
 
 ## Severity
 

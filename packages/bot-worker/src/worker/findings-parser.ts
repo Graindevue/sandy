@@ -1,8 +1,26 @@
-import type { Confidence, Finding, FindingsPayload, Severity } from '@sandy/shared-types';
+import type {
+  Confidence,
+  CrossRepoSearchRationale,
+  CrossRepoSearchRunTrigger,
+  CrossRepoSearchStatus,
+  CrossRepoSearchTrigger,
+  Finding,
+  FindingsPayload,
+  Severity,
+} from '@sandy/shared-types';
 
 const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/gi;
 const SEVERITIES = new Set<Severity>(['P0', 'P1', 'P2']);
-const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
+const CROSS_REPO_SEARCH_STATUSES = new Set<CrossRepoSearchStatus>(['searched', 'skipped']);
+const CROSS_REPO_SEARCH_TRIGGERS = new Set<CrossRepoSearchTrigger>([
+  'manifest',
+  'diff-judgment',
+  'none',
+]);
+
+type CrossRepoSearchDecision =
+  | { status: 'searched'; trigger: CrossRepoSearchRunTrigger }
+  | { status: 'skipped'; trigger: 'none' };
 
 /**
  * Extract and validate the structured payload an Agent emits. This intentionally
@@ -35,6 +53,10 @@ function validatePayload(value: unknown): FindingsPayload {
 
   const payload: FindingsPayload = {
     findings: object.findings.map((finding, index) => validateFinding(finding, index)),
+    crossRepoSearch: validateCrossRepoSearch(
+      object.crossRepoSearch,
+      'FindingsPayload.crossRepoSearch',
+    ),
   };
 
   if (object.summary !== undefined) {
@@ -47,36 +69,109 @@ function validatePayload(value: unknown): FindingsPayload {
   return payload;
 }
 
+function validateCrossRepoSearch(value: unknown, where: string): CrossRepoSearchRationale {
+  const object = requireObject(value, where);
+  const status = requireCrossRepoSearchStatus(object.status, `${where}.status`);
+  const trigger = requireCrossRepoSearchTrigger(object.trigger, `${where}.trigger`);
+  const base: { rationale: string; searchedRepos?: string[] } = {
+    rationale: requireString(object.rationale, `${where}.rationale`),
+  };
+  const decision = validateCrossRepoSearchDecision(status, trigger, where);
+  if (object.searchedRepos !== undefined) {
+    if (!Array.isArray(object.searchedRepos)) {
+      throw new Error(`${where}.searchedRepos must be an array when provided`);
+    }
+    base.searchedRepos = object.searchedRepos.map((repo, index) =>
+      requireString(repo, `${where}.searchedRepos[${index}]`),
+    );
+  }
+
+  return { ...base, ...decision };
+}
+
+function validateCrossRepoSearchDecision(
+  status: CrossRepoSearchStatus,
+  trigger: CrossRepoSearchTrigger,
+  where: string,
+): CrossRepoSearchDecision {
+  if (status === 'skipped') {
+    if (trigger !== 'none') {
+      throw new Error(`${where}.trigger must be "none" when status is "skipped"`);
+    }
+    return { status, trigger };
+  }
+
+  if (trigger === 'none') {
+    throw new Error(`${where}.trigger must be "manifest" or "diff-judgment" when searched`);
+  }
+  return { status, trigger };
+}
+
 function validateFinding(value: unknown, index: number): Finding {
   const where = `findings[${index}]`;
   const object = requireObject(value, where);
-  const location = requireObject(object.location, `${where}.location`);
-
-  const lineStart = requirePositiveInteger(location.lineStart, `${where}.location.lineStart`);
-  const lineEnd = requirePositiveInteger(location.lineEnd, `${where}.location.lineEnd`);
-  if (lineEnd < lineStart) {
-    throw new Error(`${where}.location.lineEnd must be greater than or equal to lineStart`);
-  }
+  const anchor = validateAnchor(object.anchor, `${where}.anchor`);
+  const crossRepoReferences = validateCrossRepoReferences(
+    object.crossRepoReferences,
+    `${where}.crossRepoReferences`,
+  );
 
   const finding: Finding = {
     severity: requireSeverity(object.severity, `${where}.severity`),
     confidence: requireConfidence(object.confidence, `${where}.confidence`),
-    location: {
-      repo: requireString(location.repo, `${where}.location.repo`),
-      path: requireString(location.path, `${where}.location.path`),
-      lineStart,
-      lineEnd,
-    },
+    agentKey: requireString(object.agentKey, `${where}.agentKey`),
+    anchor,
     summary: requireString(object.summary, `${where}.summary`),
     evidence: requireString(object.evidence, `${where}.evidence`),
     category: requireString(object.category, `${where}.category`),
   };
+
+  if (crossRepoReferences !== undefined) {
+    finding.crossRepoReferences = crossRepoReferences;
+  }
 
   if (object.suggestedFix !== undefined) {
     finding.suggestedFix = requireString(object.suggestedFix, `${where}.suggestedFix`);
   }
 
   return finding;
+}
+
+function validateAnchor(value: unknown, where: string): Finding['anchor'] {
+  const object = requireObject(value, where);
+  const lineStart = requirePositiveInteger(object.lineStart, `${where}.lineStart`);
+  const lineEnd = requirePositiveInteger(object.lineEnd, `${where}.lineEnd`);
+  if (lineEnd < lineStart) {
+    throw new Error(`${where}.lineEnd must be greater than or equal to lineStart`);
+  }
+
+  return {
+    repo: requireString(object.repo, `${where}.repo`),
+    path: requireString(object.path, `${where}.path`),
+    lineStart,
+    lineEnd,
+  };
+}
+
+function validateCrossRepoReferences(
+  value: unknown,
+  where: string,
+): Finding['crossRepoReferences'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${where} must be an array when provided`);
+  }
+  return value.map((reference, index) => {
+    const itemWhere = `${where}[${index}]`;
+    const object = requireObject(reference, itemWhere);
+    return {
+      repo: requireString(object.repo, `${itemWhere}.repo`),
+      path: requireString(object.path, `${itemWhere}.path`),
+      line: requirePositiveInteger(object.line, `${itemWhere}.line`),
+    };
+  });
 }
 
 function requireObject(value: unknown, where: string): Record<string, unknown> {
@@ -108,8 +203,28 @@ function requireSeverity(value: unknown, where: string): Severity {
 }
 
 function requireConfidence(value: unknown, where: string): Confidence {
-  if (!CONFIDENCES.has(value as Confidence)) {
-    throw new Error(`${where} must be an integer from 0 to 5`);
+  // Confidence is a soft 0-5 score, not a structural field. Coerce a model's
+  // near-miss — a float, a numeric string, or an out-of-range number — to the
+  // nearest valid value rather than discarding the whole findings payload over
+  // it (anchor / severity stay strict). Truly non-numeric input still throws.
+  const numeric =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`${where} must be a number from 0 to 5`);
   }
-  return value as Confidence;
+  return Math.min(5, Math.max(0, Math.round(numeric))) as Confidence;
+}
+
+function requireCrossRepoSearchStatus(value: unknown, where: string): CrossRepoSearchStatus {
+  if (!CROSS_REPO_SEARCH_STATUSES.has(value as CrossRepoSearchStatus)) {
+    throw new Error(`${where} must be one of searched, skipped`);
+  }
+  return value as CrossRepoSearchStatus;
+}
+
+function requireCrossRepoSearchTrigger(value: unknown, where: string): CrossRepoSearchTrigger {
+  if (!CROSS_REPO_SEARCH_TRIGGERS.has(value as CrossRepoSearchTrigger)) {
+    throw new Error(`${where} must be one of manifest, diff-judgment, none`);
+  }
+  return value as CrossRepoSearchTrigger;
 }

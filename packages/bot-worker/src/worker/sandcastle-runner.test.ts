@@ -18,7 +18,7 @@ const logicAgent: AgentDefinition = {
 };
 
 describe('SandcastleRunner', () => {
-  it('runs the logic Agent in an Apple Container against the review worktree', async () => {
+  it('runs an Agent in an Apple Container against the review worktree', async () => {
     const runCalls: RunOptions[] = [];
     const createAppleContainerCalls: unknown[] = [];
     const sandbox = fakeSandbox();
@@ -39,10 +39,15 @@ describe('SandcastleRunner', () => {
       createAgentProvider: () => provider,
     });
 
-    const stdout = await runner.runLogicAgent({
+    const stdout = await runner.runAgent({
       agent: logicAgent,
       worktreePath: '/tmp/sandy/worktrees/job-1',
       signal: abortController.signal,
+      botConfig: {
+        repoRules: '- Keep widget cache keys tenant-scoped.',
+        productRules: '- API errors expose stable codes.',
+        ignorePatterns: ['generated/**'],
+      },
       pullRequest: {
         owner: 'acme',
         repo: 'widget',
@@ -52,6 +57,15 @@ describe('SandcastleRunner', () => {
         title: 'Fix cache key',
         url: 'https://github.com/acme/widget/pull/12',
       },
+      apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n\n### npm Exports\n',
+      siblingWorktrees: [
+        {
+          repo: 'acme/desktop',
+          sha: 'def456',
+          hostPath: '/tmp/sandy/worktrees/desktop/job-1',
+          sandboxPath: '/workspace/acme/desktop',
+        },
+      ],
     });
 
     expect(stdout).toBe('<findings>{"findings":[]}</findings>');
@@ -62,6 +76,11 @@ describe('SandcastleRunner', () => {
         env: { ANTHROPIC_API_KEY: 'sk-test' },
         mounts: expect.arrayContaining([
           expect.objectContaining({ sandboxPath: '/home/agent/.opensrc' }),
+          expect.objectContaining({
+            hostPath: '/tmp/sandy/worktrees/desktop/job-1',
+            sandboxPath: '/workspace/acme/desktop',
+            readonly: true,
+          }),
         ]),
       }),
     ]);
@@ -77,6 +96,21 @@ describe('SandcastleRunner', () => {
       signal: abortController.signal,
     });
     expect(runCalls[0]?.prompt).toContain('PR #12: Fix cache key');
+    expect(runCalls[0]?.prompt).toContain('# API Surface Manifest');
+    expect(runCalls[0]?.prompt).toContain('Use this manifest as a trigger');
+    expect(runCalls[0]?.prompt).toContain('Sibling Repo mounts');
+    expect(runCalls[0]?.prompt).toContain('/workspace/acme/desktop -> acme/desktop');
+    expect(runCalls[0]?.prompt).toContain('Primary trigger');
+    expect(runCalls[0]?.prompt).toContain('Secondary diff-judgment trigger');
+    expect(runCalls[0]?.prompt).toContain('CSS-only, test-only');
+    expect(runCalls[0]?.prompt).toContain('tree_sitter_query');
+    expect(runCalls[0]?.prompt).toContain('"crossRepoSearch"');
+    expect(runCalls[0]?.prompt).toContain('"trigger": "manifest" | "diff-judgment" | "none"');
+    expect(runCalls[0]?.prompt).toContain('Product Rules');
+    expect(runCalls[0]?.prompt).toContain('- API errors expose stable codes.');
+    expect(runCalls[0]?.prompt).toContain('Repo-local Rules');
+    expect(runCalls[0]?.prompt).toContain('- Keep widget cache keys tenant-scoped.');
+    expect(runCalls[0]?.prompt).toContain('generated/**');
     expect(runCalls[0]?.prompt).toContain('<findings>');
   });
 });

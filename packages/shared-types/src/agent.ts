@@ -1,3 +1,4 @@
+import type { CrossRepoSearchRationale } from './finding.js';
 import type { ReviewJobId } from './review-job.js';
 
 /** The LLM vendor an Agent dispatches to via Sandcastle. */
@@ -47,7 +48,7 @@ export interface AgentDefinition {
 export type AgentRunId = string;
 
 /** Status of a single Agent's execution within a Review. */
-export type AgentRunStatus = 'running' | 'completed' | 'failed';
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'timed_out';
 
 /** A record of one Agent executing within a Review. */
 export interface AgentRun {
@@ -62,6 +63,8 @@ export interface AgentRun {
   finishedAt?: number;
   /** Number of Findings this run produced. */
   findingCount: number;
+  /** Agent-reported Cross-Repo Search trigger/skip rationale for this run. */
+  crossRepoSearch?: CrossRepoSearchRationale;
   /** Failure reason when `status === 'failed'`. */
   error?: string;
 }

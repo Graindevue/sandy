@@ -1,7 +1,13 @@
 import { pathToFileURL } from 'node:url';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { isMainModule, loadConfig, resolveConfiguredAgent } from './main.js';
+import {
+  isMainModule,
+  loadConfig,
+  resolveConfiguredAgent,
+  resolveConfiguredAgents,
+  resolveReviewBotConfig,
+} from './main.js';
 
 describe('loadConfig PORT validation', () => {
   // Finding #8: PORT was parsed with Number.parseInt, which silently accepts
@@ -141,6 +147,112 @@ describe('resolveConfiguredAgent', () => {
   });
 });
 
+describe('resolveConfiguredAgents', () => {
+  it('returns all loaded Agents for a Product using default selection', () => {
+    const logicAgent = agent('logic');
+    const styleAgent = { ...agent('style'), defaultEnabled: false as const };
+    const loader = {
+      config: {
+        agents: new Map([
+          [logicAgent.key, logicAgent],
+          [styleAgent.key, styleAgent],
+        ]),
+      },
+      resolveForRepo: () => ({
+        product: product([]),
+        agents: [logicAgent],
+      }),
+    };
+
+    expect(
+      resolveConfiguredAgents(loader, { owner: 'acme', name: 'widget', defaultBranch: 'main' }).map(
+        (resolvedAgent) => resolvedAgent.key,
+      ),
+    ).toEqual(['logic', 'style']);
+  });
+
+  it('treats Product-explicit Agents as enabled selection candidates', () => {
+    const styleAgent = { ...agent('style'), defaultEnabled: false as const };
+    const loader = {
+      config: {
+        agents: new Map([[styleAgent.key, styleAgent]]),
+      },
+      resolveForRepo: () => ({
+        product: product(['style']),
+        agents: [styleAgent],
+      }),
+    };
+
+    const [resolved] = resolveConfiguredAgents(loader, {
+      owner: 'acme',
+      name: 'widget',
+      defaultBranch: 'main',
+    });
+
+    expect(resolved?.key).toBe('style');
+    expect(resolved?.defaultEnabled).toBe(true);
+  });
+});
+
+describe('resolveReviewBotConfig', () => {
+  it('reads .bot context for the configured Product and reviewed Repo', async () => {
+    const repo = {
+      owner: 'acme',
+      name: 'widget',
+      fullName: 'acme/widget',
+      defaultBranch: 'main',
+    };
+    const product = {
+      slug: 'acme',
+      name: 'Acme',
+      repos: [repo],
+      agents: [],
+    };
+    const calls: unknown[] = [];
+
+    const config = await resolveReviewBotConfig(
+      {
+        resolveForRepo: () => ({ product, repo }),
+      },
+      {
+        async readReviewBotConfig(productArg, repoArg, options) {
+          calls.push({ product: productArg, repo: repoArg, options });
+          return {
+            repoRules: '- Repo rule.',
+            productRules: '- Product rule.',
+            ignorePatterns: ['generated/**'],
+          };
+        },
+      },
+      { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+      '/tmp/worktree',
+    );
+
+    expect(config).toEqual({
+      repoRules: '- Repo rule.',
+      productRules: '- Product rule.',
+      ignorePatterns: ['generated/**'],
+    });
+    expect(calls).toEqual([{ product, repo, options: { reviewRepoPath: '/tmp/worktree' } }]);
+  });
+
+  it('returns empty .bot context for an unregistered Repo', async () => {
+    const config = await resolveReviewBotConfig(
+      {
+        resolveForRepo: () => null,
+      },
+      {
+        async readReviewBotConfig() {
+          throw new Error('should not read .bot files');
+        },
+      },
+      { owner: 'acme', name: 'unknown', defaultBranch: 'main' },
+    );
+
+    expect(config).toEqual({ repoRules: null, productRules: null, ignorePatterns: [] });
+  });
+});
+
 describe('isMainModule', () => {
   // Finding #1: the run-when-direct guard must encode the script path the same
   // way `import.meta.url` is encoded. A raw `file://${argv1}` concat fails on any
@@ -191,5 +303,21 @@ function agent(key: string): AgentDefinition {
     completionSignal: '</findings>',
     defaultEnabled: true,
     systemPrompt: `# ${key}`,
+  };
+}
+
+function product(agents: string[]) {
+  return {
+    slug: 'acme',
+    name: 'Acme',
+    repos: [
+      {
+        owner: 'acme',
+        name: 'widget',
+        fullName: 'acme/widget',
+        defaultBranch: 'main',
+      },
+    ],
+    agents,
   };
 }

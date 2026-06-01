@@ -2,10 +2,15 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 import {
   agentRunStatus,
+  confidence,
+  crossRepoReference,
+  crossRepoSearchRationale,
+  findingAnchor,
   pullRequestState,
   reviewJobStatus,
   reviewTrigger,
   severity,
+  siblingShas,
 } from './validators.js';
 
 /**
@@ -49,6 +54,9 @@ export default defineSchema({
     status: reviewJobStatus,
     trigger: reviewTrigger,
     agentKeys: v.array(v.string()),
+    confidenceScore: confidence,
+    agentRuns: v.array(v.id('agentRuns')),
+    siblingShas,
     claimedAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
     error: v.optional(v.string()),
@@ -63,11 +71,9 @@ export default defineSchema({
     pullRequestId: v.id('pullRequests'),
     agentKey: v.string(),
     severity,
-    confidence: v.number(),
-    repo: v.string(),
-    path: v.string(),
-    lineStart: v.number(),
-    lineEnd: v.number(),
+    confidence,
+    anchor: findingAnchor,
+    crossRepoReferences: v.optional(v.array(crossRepoReference)),
     summary: v.string(),
     evidence: v.string(),
     suggestedFix: v.optional(v.string()),
@@ -86,6 +92,21 @@ export default defineSchema({
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
     findingCount: v.number(),
+    crossRepoSearch: v.optional(crossRepoSearchRationale),
     error: v.optional(v.string()),
   }).index('by_review_job', ['reviewJobId']),
+
+  apiSurfaceManifests: defineTable({
+    productId: v.id('products'),
+    repoShas: v.array(
+      v.object({
+        repo: v.string(),
+        sha: v.string(),
+      }),
+    ),
+    markdown: v.string(),
+    builtAt: v.number(),
+  })
+    .index('by_product', ['productId'])
+    .index('by_product_and_built_at', ['productId', 'builtAt']),
 });

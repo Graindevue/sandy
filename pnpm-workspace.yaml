@@ -1,2 +1,9 @@
 packages:
   - "packages/*"
+
+# Supply-chain hardening: refuse to install any package version published less
+# than a week ago, so a freshly-published malicious release has time to be
+# caught and yanked before it can reach us (pnpm >= 10.16). Value is in minutes
+# (7 * 24 * 60 = 10080). `pnpm audit --fix` appends to minimumReleaseAgeExclude
+# so security patches can still be installed without waiting out the window.
+minimumReleaseAge: 10080

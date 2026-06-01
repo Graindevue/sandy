@@ -1,8 +1,9 @@
-import type { ReviewJobStatus } from '@sandy/shared-types';
+import type { Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { type FunctionReference, makeFunctionReference } from 'convex/server';
+import type { PersistedFinding } from './poster.js';
 import type {
   RecordAgentRunInput,
-  RecordFindingInput,
+  RecordSynthesizedReviewInput,
   ReviewExecutionStore,
   ReviewJobContext,
 } from './review-executor.js';
@@ -15,19 +16,30 @@ export interface ConvexExecutionClient {
   mutation(mutation: MutationRef, args: Record<string, unknown>): Promise<unknown>;
 }
 
+interface RecordFindingInput {
+  reviewJobId: string;
+  pullRequestId: string;
+  finding: Finding;
+}
+
 const refs = {
   reviewJobs: {
     getForWorker: makeFunctionReference<'query'>('reviewJobs:getForWorker'),
     getStatus: makeFunctionReference<'query'>('reviewJobs:getStatus'),
+    setSiblingShas: makeFunctionReference<'mutation'>('reviewJobs:setSiblingShas'),
     markCompleted: makeFunctionReference<'mutation'>('reviewJobs:markCompleted'),
     markFailed: makeFunctionReference<'mutation'>('reviewJobs:markFailed'),
   },
   findings: {
     recordFinding: makeFunctionReference<'mutation'>('findings:recordFinding'),
+    recordSynthesizedReview: makeFunctionReference<'mutation'>('findings:recordSynthesizedReview'),
     markPosted: makeFunctionReference<'mutation'>('findings:markPosted'),
   },
   agentRuns: {
     record: makeFunctionReference<'mutation'>('agentRuns:record'),
+  },
+  apiSurfaceManifests: {
+    record: makeFunctionReference<'mutation'>('apiSurfaceManifests:record'),
   },
 };
 
@@ -51,25 +63,28 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
   }
 
   async recordFinding(input: RecordFindingInput): Promise<string> {
-    const { finding } = input;
-    const args: Record<string, unknown> = {
+    return (await this.#client.mutation(refs.findings.recordFinding, {
       reviewJobId: input.reviewJobId,
       pullRequestId: input.pullRequestId,
-      agentKey: input.agentKey,
-      severity: finding.severity,
-      confidence: finding.confidence,
-      repo: finding.location.repo,
-      path: finding.location.path,
-      lineStart: finding.location.lineStart,
-      lineEnd: finding.location.lineEnd,
-      summary: finding.summary,
-      evidence: finding.evidence,
-      category: finding.category,
-    };
-    if (finding.suggestedFix !== undefined) {
-      args.suggestedFix = finding.suggestedFix;
-    }
-    return (await this.#client.mutation(refs.findings.recordFinding, args)) as string;
+      ...findingMutationArgs(input.finding),
+    })) as string;
+  }
+
+  async recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]> {
+    const findingIds = (await this.#client.mutation(refs.findings.recordSynthesizedReview, {
+      reviewJobId: input.reviewJobId,
+      pullRequestId: input.pullRequestId,
+      confidenceScore: input.confidenceScore,
+      findings: input.findings.map(findingMutationArgs),
+    })) as string[];
+
+    return input.findings.map((finding, index) => {
+      const id = findingIds[index];
+      if (id === undefined) {
+        throw new Error('Convex did not return an id for every synthesized Finding');
+      }
+      return { id, finding };
+    });
   }
 
   async markFindingPosted(findingId: string, githubCommentId: number): Promise<void> {
@@ -88,7 +103,23 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     if (input.error !== undefined) {
       args.error = input.error;
     }
+    if (input.crossRepoSearch !== undefined) {
+      args.crossRepoSearch = input.crossRepoSearch;
+    }
     await this.#client.mutation(refs.agentRuns.record, args);
+  }
+
+  async recordApiSurfaceManifest(input: {
+    productId: string;
+    repoShas: { repo: string; sha: string }[];
+    markdown: string;
+    builtAt: number;
+  }): Promise<void> {
+    await this.#client.mutation(refs.apiSurfaceManifests.record, input);
+  }
+
+  async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
+    await this.#client.mutation(refs.reviewJobs.setSiblingShas, { jobId, siblingShas });
   }
 
   async markCompleted(jobId: string, finishedAt: number): Promise<void> {
@@ -98,4 +129,23 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
   async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
     await this.#client.mutation(refs.reviewJobs.markFailed, { jobId, finishedAt, error });
   }
+}
+
+function findingMutationArgs(finding: Finding): Record<string, unknown> {
+  const args: Record<string, unknown> = {
+    agentKey: finding.agentKey,
+    severity: finding.severity,
+    confidence: finding.confidence,
+    anchor: finding.anchor,
+    summary: finding.summary,
+    evidence: finding.evidence,
+    category: finding.category,
+  };
+  if (finding.crossRepoReferences !== undefined) {
+    args.crossRepoReferences = finding.crossRepoReferences;
+  }
+  if (finding.suggestedFix !== undefined) {
+    args.suggestedFix = finding.suggestedFix;
+  }
+  return args;
 }

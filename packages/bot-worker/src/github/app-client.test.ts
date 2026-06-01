@@ -40,6 +40,39 @@ describe('GitHubAppClient', () => {
     expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
   });
 
+  it('excludes ignored PR files from changed line counts', async () => {
+    const client = new GitHubAppClient({
+      appId: '123',
+      privateKey: 'unused',
+      createJwt: () => 'app-jwt',
+      fetch: async (url) => {
+        if (String(url).endsWith('/repos/acme/widget/installation')) {
+          return jsonResponse({ id: 42 });
+        }
+        if (String(url).endsWith('/app/installations/42/access_tokens')) {
+          return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+        }
+        return jsonResponse([
+          { filename: 'generated/api.ts', additions: 100, deletions: 25 },
+          { filename: 'src/widget.ts', additions: 4, deletions: 1 },
+          { filename: 'tests/widget.snap', additions: 30, deletions: 0 },
+        ]);
+      },
+    });
+
+    await expect(
+      client.changedLineCount(
+        {
+          owner: 'acme',
+          repo: 'widget',
+          pullNumber: 12,
+          headSha: 'abc123',
+        },
+        ['generated/**', '*.snap'],
+      ),
+    ).resolves.toBe(5);
+  });
+
   it('builds authenticated clone URLs from installation tokens', async () => {
     const client = new GitHubAppClient({
       appId: '123',

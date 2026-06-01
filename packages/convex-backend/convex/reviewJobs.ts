@@ -1,8 +1,8 @@
-import type { ReviewJobStatus, ReviewTrigger } from '@sandy/shared-types';
+import type { ReviewJobStatus, ReviewTrigger, SiblingShas } from '@sandy/shared-types';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel.js';
 import { type MutationCtx, mutation, query } from './_generated/server.js';
-import { reviewJobStatus, reviewTrigger } from './validators.js';
+import { confidence, reviewJobStatus, reviewTrigger, siblingShas } from './validators.js';
 
 const ACTIVE_REVIEW_JOB_STATUSES = [
   'pending',
@@ -15,6 +15,7 @@ interface PendingReviewJobInput {
   headSha: string;
   trigger: ReviewTrigger;
   agentKeys: string[];
+  siblingShas?: SiblingShas;
 }
 
 /** Enqueue a new `pending` ReviewJob and return its id. */
@@ -25,6 +26,7 @@ export const enqueue = mutation({
     headSha: v.string(),
     trigger: reviewTrigger,
     agentKeys: v.array(v.string()),
+    siblingShas: v.optional(siblingShas),
   },
   returns: v.id('reviewJobs'),
   handler: async (ctx, args) => {
@@ -45,6 +47,7 @@ export const enqueueSuperseding = mutation({
     headSha: v.string(),
     trigger: reviewTrigger,
     agentKeys: v.array(v.string()),
+    siblingShas: v.optional(siblingShas),
     supersededAt: v.number(),
   },
   returns: v.object({
@@ -92,9 +95,32 @@ function insertPendingReviewJob(
     headSha: input.headSha,
     trigger: input.trigger,
     agentKeys: input.agentKeys,
+    confidenceScore: 0,
+    agentRuns: [],
+    siblingShas: input.siblingShas ?? {},
     status: 'pending',
   });
 }
+
+/** Record the sibling default-branch SHAs pinned for this ReviewJob. */
+export const setSiblingShas = mutation({
+  args: { jobId: v.id('reviewJobs'), siblingShas },
+  returns: v.null(),
+  handler: async (ctx, { jobId, siblingShas }) => {
+    await ctx.db.patch(jobId, { siblingShas });
+    return null;
+  },
+});
+
+/** Store the synthesized PR-level confidence score for this ReviewJob. */
+export const setConfidenceScore = mutation({
+  args: { jobId: v.id('reviewJobs'), confidenceScore: confidence },
+  returns: v.null(),
+  handler: async (ctx, { jobId, confidenceScore }) => {
+    await ctx.db.patch(jobId, { confidenceScore });
+    return null;
+  },
+});
 
 /**
  * All currently `pending` ReviewJobs. The worker reactively subscribes to this
@@ -125,6 +151,14 @@ export const getForWorker = query({
     if (repo === null || pullRequest === null) {
       return null;
     }
+    const product = await ctx.db.get(repo.productId);
+    if (product === null) {
+      return null;
+    }
+    const productRepos = await ctx.db
+      .query('repos')
+      .withIndex('by_product', (q) => q.eq('productId', repo.productId))
+      .collect();
     return {
       job: {
         id: job._id,
@@ -132,12 +166,27 @@ export const getForWorker = query({
         repoId: job.repoId,
         headSha: job.headSha,
         agentKeys: job.agentKeys,
+        confidenceScore: job.confidenceScore,
+        agentRuns: job.agentRuns,
+        siblingShas: job.siblingShas,
       },
       repo: {
         id: repo._id,
         owner: repo.owner,
         name: repo.name,
         defaultBranch: repo.defaultBranch,
+      },
+      product: {
+        id: product._id,
+        slug: product.slug,
+        name: product.name,
+        repos: productRepos.map((productRepo) => ({
+          id: productRepo._id,
+          owner: productRepo.owner,
+          name: productRepo.name,
+          fullName: productRepo.fullName,
+          defaultBranch: productRepo.defaultBranch,
+        })),
       },
       pullRequest: {
         id: pullRequest._id,

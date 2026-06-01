@@ -65,7 +65,7 @@ to verify against actual Convex source for the installed version. **Do NOT assum
 
 ## Output
 
-Same JSON-block format. Use `"category": "convex"`.
+Same JSON-block format. Use `"agentKey": "convex"` and `"category": "convex"`.
 
 ## Severity
 

@@ -2,10 +2,18 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { api } from '@sandy/convex-backend/api';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
+import { BotConfigReader } from './config/bot-config-reader.js';
+import type { ProductConfig, RepoConfig } from './config/bot-yaml.js';
 import { ConfigLoader } from './config/loader.js';
-import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
+import {
+  defaultCloneBaseDir,
+  defaultConfigLoaderOptions,
+  defaultCustomExtractorsDir,
+} from './config/paths.js';
+import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { startWebhookServer } from './webhook/server.js';
@@ -145,6 +153,7 @@ export async function main(): Promise<void> {
   const repoRoot = process.cwd();
   const configLoader = await ConfigLoader.create(defaultConfigLoaderOptions(repoRoot));
   configLoader.installSignalHandler();
+  await syncConfiguredProducts(httpClient, configLoader);
   const github = new GitHubAppClient({
     appId: config.githubAppId,
     privateKey: await readPrivateKey(repoRoot, config.githubPrivateKeyPath),
@@ -152,6 +161,12 @@ export async function main(): Promise<void> {
   const cloneManager = new CloneManager({
     baseDir: defaultCloneBaseDir(process.env),
     cloneUrl: (repo) => github.cloneUrlForRepo(repo),
+  });
+  const botConfigReader = new BotConfigReader({
+    repoPath: async (repo) => {
+      await cloneManager.ensureCloned(repo);
+      return cloneManager.repoPath(repo);
+    },
   });
   const cancellations = new ReviewCancellationCoordinator();
   const poster = new PullRequestPoster(github);
@@ -163,7 +178,18 @@ export async function main(): Promise<void> {
     poster,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
+    manifestBuilder: {
+      buildManifest: async (productId, repoShas) => {
+        const { buildManifest } = await import('@sandy/manifest-builder');
+        return await buildManifest(productId, repoShas, {
+          customExtractorsDir: defaultCustomExtractorsDir(repoRoot),
+        });
+      },
+    },
     resolveAgent: (repo, agentKey) => resolveConfiguredAgent(configLoader, repo, agentKey),
+    resolveAgents: (repo) => resolveConfiguredAgents(configLoader, repo),
+    resolveReviewBotConfig: ({ repo, worktreePath }) =>
+      resolveReviewBotConfig(configLoader, botConfigReader, repo, worktreePath),
   });
   const claimant = new ReviewClaimant({
     client: reactiveClient,
@@ -189,6 +215,33 @@ export async function main(): Promise<void> {
     },
   });
   console.info(`Sandy webhook server listening on :${config.port}`);
+}
+
+/**
+ * Reconcile the Products and Repos declared in `.config/bot.yaml` into Convex at
+ * startup so the executor's per-Review context (read from the Convex `repos`
+ * table) includes every sibling Repo. Without this, a Repo added to the config is
+ * registered only when a webhook for it first arrives — and only as its own
+ * single-Repo Product — so cross-repo Reviews would not see it.
+ */
+async function syncConfiguredProducts(
+  client: ConvexHttpClient,
+  configLoader: ConfigLoader,
+): Promise<void> {
+  const { products } = configLoader.config;
+  for (const product of products) {
+    await client.mutation(api.products.syncProduct, {
+      slug: product.slug,
+      name: product.name,
+      repos: product.repos.map((repo) => ({
+        owner: repo.owner,
+        name: repo.name,
+        fullName: repo.fullName,
+        defaultBranch: repo.defaultBranch,
+      })),
+    });
+  }
+  console.info(`Synced ${products.length} Product(s) from bot.yaml to Convex`);
 }
 
 async function cleanupWorkerAppleContainers(): Promise<void> {
@@ -285,7 +338,7 @@ export function isMainModule(importMetaUrl: string, argv1: string | undefined): 
   return importMetaUrl === pathToFileURL(argv1).href;
 }
 
-interface AgentResolutionLoader {
+interface ConfiguredAgentLoader {
   resolveForRepo(
     owner: string,
     name: string,
@@ -294,8 +347,41 @@ interface AgentResolutionLoader {
   } | null;
 }
 
+interface AgentCandidateLoader {
+  config: {
+    agents: ReadonlyMap<string, AgentDefinition>;
+  };
+  resolveForRepo(
+    owner: string,
+    name: string,
+  ): {
+    product: ProductConfig;
+    agents: AgentDefinition[];
+  } | null;
+}
+
+interface ReviewBotConfigLoader {
+  resolveForRepo(
+    owner: string,
+    name: string,
+  ): {
+    product: ProductConfig;
+    repo: RepoConfig;
+  } | null;
+}
+
+interface ReviewBotConfigReader {
+  readReviewBotConfig(
+    product: ProductConfig,
+    repo: RepoConfig,
+    options?: {
+      reviewRepoPath?: string;
+    },
+  ): Promise<ReviewBotContext>;
+}
+
 export function resolveConfiguredAgent(
-  loader: AgentResolutionLoader,
+  loader: ConfiguredAgentLoader,
   repo: RepoForWorktree,
   agentKey: string,
 ): AgentDefinition | null {
@@ -304,6 +390,45 @@ export function resolveConfiguredAgent(
     return null;
   }
   return resolved.agents.find((agent) => agent.key === agentKey) ?? null;
+}
+
+export function resolveConfiguredAgents(
+  loader: AgentCandidateLoader,
+  repo: RepoForWorktree,
+): AgentDefinition[] {
+  const resolved = loader.resolveForRepo(repo.owner, repo.name);
+  if (resolved === null) {
+    return [];
+  }
+  if (resolved.product.agents.length > 0) {
+    return resolved.product.agents.map((agentKey) => {
+      const agent = loader.config.agents.get(agentKey);
+      if (agent === undefined) {
+        throw new Error(`configured Agent ${JSON.stringify(agentKey)} is not loaded`);
+      }
+      return { ...agent, defaultEnabled: true };
+    });
+  }
+  return [...loader.config.agents.values()];
+}
+
+export async function resolveReviewBotConfig(
+  loader: ReviewBotConfigLoader,
+  reader: ReviewBotConfigReader,
+  repo: RepoForWorktree,
+  worktreePath?: string,
+): Promise<ReviewBotContext> {
+  const resolved = loader.resolveForRepo(repo.owner, repo.name);
+  if (resolved === null) {
+    return EMPTY_REVIEW_BOT_CONTEXT;
+  }
+  const options =
+    worktreePath === undefined
+      ? undefined
+      : {
+          reviewRepoPath: worktreePath,
+        };
+  return await reader.readReviewBotConfig(resolved.product, resolved.repo, options);
 }
 
 // Run only when executed directly, not when imported by tests.

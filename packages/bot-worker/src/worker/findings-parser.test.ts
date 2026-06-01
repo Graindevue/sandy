@@ -8,16 +8,30 @@ describe('parseFindingsPayload', () => {
       <findings>
       {
         "summary": "One real issue.",
+        "crossRepoSearch": {
+          "status": "searched",
+          "trigger": "manifest",
+          "rationale": "The diff renamed a Convex query listed in the Manifest, so sibling consumers were checked.",
+          "searchedRepos": ["acme/consumer"]
+        },
         "findings": [
           {
             "severity": "P1",
             "confidence": 4,
-            "location": {
+            "agentKey": "logic",
+            "anchor": {
               "repo": "acme/widget",
               "path": "src/index.ts",
               "lineStart": 12,
               "lineEnd": 14
             },
+            "crossRepoReferences": [
+              {
+                "repo": "acme/consumer",
+                "path": "src/orders.ts",
+                "line": 31
+              }
+            ],
             "summary": "The cache key ignores the tenant id.",
             "evidence": "The lookup only uses userId, so two tenants can collide.",
             "suggestedFix": "Include tenantId in the key.",
@@ -30,27 +44,118 @@ describe('parseFindingsPayload', () => {
     `);
 
     expect(payload.summary).toBe('One real issue.');
+    expect(payload.crossRepoSearch).toEqual({
+      status: 'searched',
+      trigger: 'manifest',
+      rationale:
+        'The diff renamed a Convex query listed in the Manifest, so sibling consumers were checked.',
+      searchedRepos: ['acme/consumer'],
+    });
     expect(payload.findings).toHaveLength(1);
     expect(payload.findings[0]).toMatchObject({
       severity: 'P1',
       confidence: 4,
-      location: {
+      agentKey: 'logic',
+      anchor: {
         repo: 'acme/widget',
         path: 'src/index.ts',
         lineStart: 12,
         lineEnd: 14,
       },
+      crossRepoReferences: [{ repo: 'acme/consumer', path: 'src/orders.ts', line: 31 }],
       category: 'logic',
     });
+  });
+
+  it('validates an anchor-only same-Repo finding without cross-repo references', () => {
+    const payload = parseFindingsPayload(`<findings>{
+      "crossRepoSearch": {
+        "status": "skipped",
+        "trigger": "none",
+        "rationale": "Only tests changed; no cross-repo contract risk was detected."
+      },
+      "findings": [{
+        "severity": "P2",
+        "confidence": 3,
+        "agentKey": "test-coverage",
+        "anchor": {
+          "repo": "acme/widget",
+          "path": "src/cache.test.ts",
+          "lineStart": 9,
+          "lineEnd": 9
+        },
+        "summary": "The changed cache branch has no regression test.",
+        "evidence": "No test covers tenant-specific cache keys.",
+        "category": "test-coverage"
+      }]
+    }</findings>`);
+
+    expect(payload.findings[0]).toEqual({
+      severity: 'P2',
+      confidence: 3,
+      agentKey: 'test-coverage',
+      anchor: {
+        repo: 'acme/widget',
+        path: 'src/cache.test.ts',
+        lineStart: 9,
+        lineEnd: 9,
+      },
+      summary: 'The changed cache branch has no regression test.',
+      evidence: 'No test covers tenant-specific cache keys.',
+      category: 'test-coverage',
+    });
+  });
+
+  it('coerces a near-miss confidence to a valid 0-5 score', () => {
+    const withConfidence = (confidence: string) => `<findings>{
+      "crossRepoSearch": { "status": "skipped", "trigger": "none", "rationale": "n/a" },
+      "findings": [{
+        "severity": "P1",
+        "confidence": ${confidence},
+        "agentKey": "test-coverage",
+        "anchor": { "repo": "acme/widget", "path": "src/a.ts", "lineStart": 1, "lineEnd": 1 },
+        "summary": "x",
+        "evidence": "y",
+        "category": "test-coverage"
+      }]
+    }</findings>`;
+
+    expect(parseFindingsPayload(withConfidence('3.7')).findings[0]?.confidence).toBe(4);
+    expect(parseFindingsPayload(withConfidence('7')).findings[0]?.confidence).toBe(5);
+    expect(parseFindingsPayload(withConfidence('-2')).findings[0]?.confidence).toBe(0);
+    expect(parseFindingsPayload(withConfidence('"4"')).findings[0]?.confidence).toBe(4);
+  });
+
+  it('rejects a non-numeric confidence', () => {
+    expect(() =>
+      parseFindingsPayload(`<findings>{
+        "crossRepoSearch": { "status": "skipped", "trigger": "none", "rationale": "n/a" },
+        "findings": [{
+          "severity": "P1",
+          "confidence": "high",
+          "agentKey": "logic",
+          "anchor": { "repo": "acme/widget", "path": "src/a.ts", "lineStart": 1, "lineEnd": 1 },
+          "summary": "x",
+          "evidence": "y",
+          "category": "logic"
+        }]
+      }</findings>`),
+    ).toThrow(/confidence must be a number/);
   });
 
   it('rejects malformed output with an actionable error', () => {
     expect(() =>
       parseFindingsPayload(`<findings>{
+        "crossRepoSearch": {
+          "status": "skipped",
+          "trigger": "none",
+          "rationale": "No cross-repo contract risk was detected."
+        },
         "findings": [{
           "severity": "P9",
           "confidence": 4,
-          "location": {
+          "agentKey": "logic",
+          "anchor": {
             "repo": "acme/widget",
             "path": "src/index.ts",
             "lineStart": 12,
@@ -64,16 +169,37 @@ describe('parseFindingsPayload', () => {
     ).toThrow(/severity/i);
   });
 
+  it('rejects inconsistent Cross-Repo Search status and trigger pairs', () => {
+    expect(() =>
+      parseFindingsPayload(`<findings>{
+        "crossRepoSearch": {
+          "status": "searched",
+          "trigger": "none",
+          "rationale": "No cross-repo contract risk was detected."
+        },
+        "findings": []
+      }</findings>`),
+    ).toThrow(/trigger must be "manifest" or "diff-judgment"/);
+  });
+
   it('uses the final findings block when earlier narration contains an example', () => {
     const payload = parseFindingsPayload(`
       Example:
-      <findings>{"summary":"Example only.","findings":[]}</findings>
+      <findings>{"summary":"Example only.","crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"Example only."},"findings":[]}</findings>
 
       Final answer:
-      <findings>{"summary":"Real result.","findings":[]}</findings>
+      <findings>{"summary":"Real result.","crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"No cross-repo contract risk was detected."},"findings":[]}</findings>
     `);
 
-    expect(payload).toEqual({ summary: 'Real result.', findings: [] });
+    expect(payload).toEqual({
+      summary: 'Real result.',
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'No cross-repo contract risk was detected.',
+      },
+      findings: [],
+    });
   });
 
   it('rejects output with no findings tag', () => {

@@ -65,7 +65,7 @@ to verify against actual Next.js source for the installed version. **Cache Compo
 
 ## Output
 
-Same JSON-block format. Use `"category": "nextjs"`.
+Same JSON-block format. Use `"agentKey": "nextjs"` and `"category": "nextjs"`.
 
 ## Severity
 

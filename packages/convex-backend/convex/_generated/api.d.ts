@@ -9,8 +9,10 @@
  */
 
 import type * as agentRuns from "../agentRuns.js";
+import type * as apiSurfaceManifests from "../apiSurfaceManifests.js";
 import type * as crons from "../crons.js";
 import type * as findings from "../findings.js";
+import type * as products from "../products.js";
 import type * as pullRequests from "../pullRequests.js";
 import type * as reviewJobReaper from "../reviewJobReaper.js";
 import type * as reviewJobs from "../reviewJobs.js";
@@ -24,8 +26,10 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agentRuns: typeof agentRuns;
+  apiSurfaceManifests: typeof apiSurfaceManifests;
   crons: typeof crons;
   findings: typeof findings;
+  products: typeof products;
   pullRequests: typeof pullRequests;
   reviewJobReaper: typeof reviewJobReaper;
   reviewJobs: typeof reviewJobs;

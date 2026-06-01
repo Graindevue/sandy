@@ -50,7 +50,7 @@ Apply this to every changed area:
 
 ## Output
 
-Same JSON-block format as other agents. Use `"category": "security"`.
+Same JSON-block format as other agents. Use `"agentKey": "security"` and `"category": "security"`.
 
 ## Severity
 

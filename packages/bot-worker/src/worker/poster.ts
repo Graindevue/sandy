@@ -1,4 +1,4 @@
-import type { Finding } from '@sandy/shared-types';
+import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
 
 export interface PullRequestTarget {
   owner: string;
@@ -18,18 +18,21 @@ export interface PostedFinding {
   commentId: number;
 }
 
-export interface ReviewCommentInput {
+interface ReviewCommentInputBase {
   owner: string;
   repo: string;
   pullNumber: number;
   commitId: string;
   path: string;
   body: string;
-  line: number;
-  side: 'RIGHT';
-  startLine?: number;
-  startSide?: 'RIGHT';
 }
+
+type ReviewCommentLineRange = { line: number; side: 'RIGHT' } & (
+  | { startLine?: never; startSide?: never }
+  | { startLine: number; startSide: 'RIGHT' }
+);
+
+export type ReviewCommentInput = ReviewCommentInputBase & ReviewCommentLineRange;
 
 export interface IssueCommentInput {
   owner: string;
@@ -49,9 +52,10 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  agentKey: string;
-  findings: PersistedFinding[];
-  summary?: string;
+  findings: readonly PersistedFinding[];
+  /** Sibling Repo SHAs pinned when the ReviewJob started. */
+  siblingShas: SiblingShas;
+  summary: string;
 }
 
 export interface PostScopeDeclinedInput {
@@ -61,6 +65,7 @@ export interface PostScopeDeclinedInput {
 }
 
 const defaultLogger: PosterLogger = console;
+const CROSS_REPO_REFERENCE_RENDER_LIMIT = 10;
 
 export class PullRequestPoster {
   readonly #github: GitHubReviewPoster;
@@ -72,27 +77,40 @@ export class PullRequestPoster {
   }
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
-    const posted: PostedFinding[] = [];
+    const inlinePosted: PostedFinding[] = [];
+    const summaryOnly: PersistedFinding[] = [];
 
     for (const persisted of input.findings) {
+      if (!isReviewedRepoAnchor(input.target, persisted.finding.anchor.repo)) {
+        summaryOnly.push(persisted);
+        continue;
+      }
+
       try {
         const comment = await this.#github.createPullRequestReviewComment(
-          buildReviewCommentInput(input.target, persisted),
+          buildReviewCommentInput(input.target, persisted, input.siblingShas),
         );
-        posted.push({ findingId: persisted.id, commentId: comment.id });
+        inlinePosted.push({ findingId: persisted.id, commentId: comment.id });
       } catch (error) {
         this.#logger.warn(`failed to post review comment for finding ${persisted.id}`, error);
+        summaryOnly.push(persisted);
       }
     }
 
-    await this.#github.createIssueComment({
+    const summaryComment = await this.#github.createIssueComment({
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: buildSummaryBody(input.agentKey, input.findings.length, input.summary),
+      body: appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
     });
 
-    return posted;
+    return [
+      ...inlinePosted,
+      ...summaryOnly.map((persisted) => ({
+        findingId: persisted.id,
+        commentId: summaryComment.id,
+      })),
+    ];
   }
 
   async postScopeDeclined(input: PostScopeDeclinedInput): Promise<void> {
@@ -111,60 +129,145 @@ export class PullRequestPoster {
 function buildReviewCommentInput(
   target: PullRequestTarget,
   persisted: PersistedFinding,
+  siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
-  const base: ReviewCommentInput = {
+  return {
     owner: target.owner,
     repo: target.repo,
     pullNumber: target.pullNumber,
     commitId: target.headSha,
-    path: finding.location.path,
-    body: formatFindingBody(persisted),
-    line: finding.location.lineEnd,
-    side: 'RIGHT',
+    path: finding.anchor.path,
+    body: formatFindingBody(persisted, siblingShas),
+    ...reviewCommentLineRange(finding.anchor),
   };
-
-  if (finding.location.lineStart !== finding.location.lineEnd) {
-    base.startLine = finding.location.lineStart;
-    base.startSide = 'RIGHT';
-  }
-
-  return base;
 }
 
-export function formatFindingBody({ id, finding }: PersistedFinding): string {
+function reviewCommentLineRange(anchor: Finding['anchor']): ReviewCommentLineRange {
+  if (anchor.lineStart === anchor.lineEnd) {
+    return {
+      line: anchor.lineEnd,
+      side: 'RIGHT',
+    };
+  }
+
+  return {
+    line: anchor.lineEnd,
+    side: 'RIGHT',
+    startLine: anchor.lineStart,
+    startSide: 'RIGHT',
+  };
+}
+
+function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): boolean {
+  return anchorRepo.toLowerCase() === `${target.owner}/${target.repo}`.toLowerCase();
+}
+
+function appendSummaryOnlyFindings(
+  summary: string,
+  findings: readonly PersistedFinding[],
+  siblingShas: SiblingShas,
+): string {
+  if (findings.length === 0) {
+    return summary;
+  }
+
+  return [
+    summary,
+    `Findings folded into the summary:\n\n${findings
+      .map((finding) => formatSummaryOnlyFinding(finding, siblingShas))
+      .join('\n\n')}`,
+  ].join('\n\n');
+}
+
+function formatSummaryOnlyFinding(
+  { id, finding }: PersistedFinding,
+  siblingShas: SiblingShas,
+): string {
   const parts = [
-    `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`,
+    formatFindingHeading(finding),
+    `Anchor: ${formatAnchor(finding.anchor)}`,
     finding.summary,
     `Evidence:\n${finding.evidence}`,
+    ...formatFindingDetailSections(id, finding, siblingShas),
   ];
-  if (finding.suggestedFix !== undefined) {
-    parts.push(`Suggested fix:\n${finding.suggestedFix}`);
-  }
-  parts.push(`<!-- bot:finding=${id} -->`);
+
   return parts.join('\n\n');
 }
 
-function buildSummaryBody(
-  agentKey: string,
-  findingCount: number,
-  summary: string | undefined,
-): string {
-  const headline = buildSummaryHeadline(agentKey, findingCount);
-  const trimmedSummary = summary?.trim();
-  if (trimmedSummary === undefined || trimmedSummary.length === 0) {
-    return headline;
-  }
-  return `${headline}\n\n${trimmedSummary}`;
+function formatAnchor(anchor: Finding['anchor']): string {
+  const line =
+    anchor.lineStart === anchor.lineEnd
+      ? `${anchor.lineEnd}`
+      : `${anchor.lineStart}-${anchor.lineEnd}`;
+  return `${anchor.repo}/${anchor.path}:${line}`;
 }
 
-function buildSummaryHeadline(agentKey: string, findingCount: number): string {
-  if (findingCount === 0) {
-    return `Sandy ${agentKey} review: no issues found.`;
+export function formatFindingBody(
+  { id, finding }: PersistedFinding,
+  siblingShas: SiblingShas,
+): string {
+  const parts = [
+    formatFindingHeading(finding),
+    finding.summary,
+    `Evidence:\n${finding.evidence}`,
+    ...formatFindingDetailSections(id, finding, siblingShas),
+  ];
+
+  return parts.join('\n\n');
+}
+
+function formatFindingHeading(finding: Finding): string {
+  return `**${finding.severity} ${finding.category}** (confidence ${finding.confidence}/5)`;
+}
+
+function formatFindingDetailSections(
+  id: string,
+  finding: Finding,
+  siblingShas: SiblingShas,
+): string[] {
+  const parts: string[] = [];
+
+  if (finding.suggestedFix !== undefined) {
+    parts.push(`Suggested fix:\n${finding.suggestedFix}`);
+  }
+  if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
+    parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
+  }
+  parts.push(`<!-- bot:finding=${id} -->`);
+
+  return parts;
+}
+
+function formatCrossRepoReferences(
+  references: readonly CrossRepoReference[],
+  siblingShas: SiblingShas,
+): string {
+  const visible = references
+    .slice(0, CROSS_REPO_REFERENCE_RENDER_LIMIT)
+    .map((reference) => `- ${formatCrossRepoReference(reference, siblingShas)}`);
+  const overflow = formatReferenceOverflow(references.slice(CROSS_REPO_REFERENCE_RENDER_LIMIT));
+
+  return `Cross-repo references:\n${[...visible, ...overflow].join('\n')}`;
+}
+
+function formatReferenceOverflow(references: readonly CrossRepoReference[]): string[] {
+  const countsByRepo = new Map<string, number>();
+  for (const reference of references) {
+    countsByRepo.set(reference.repo, (countsByRepo.get(reference.repo) ?? 0) + 1);
   }
 
-  const noun = findingCount === 1 ? 'finding' : 'findings';
-  return `Sandy ${agentKey} review posted ${findingCount} ${noun}.`;
+  return [...countsByRepo.entries()].map(([repo, count]) => `- + ${count} more in \`${repo}\``);
+}
+
+function formatCrossRepoReference(reference: CrossRepoReference, siblingShas: SiblingShas): string {
+  const sha = siblingShas[reference.repo];
+  if (sha === undefined) {
+    return `${reference.repo}/${reference.path}:${reference.line}`;
+  }
+
+  const encodedPath = reference.path.split('/').map(encodeURIComponent).join('/');
+  return `https://github.com/${reference.repo}/blob/${sha}/${encodedPath}#L${reference.line}`;
 }
 
 function formatCount(value: number): string {

@@ -13,6 +13,7 @@ import {
   type SandboxProvider,
 } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
+import type { ReviewBotContext } from '../config/review-bot-context.js';
 
 export interface AppleContainerRunnerOptions {
   readonly imageName?: string;
@@ -35,10 +36,20 @@ export interface RunnerPullRequest {
   url: string;
 }
 
-export interface RunLogicAgentInput {
+export interface RunnerSiblingWorktree {
+  repo: string;
+  sha: string;
+  hostPath: string;
+  sandboxPath: string;
+}
+
+export interface RunAgentInput {
   agent: AgentDefinition;
   worktreePath: string;
   pullRequest: RunnerPullRequest;
+  apiSurfaceManifest?: string;
+  siblingWorktrees?: readonly RunnerSiblingWorktree[];
+  botConfig?: ReviewBotContext;
   signal?: AbortSignal;
 }
 
@@ -85,16 +96,17 @@ export class SandcastleRunner {
     this.#createAgentProvider = options.createAgentProvider ?? createAgentProvider;
   }
 
-  async runLogicAgent(input: RunLogicAgentInput): Promise<string> {
-    if (input.agent.key !== 'logic') {
-      throw new Error(
-        `Phase 1 can only run the logic Agent, got ${JSON.stringify(input.agent.key)}`,
-      );
-    }
-
+  async runAgent(input: RunAgentInput): Promise<string> {
     const mounts: { hostPath: string; sandboxPath: string; readonly?: boolean }[] = [
       { hostPath: join(homedir(), '.opensrc'), sandboxPath: OPEN_SRC_SANDBOX_CACHE },
     ];
+    for (const sibling of input.siblingWorktrees ?? []) {
+      mounts.push({
+        hostPath: sibling.hostPath,
+        sandboxPath: sibling.sandboxPath,
+        readonly: true,
+      });
+    }
     // Codex authenticates from the operator's host ChatGPT login. Stage a
     // world-readable copy of the credential (see stageCodexAuth) and mount only
     // that, read-only, into the Agent's CODEX_HOME — HOME is /home/agent in the
@@ -182,8 +194,26 @@ async function createDefaultAppleContainer(
   return appleContainer(options);
 }
 
-export function buildReviewPrompt(input: RunLogicAgentInput): string {
+export function buildReviewPrompt(input: RunAgentInput): string {
   const pr = input.pullRequest;
+  const siblingContext =
+    input.siblingWorktrees === undefined || input.siblingWorktrees.length === 0
+      ? ''
+      : `
+Sibling Repo mounts:
+${input.siblingWorktrees
+  .map((sibling) => `- ${sibling.sandboxPath} -> ${sibling.repo} @ ${sibling.sha}`)
+  .join('\n')}
+`;
+  const manifestContext =
+    input.apiSurfaceManifest === undefined
+      ? ''
+      : `
+API Surface Manifest context:
+Use this manifest as a trigger for Cross-Repo Search. It lists public surface and framework versions only; it does not enumerate callers.
+
+${input.apiSurfaceManifest.trim()}
+`;
   return `${input.agent.systemPrompt}
 
 Review PR #${pr.number}: ${pr.title}
@@ -192,14 +222,79 @@ Repository: ${pr.owner}/${pr.repo}
 PR URL: ${pr.url}
 Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
+${siblingContext}
+${manifestContext}
+${formatReviewBotContext(input.botConfig)}
 
-You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>:
+Cross-Repo Search contract:
+- The reviewed Repo (${pr.owner}/${pr.repo}) is your current working directory. Sibling Repos, when present, are mounted read-only at the paths listed above; each mount maps to the shown owner/name Repo at its recorded default-branch SHA.
+- Primary trigger: run Cross-Repo Search when the PR diff changes, removes, or adds a public-surface item listed in the API Surface Manifest. Include old deleted names from the diff, because the Manifest is built at the PR head and may only list the new surface.
+- Secondary diff-judgment trigger: run targeted Cross-Repo Search when the diff is likely to affect a sibling Repo's behavior or assumptions even if the Manifest does not model it, including auth, routes, data shape or semantics, events, config, permissions, storage paths, generated artifacts, and shared conventions.
+- Skip Cross-Repo Search for CSS-only, test-only, or otherwise local-only changes unless the diff suggests a cross-repo contract risk.
+- Search siblings with rg/read_file against the mounted code, not from the Manifest alone. Confirm each hit is a real usage: resolved import, actual call site, or key lookup. Use tree_sitter_query for structural confirmation when a symbol is too generic to grep safely. Never report coincidental string matches.
+- Emit one Finding per changed contract item and put all confirmed sibling consumers in crossRepoReferences; do not emit one Finding per reference. Let severity reflect the true confirmed consumer count even if the rendered reference list is later capped. Frame these as cross-repo contract drift judged against sibling main/default branch. This rule is symmetric: producer-side removals/renames and consumer-side use of symbols absent from sibling main can both be Findings.
+- Always fill crossRepoSearch in the JSON output: say why you searched siblings, or say that no cross-repo contract risk was detected.
+
+You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>. Each finding must use an in-diff "anchor"; use "crossRepoReferences" only for confirmed affected sibling-Repo consumers:
 
 <findings>
 {
   "summary": "Optional one-paragraph review summary",
-  "findings": []
+  "crossRepoSearch": {
+    "status": "searched" | "skipped",
+    "trigger": "manifest" | "diff-judgment" | "none",
+    "rationale": "Why you searched sibling Repos, or why no cross-repo contract risk was detected.",
+    "searchedRepos": ["owner/name"]
+  },
+  "findings": [
+    {
+      "severity": "P0" | "P1" | "P2",
+      "confidence": 0,
+      "agentKey": "<your agent key>",
+      "anchor": { "repo": "owner/name", "path": "relative/path/from/repo/root.ts", "lineStart": 42, "lineEnd": 45 },
+      "crossRepoReferences": [{ "repo": "owner/sibling-repo", "path": "relative/path.ts", "line": 31 }],
+      "summary": "One sentence describing the issue",
+      "evidence": "Why this is an issue, with code quotes or rg results",
+      "suggestedFix": "Optional: how to fix",
+      "category": "<your category>"
+    }
+  ]
 }
 </findings>
+
+The finding above is an illustrative shape, not a real finding. "anchor" is REQUIRED on every finding and must be an object with repo/path/lineStart/lineEnd on an in-diff line. Omit "crossRepoReferences" unless you confirmed affected sibling-Repo consumers. Emit "findings": [] when you find nothing.
 `;
+}
+
+function formatReviewBotContext(config: ReviewBotContext | undefined): string {
+  if (config === undefined) {
+    return '';
+  }
+
+  const sections: string[] = [];
+  if (config.productRules !== null) {
+    sections.push(`## Product Rules
+
+Rules from .bot/product-rules.md across this Product:
+
+${config.productRules}`);
+  }
+  if (config.repoRules !== null) {
+    sections.push(`## Repo-local Rules
+
+Rules from .bot/rules.md for only this Repo:
+
+${config.repoRules}`);
+  }
+  if (config.ignorePatterns.length > 0) {
+    sections.push(`## Ignored Diff Paths
+
+Files matching these .bot/ignore.gitignore patterns are excluded from Sandy's review diff. Do not review changes whose paths match them:
+
+${config.ignorePatterns.map((pattern) => `- ${pattern}`).join('\n')}
+
+If a diff tool still displays an ignored path, disregard that file's hunks.`);
+  }
+
+  return sections.length === 0 ? '' : `\n\n${sections.join('\n\n')}`;
 }

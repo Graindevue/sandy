@@ -3,14 +3,15 @@ import { mutation, query } from './_generated/server.js';
 import { pullRequestState } from './validators.js';
 
 /**
- * Resolve a Repo by `owner/name`, creating it — and a default Product to hold it
- * — on first observation, then return its id. Lets the webhook front door turn a
- * payload's `owner/name` into a `repoId` for {@link upsert} before any config is
- * loaded.
+ * Resolve a Repo by `owner/name`, creating it — and a single-Repo Product to hold
+ * it — on first observation, then return its id. Lets the webhook front door turn
+ * a payload's `owner/name` into a `repoId` for {@link upsert} before config is
+ * applied.
  *
- * TODO(#5): the `.config/bot.yaml` loader registers Products/Repos explicitly and
- * supersedes this auto-provisioning. Until then every newly seen Repo gets its
- * own single-Repo Product named after the Repo.
+ * This is the bootstrap/fallback path for a Repo not (yet) covered by config. A
+ * Repo declared in `.config/bot.yaml` is regrouped under its real Product by
+ * `products.syncProduct`, which the worker runs at startup — config is the source
+ * of truth for Product/Repo grouping.
  */
 export const ensureRepo = mutation({
   args: { owner: v.string(), name: v.string(), defaultBranch: v.optional(v.string()) },
@@ -24,8 +25,9 @@ export const ensureRepo = mutation({
     if (existing !== null) {
       return existing._id;
     }
-    // TODO(#5): bot.yaml groups Repos into shared Products; for now each Repo is
-    // its own Product so cross-repo context is a no-op until config arrives.
+    // A Repo grouped with siblings in bot.yaml is regrouped under its shared
+    // Product by products.syncProduct at worker startup; here (webhook front door,
+    // possibly before that runs) it bootstraps as its own single-Repo Product.
     const productId = await ctx.db.insert('products', { slug: fullName, name: fullName });
     return await ctx.db.insert('repos', {
       productId,

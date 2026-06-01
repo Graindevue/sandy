@@ -1,3 +1,5 @@
+import type { AgentRunId } from './agent.js';
+import type { Confidence } from './finding.js';
 import type { PullRequestId } from './pull-request.js';
 import type { RepoId } from './repo.js';
 
@@ -9,6 +11,9 @@ export type ReviewJobStatus = 'pending' | 'running' | 'completed' | 'failed' | '
 
 /** What caused a Review to be triggered. */
 export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened';
+
+/** Sibling Repo full names mapped to their pinned default-branch SHA. */
+export type SiblingShas = Record<string, string>;
 
 /**
  * A queued unit of review work in Convex. One ReviewJob per Review attempt;
@@ -23,8 +28,14 @@ export interface ReviewJob {
   status: ReviewJobStatus;
   /** Why this Review was triggered. */
   trigger: ReviewTrigger;
-  /** Agent keys this job runs. Phase 1: always `["logic"]`. */
+  /** Agent keys requested when the ReviewJob was enqueued. */
   agentKeys: string[];
+  /** PR-level confidence score computed from the synthesized Findings. */
+  confidenceScore: Confidence;
+  /** AgentRun ids produced while executing this ReviewJob. */
+  agentRuns: AgentRunId[];
+  /** Sibling Repo full names mapped to their pinned default-branch SHA. */
+  siblingShas: SiblingShas;
   /** Epoch milliseconds when the job was enqueued. */
   createdAt: number;
   /** Epoch milliseconds when a worker claimed the job, if claimed. */

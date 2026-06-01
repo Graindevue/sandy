@@ -1,27 +1,58 @@
 import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel.js';
 import { mutation, query } from './_generated/server.js';
-import { severity } from './validators.js';
+import { confidence, crossRepoReference, findingAnchor, severity } from './validators.js';
+
+const findingFields = {
+  agentKey: v.string(),
+  severity,
+  confidence,
+  anchor: findingAnchor,
+  crossRepoReferences: v.optional(v.array(crossRepoReference)),
+  summary: v.string(),
+  evidence: v.string(),
+  suggestedFix: v.optional(v.string()),
+  category: v.string(),
+};
+
+const findingInput = v.object(findingFields);
 
 /** Record a single Finding produced by an Agent during a Review. */
 export const recordFinding = mutation({
   args: {
     reviewJobId: v.id('reviewJobs'),
     pullRequestId: v.id('pullRequests'),
-    agentKey: v.string(),
-    severity,
-    confidence: v.number(),
-    repo: v.string(),
-    path: v.string(),
-    lineStart: v.number(),
-    lineEnd: v.number(),
-    summary: v.string(),
-    evidence: v.string(),
-    suggestedFix: v.optional(v.string()),
-    category: v.string(),
+    ...findingFields,
   },
   returns: v.id('findings'),
   handler: async (ctx, args) => {
     return await ctx.db.insert('findings', args);
+  },
+});
+
+/** Atomically persist synthesized Findings and their ReviewJob confidence score. */
+export const recordSynthesizedReview = mutation({
+  args: {
+    reviewJobId: v.id('reviewJobs'),
+    pullRequestId: v.id('pullRequests'),
+    confidenceScore: confidence,
+    findings: v.array(findingInput),
+  },
+  returns: v.array(v.id('findings')),
+  handler: async (ctx, { reviewJobId, pullRequestId, confidenceScore, findings }) => {
+    await ctx.db.patch(reviewJobId, { confidenceScore });
+
+    const findingIds: Array<Id<'findings'>> = [];
+    for (const finding of findings) {
+      findingIds.push(
+        await ctx.db.insert('findings', {
+          reviewJobId,
+          pullRequestId,
+          ...finding,
+        }),
+      );
+    }
+    return findingIds;
   },
 });
 

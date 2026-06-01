@@ -11,9 +11,12 @@ export type Confidence = 0 | 1 | 2 | 3 | 4 | 5;
  */
 export type FindingCategory = string;
 
-/** Where in the Product a Finding points. */
-export interface FindingLocation {
-  /** `"owner/name"` of the Repo the Finding refers to. */
+/**
+ * Where the inline PR review comment attaches. Must be in the reviewed PR's
+ * diff; cross-repo consumer locations belong in `crossRepoReferences`.
+ */
+export interface FindingAnchor {
+  /** `"owner/name"` of the Repo the comment anchors to. */
   repo: string;
   /** File path within the Repo. */
   path: string;
@@ -23,11 +26,24 @@ export interface FindingLocation {
   lineEnd: number;
 }
 
+/** A confirmed affected sibling Repo consumer for a cross-repo Finding. */
+export interface CrossRepoReference {
+  /** `"owner/name"` of the sibling Repo. */
+  repo: string;
+  /** File path within the sibling Repo. */
+  path: string;
+  /** Referenced line in the sibling Repo at its recorded default-branch SHA. */
+  line: number;
+}
+
 /** A single issue raised by an Agent during a Review. */
 export interface Finding {
   severity: Severity;
   confidence: Confidence;
-  location: FindingLocation;
+  /** Stable key of the Agent that produced this Finding. */
+  agentKey: string;
+  anchor: FindingAnchor;
+  crossRepoReferences?: CrossRepoReference[];
   /** One-sentence description of the issue. */
   summary: string;
   /** Supporting code excerpts or `rg` results. */
@@ -37,12 +53,38 @@ export interface Finding {
   category: FindingCategory;
 }
 
+/** Whether and why an Agent performed Cross-Repo Search for one Review run. */
+export type CrossRepoSearchStatus = 'searched' | 'skipped';
+
+/** Which part of the Cross-Repo Search contract caused the Agent's decision. */
+export type CrossRepoSearchTrigger = 'manifest' | 'diff-judgment' | 'none';
+export type CrossRepoSearchRunTrigger = Exclude<CrossRepoSearchTrigger, 'none'>;
+
+interface CrossRepoSearchRationaleBase {
+  /** Human-readable reason the Agent searched, or why it skipped. */
+  rationale: string;
+  /** Owner/name Repos actually searched. Omit or leave empty when skipped. */
+  searchedRepos?: string[];
+}
+
+export type CrossRepoSearchRationale =
+  | (CrossRepoSearchRationaleBase & {
+      status: 'searched';
+      trigger: CrossRepoSearchRunTrigger;
+    })
+  | (CrossRepoSearchRationaleBase & {
+      status: 'skipped';
+      trigger: 'none';
+    });
+
 /**
  * The JSON block an Agent emits inside `<findings>…</findings>`. Parsed and
  * validated by the worker's findings-parser before any Finding is posted.
  */
 export interface FindingsPayload {
   findings: Finding[];
+  /** Required audit signal for Cross-Repo Search trigger/skip behavior. */
+  crossRepoSearch: CrossRepoSearchRationale;
   /** Optional one-paragraph summary the Agent may emit alongside its findings. */
   summary?: string;
 }

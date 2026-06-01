@@ -40,16 +40,30 @@ Emit findings as JSON inside `<findings>...</findings>`:
 <findings>
 {
   "summary": "Optional one-paragraph summary of the review",
+  "crossRepoSearch": {
+    "status": "searched" | "skipped",
+    "trigger": "manifest" | "diff-judgment" | "none",
+    "rationale": "Why you searched sibling Repos, or why no cross-repo contract risk was detected.",
+    "searchedRepos": ["owner/name"]
+  },
   "findings": [
     {
       "severity": "P0" | "P1" | "P2",
       "confidence": 0,
-      "location": {
+      "agentKey": "logic",
+      "anchor": {
         "repo": "owner/name",
         "path": "relative/path/from/repo/root.ts",
         "lineStart": 42,
         "lineEnd": 45
       },
+      "crossRepoReferences": [
+        {
+          "repo": "owner/sibling-repo",
+          "path": "relative/path/from/sibling/root.ts",
+          "line": 31
+        }
+      ],
       "summary": "One sentence describing the bug",
       "evidence": "Why this is a bug, with code quotes or rg results",
       "suggestedFix": "Optional: how to fix",
@@ -60,7 +74,8 @@ Emit findings as JSON inside `<findings>...</findings>`:
 </findings>
 ```
 
-Emit `<findings>{"findings":[]}</findings>` if you find nothing.
+Omit `crossRepoReferences` for same-Repo findings.
+Emit `<findings>{"crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"No cross-repo contract risk was detected."},"findings":[]}</findings>` if you find nothing.
 
 ## Severity
 

@@ -108,6 +108,7 @@ pass the tool's own flags after the image name:
 ```bash
 container run --rm --entrypoint opensrc sandy-agent --version
 container run --rm --entrypoint rg sandy-agent --version
+container run --rm --entrypoint tree_sitter_query sandy-agent --help
 container run --rm --entrypoint codex sandy-agent --version
 ```
 

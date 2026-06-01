@@ -70,14 +70,20 @@ if (!CURSOR_API_KEY) {
 // tool calls; Sandcastle's default 600s idle timeout then kills healthy agents.
 const IDLE_TIMEOUT_SECONDS = 30 * 60;
 
-// Gitignored cache dir for bind-mounted pnpm store (see .sandcastle/.gitignore).
+// Gitignored cache dirs for bind-mounted pnpm store + convex-local-backend
+// binary (see .sandcastle/.gitignore).
 mkdirSync('.sandcastle/pnpm-store', { recursive: true });
+mkdirSync('.sandcastle/convex-cache', { recursive: true });
 
 const sandboxProvider = appleContainer({
   imageName: SANDBOX_IMAGE_NAME,
   env: {
     GH_TOKEN: GITHUB_TOKEN,
     CURSOR_API_KEY,
+    // Run the Convex CLI as an anonymous agent: `convex dev`/`codegen` configure
+    // and target a login-free local backend instead of failing on an unset
+    // CONVEX_DEPLOYMENT. See ADR 0013.
+    CONVEX_AGENT_MODE: 'anonymous',
   },
   mounts: [
     {
@@ -109,6 +115,16 @@ const sandboxProvider = appleContainer({
       sandboxPath: '/home/agent/.local/share/pnpm/store',
       readonly: false,
     },
+    {
+      // convex-local-backend binary cache (ADR 0013). Like the pnpm store, this
+      // is a write-once cache shared across sandboxes: the first sandbox
+      // downloads the binary, the rest reuse it. The anonymous deployment STATE
+      // lives in each container's own ~/.convex, so parallel sandboxes stay
+      // isolated — only the binary is shared here.
+      hostPath: '.sandcastle/convex-cache',
+      sandboxPath: '/home/agent/.cache/convex',
+      readonly: false,
+    },
   ],
 });
 
@@ -129,12 +145,24 @@ const MAX_ITERATIONS = 10;
 // existence: a file-existence check passed even when platform-native bindings
 // were missing, which led to agents committing code without running tests.
 // Sandy builds with `pnpm -r` (no turbo), so we probe vitest directly.
+// The second step configures a login-free anonymous Convex deployment and warms
+// the convex-local-backend binary (ADR 0013) so `pnpm --filter
+// @sandy/convex-backend build` (convex codegen) works for the agents and the
+// merge gate. `--typecheck disable` keeps sandbox setup decoupled from
+// TypeScript — the agents run `pnpm type-check` themselves. CONVEX_AGENT_MODE is
+// set on the provider env, so this is non-interactive. The first sandbox on a
+// fresh host downloads the backend binary into the bind-mounted cache; the rest
+// reuse it.
 const hooks = {
   sandbox: {
     onSandboxReady: [
       {
         command:
           'pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile',
+        timeoutMs: 600_000,
+      },
+      {
+        command: 'pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
         timeoutMs: 600_000,
       },
     ],

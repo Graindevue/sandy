@@ -1,5 +1,9 @@
 import type {
   AgentRunStatus,
+  Confidence,
+  CrossRepoSearchRunTrigger,
+  CrossRepoSearchStatus,
+  CrossRepoSearchTrigger,
   PullRequestState,
   ReviewJobStatus,
   ReviewTrigger,
@@ -41,8 +45,54 @@ export const severity = v.union(
   v.literal('P2' satisfies Severity),
 );
 
+export const confidence = v.union(
+  v.literal(0 satisfies Confidence),
+  v.literal(1 satisfies Confidence),
+  v.literal(2 satisfies Confidence),
+  v.literal(3 satisfies Confidence),
+  v.literal(4 satisfies Confidence),
+  v.literal(5 satisfies Confidence),
+);
+
 export const agentRunStatus = v.union(
   v.literal('running' satisfies AgentRunStatus),
   v.literal('completed' satisfies AgentRunStatus),
   v.literal('failed' satisfies AgentRunStatus),
+  v.literal('timed_out' satisfies AgentRunStatus),
 );
+
+export const findingAnchor = v.object({
+  repo: v.string(),
+  path: v.string(),
+  lineStart: v.number(),
+  lineEnd: v.number(),
+});
+
+export const crossRepoReference = v.object({
+  repo: v.string(),
+  path: v.string(),
+  line: v.number(),
+});
+
+const crossRepoSearchRationaleFields = {
+  rationale: v.string(),
+  searchedRepos: v.optional(v.array(v.string())),
+};
+
+export const crossRepoSearchRationale = v.union(
+  v.object({
+    ...crossRepoSearchRationaleFields,
+    status: v.literal('searched' satisfies CrossRepoSearchStatus),
+    trigger: v.union(
+      v.literal('manifest' satisfies CrossRepoSearchRunTrigger),
+      v.literal('diff-judgment' satisfies CrossRepoSearchRunTrigger),
+    ),
+  }),
+  v.object({
+    ...crossRepoSearchRationaleFields,
+    status: v.literal('skipped' satisfies CrossRepoSearchStatus),
+    trigger: v.literal('none' satisfies CrossRepoSearchTrigger),
+  }),
+);
+
+export const siblingShas = v.record(v.string(), v.string());
