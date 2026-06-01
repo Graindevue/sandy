@@ -63,3 +63,11 @@ export class FindingArchetypeAssigner {
     return stamped;
   }
 }
+
+export class DisabledArchetypeAssigner {
+  async assignArchetypes(
+    findings: readonly PersistedFinding[],
+  ): Promise<ArchetypeAssignedFinding[]> {
+    return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
+  }
+}

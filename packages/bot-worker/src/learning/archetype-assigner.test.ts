@@ -1,6 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { FindingArchetypeAssigner } from './archetype-assigner.js';
+import { DisabledArchetypeAssigner, FindingArchetypeAssigner } from './archetype-assigner.js';
 
 const finding: Finding = {
   severity: 'P1',
@@ -56,6 +56,14 @@ describe('FindingArchetypeAssigner', () => {
         'Skipping Finding archetype assignment; posting review without learning metadata',
         expect.any(Error),
       ],
+    ]);
+  });
+
+  it('can be disabled for a worker session and pass Findings through without metadata', async () => {
+    const assigner = new DisabledArchetypeAssigner();
+
+    await expect(assigner.assignArchetypes([{ id: 'finding-1', finding }])).resolves.toEqual([
+      { id: 'finding-1', archetypeSuppressionWeight: 0, finding },
     ]);
   });
 });

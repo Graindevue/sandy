@@ -1,5 +1,5 @@
 export const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
-const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
+export const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
 export const FINDING_EMBEDDING_DIMENSIONS = 768;
 
 type FetchLike = typeof fetch;
@@ -69,7 +69,7 @@ export class OllamaFindingEmbedder {
   }
 }
 
-function normalizeOllamaHost(raw: string | undefined): string {
+export function normalizeOllamaHost(raw: string | undefined): string {
   const trimmed = raw?.trim();
   if (trimmed === undefined || trimmed.length === 0) {
     return DEFAULT_OLLAMA_HOST;

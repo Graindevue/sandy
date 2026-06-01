@@ -16,12 +16,16 @@ import {
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
-import { FindingArchetypeAssigner } from './learning/archetype-assigner.js';
+import {
+  DisabledArchetypeAssigner,
+  FindingArchetypeAssigner,
+} from './learning/archetype-assigner.js';
 import { DEFAULT_OLLAMA_HOST, OllamaFindingEmbedder } from './learning/embed.js';
 import {
   inferPrMergeStateSignals,
   startMergeStateSignalCron,
 } from './learning/merge-state-inferrer.js';
+import { provisionOllamaEmbeddingBackend } from './learning/ollama-provisioner.js';
 import { PromotionWorker } from './learning/promotion-worker.js';
 import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
 import { captureCommentReply as captureReplyFeedback } from './learning/reply-handler.js';
@@ -193,16 +197,23 @@ export async function main(): Promise<void> {
   const cancellations = new ReviewCancellationCoordinator();
   const poster = new PullRequestPoster(github);
   const executionStore = new ConvexExecutionStore(reactiveClient);
+  const ollama = await provisionOllamaEmbeddingBackend({
+    host: config.ollamaHost,
+    logger: console,
+  });
+  const archetypeAssigner = ollama.ready
+    ? new FindingArchetypeAssigner(
+        new OllamaFindingEmbedder({ host: ollama.host, model: ollama.model }),
+        executionStore,
+      )
+    : new DisabledArchetypeAssigner();
   const executor = new ReviewExecutor({
     store: executionStore,
     cloneManager,
     diffInspector: github,
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
-    archetypeAssigner: new FindingArchetypeAssigner(
-      new OllamaFindingEmbedder({ host: config.ollamaHost }),
-      executionStore,
-    ),
+    archetypeAssigner,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
     manifestBuilder: {
