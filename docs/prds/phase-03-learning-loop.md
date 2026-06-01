@@ -55,8 +55,8 @@ suggestedRules: {
   - `rollupMergeStateSignals` daily — checks merged PRs for "merge-with-fix" vs "merge-without-fix" implicit signal per Finding.
 
 **`packages/bot-worker/`** (extended)
-- `src/learning/embed.ts` — `embedFindingSummary(summary)` via local Ollama `nomic-embed-text`.
-- `src/learning/archetype-assigner.ts` — runs after each Agent emits Findings; embeds and calls `assignOrCreateArchetype`.
+- `src/learning/embed.ts` — `embedFindingText(text)` via local Ollama `nomic-embed-text`.
+- `src/learning/archetype-assigner.ts` — runs after each Agent emits Findings; embeds the Finding's `evidence` (not its summary — surface-variable summaries scatter identical issues below the threshold) and calls `assignOrCreateArchetype`.
 - `src/learning/reaction-handler.ts` — webhook handler for `pull_request_review_comment` reactions. Parses the HTML trailer to map back to the Finding; records the reaction.
 - `src/learning/reply-handler.ts` — for replies under bot comments: stores `replyText` on the reaction record. The drafting step (Convex cron) uses this to seed SuggestedRule description.
 - `src/learning/merge-state-inferrer.ts` — for merged PRs, walks the commits between Sandy's comment-post and the merge; if any commit touched the commented `file:line range`, that's `mergedFixed`; otherwise `mergedIgnored`.

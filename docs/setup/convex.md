@@ -38,7 +38,7 @@ watcher running while developing the backend.
 > CONVEX_URL=https://your-deployment.convex.cloud
 > ```
 
-Finding summaries are embedded by the bot worker through local Ollama, so Convex
+Finding evidence is embedded by the bot worker through local Ollama, so Convex
 does not need an embedding API key.
 
 ## 2. Generate types and deploy the schema

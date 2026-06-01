@@ -53,8 +53,9 @@ Stored in Convex; persists across PRs for learning purposes.
 
 A cluster of Findings that are semantically similar. Identified via embedding
 similarity (cosine >= 0.8) within one Product and Agent on 768-dimensional
-Finding summary embeddings supplied by the bot worker through local Ollama
-`nomic-embed-text`. Carries a `suppressionWeight` that the Synthesizer applies at
+Finding **evidence** embeddings supplied by the bot worker through local Ollama
+`nomic-embed-text` (evidence describes the underlying mechanism and clusters more
+reliably than the surface-variable summary). Carries a `suppressionWeight` that the Synthesizer applies at
 posting time. Mutable state in Convex — not version-controlled.
 
 ## Rule
