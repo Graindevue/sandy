@@ -153,6 +153,14 @@ const MAX_ITERATIONS = 10;
 // set on the provider env, so this is non-interactive. The first sandbox on a
 // fresh host downloads the backend binary into the bind-mounted cache; the rest
 // reuse it.
+//
+// CONVEX_DEPLOYMENT is cleared inline: convex selects a deployment from the
+// environment (incl. a dotenv-loaded .env.local) BEFORE it consults
+// CONVEX_AGENT_MODE, so a real `dev:` deployment wins and forces an interactive
+// login. The planner runs against the live host repo (no isolated worktree), so
+// the host's gitignored packages/convex-backend/.env.local is visible inside the
+// sandbox. dotenv won't override an already-set env var and convex treats an
+// empty CONVEX_DEPLOYMENT as unset, so this pins the anonymous path everywhere.
 const hooks = {
   sandbox: {
     onSandboxReady: [
@@ -162,7 +170,8 @@ const hooks = {
         timeoutMs: 600_000,
       },
       {
-        command: 'pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
+        command:
+          'CONVEX_DEPLOYMENT= pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
         timeoutMs: 600_000,
       },
     ],
