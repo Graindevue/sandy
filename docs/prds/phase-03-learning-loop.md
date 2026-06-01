@@ -15,8 +15,9 @@ Activate the continuous-learning pipeline. Findings cluster into Archetypes via 
 ```typescript
 archetypes: {
   productId,
+  agentKey,               // clusters are scoped to one reviewer persona
   label,                  // human-readable, generated from exemplars
-  exemplarEmbedding,      // 1536-dim for text-embedding-3-small
+  exemplarEmbedding,      // 768-dim worker-supplied Finding embedding
   exampleFindingIds,      // up to N=5 references
   count,
   suppressionWeight,      // 0.0 → 1.0; ≥0.7 = dropped by Synthesizer
@@ -45,16 +46,16 @@ suggestedRules: {
 ### Code
 
 **`packages/convex-backend/`** (extended)
-- `archetypes.ts` — mutation: `assignOrCreateArchetype(findingId, embedding)`; query: `byProduct`; mutation: `updateSuppressionWeight`.
+- `archetypes.ts` — mutation: `assignOrCreateArchetype(findingId, embedding)`; query: `byProduct`; mutation: `updateSuppressionWeight`; clusters are scoped by `(productId, agentKey)`.
 - `reactions.ts` — mutation: `recordReaction`; subscription-friendly query: `recentByArchetype`.
 - `suggestedRules.ts` — mutation: `createIfEvidenceThresholdMet`; query: `subscribePending`; mutation: `markPromoted`.
 - `crons.ts` extended:
-  - `clusterRecentFindings` every 10 min — embeds new Findings, assigns Archetypes, updates `archetypes.count`.
+  - Finding embeddings are worker-supplied; Convex does not embed server-side.
   - `inferSuggestedRulesFromReactions` daily — looks for Archetypes with ≥3 negative reactions and no existing SuggestedRule; drafts one.
   - `rollupMergeStateSignals` daily — checks merged PRs for "merge-with-fix" vs "merge-without-fix" implicit signal per Finding.
 
 **`packages/bot-worker/`** (extended)
-- `src/learning/embed.ts` — `embedFindingSummary(summary)` via OpenAI `text-embedding-3-small`.
+- `src/learning/embed.ts` — `embedFindingSummary(summary)` via the local Finding embedder.
 - `src/learning/archetype-assigner.ts` — runs after each Agent emits Findings; embeds and calls `assignOrCreateArchetype`.
 - `src/learning/reaction-handler.ts` — webhook handler for `pull_request_review_comment` reactions. Parses the HTML trailer to map back to the Finding; records the reaction.
 - `src/learning/reply-handler.ts` — for replies under bot comments: stores `replyText` on the reaction record. The drafting step (Convex cron) uses this to seed SuggestedRule description.
@@ -92,7 +93,7 @@ suggestedRules: {
 ## Dependencies
 
 - Phase 2 must be merged.
-- OpenAI API key for `text-embedding-3-small`.
+- A configured worker-side Finding embedder.
 - Anthropic API key for Haiku (Rule drafting).
 
 ## Open questions

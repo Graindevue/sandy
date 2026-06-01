@@ -15,7 +15,6 @@ import type * as archetypes from "../archetypes.js";
 import type * as crons from "../crons.js";
 import type * as findings from "../findings.js";
 import type * as limits from "../limits.js";
-import type * as openaiEmbeddings from "../openaiEmbeddings.js";
 import type * as products from "../products.js";
 import type * as pullRequests from "../pullRequests.js";
 import type * as reactionEvidence from "../reactionEvidence.js";
@@ -41,7 +40,6 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   findings: typeof findings;
   limits: typeof limits;
-  openaiEmbeddings: typeof openaiEmbeddings;
   products: typeof products;
   pullRequests: typeof pullRequests;
   reactionEvidence: typeof reactionEvidence;

@@ -12,23 +12,17 @@ import {
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
 import { clampLimit } from './limits.js';
-import { embedFindingSummary } from './openaiEmbeddings.js';
-import { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from './schema.js';
+import { FINDING_EMBEDDING_DIMENSIONS } from './schema.js';
 
-const ARCHETYPE_SIMILARITY_THRESHOLD = 0.85;
+const ARCHETYPE_SIMILARITY_THRESHOLD = 0.8;
 const MAX_EXAMPLE_FINDING_IDS = 5;
 const DEFAULT_ARCHETYPE_QUERY_LIMIT = 50;
-const DEFAULT_CLUSTER_BATCH_SIZE = 20;
-const MAX_CLUSTER_BATCH_SIZE = 50;
 
 type AssignmentContext = {
   productId: Id<'products'>;
+  agentKey: string;
+  scopeKey: string;
   currentArchetypeId?: Id<'archetypes'>;
-};
-
-type UnclusteredFinding = {
-  _id: Id<'findings'>;
-  summary: string;
 };
 
 type AssignmentResult = {
@@ -89,26 +83,8 @@ export const clusterRecentFindings = internalAction({
     clustered: v.number(),
     failed: v.number(),
   }),
-  handler: async (ctx, { limit }) => {
-    const findings: UnclusteredFinding[] = await ctx.runQuery(
-      internal.archetypes.unclusteredFindings,
-      limit === undefined ? {} : { limit },
-    );
-    let clustered = 0;
-    let failed = 0;
-
-    for (const finding of findings) {
-      try {
-        const embedding = await embedFindingSummary(finding.summary);
-        await assignEmbeddingToArchetype(ctx, { findingId: finding._id, embedding });
-        clustered += 1;
-      } catch (error) {
-        failed += 1;
-        warn(`failed to cluster Finding ${finding._id}`, error);
-      }
-    }
-
-    return { attempted: findings.length, clustered, failed };
+  handler: async () => {
+    return { attempted: 0, clustered: 0, failed: 0 };
   },
 });
 
@@ -117,6 +93,8 @@ export const assignmentContext = internalQuery({
   returns: v.union(
     v.object({
       productId: v.id('products'),
+      agentKey: v.string(),
+      scopeKey: v.string(),
       currentArchetypeId: v.optional(v.id('archetypes')),
     }),
     v.null(),
@@ -130,29 +108,16 @@ export const assignmentContext = internalQuery({
     if (productId === null) {
       return null;
     }
+    const scopeKey = archetypeScopeKey(productId, finding.agentKey);
     if (finding.archetypeId !== undefined) {
-      return { productId, currentArchetypeId: finding.archetypeId };
+      return {
+        productId,
+        agentKey: finding.agentKey,
+        scopeKey,
+        currentArchetypeId: finding.archetypeId,
+      };
     }
-    return { productId };
-  },
-});
-
-export const unclusteredFindings = internalQuery({
-  args: {
-    limit: v.optional(v.number()),
-  },
-  returns: v.array(
-    v.object({
-      _id: v.id('findings'),
-      summary: v.string(),
-    }),
-  ),
-  handler: async (ctx, { limit }): Promise<UnclusteredFinding[]> => {
-    const findings = await ctx.db
-      .query('findings')
-      .withIndex('by_archetype', (q) => q.eq('archetypeId', undefined))
-      .take(clampLimit(limit, DEFAULT_CLUSTER_BATCH_SIZE, MAX_CLUSTER_BATCH_SIZE));
-    return findings.map((finding) => ({ _id: finding._id, summary: finding.summary }));
+    return { productId, agentKey: finding.agentKey, scopeKey };
   },
 });
 
@@ -183,9 +148,11 @@ export const persistAssignment = internalMutation({
       throw new Error(`Finding ${findingId} is not linked to a Product`);
     }
 
+    const scopeKey = archetypeScopeKey(productId, finding.agentKey);
+
     if (matchedArchetypeId !== undefined) {
       const matched = await ctx.db.get(matchedArchetypeId);
-      if (matched !== null && matched.productId === productId) {
+      if (matched !== null && matched.scopeKey === scopeKey) {
         const exampleFindingIds = appendExampleFindingId(matched.exampleFindingIds, findingId);
         await ctx.db.patch(findingId, { embedding, archetypeId: matchedArchetypeId });
         await ctx.db.patch(matchedArchetypeId, {
@@ -199,6 +166,8 @@ export const persistAssignment = internalMutation({
     const suppressionWeight = 0;
     const archetypeId = await ctx.db.insert('archetypes', {
       productId,
+      agentKey: finding.agentKey,
+      scopeKey,
       label: labelFromFindingSummary(finding.summary),
       exemplarEmbedding: embedding,
       exampleFindingIds: [findingId],
@@ -233,10 +202,10 @@ async function assignEmbeddingToArchetype(
     });
   }
 
-  const nearest = await ctx.vectorSearch('archetypes', 'by_exemplar_embedding_and_product', {
+  const nearest = await ctx.vectorSearch('archetypes', 'by_exemplar_embedding_and_scope_key', {
     vector: args.embedding,
     limit: 1,
-    filter: (q) => q.eq('productId', context.productId),
+    filter: (q) => q.eq('scopeKey', context.scopeKey),
   });
   const match = nearest[0];
   const matchedArchetypeId =
@@ -286,17 +255,16 @@ function assignmentResultFor(archetype: {
   return { archetypeId: archetype._id, suppressionWeight: archetype.suppressionWeight };
 }
 
-function ensureEmbeddingDimensions(embedding: number[]): void {
-  if (embedding.length !== TEXT_EMBEDDING_3_SMALL_DIMENSIONS) {
-    throw new Error(
-      `Finding embedding had ${embedding.length} dimensions; expected ${TEXT_EMBEDDING_3_SMALL_DIMENSIONS}`,
-    );
-  }
+// Convex vector filters support equality/or expressions, so this encodes the
+// exact (productId, agentKey) bucket as one equality-filterable field.
+function archetypeScopeKey(productId: Id<'products'>, agentKey: string): string {
+  return JSON.stringify([productId, agentKey]);
 }
 
-function warn(message: string, error: unknown): void {
-  (globalThis as { console?: { warn(message: string, error: unknown): void } }).console?.warn(
-    message,
-    error,
-  );
+function ensureEmbeddingDimensions(embedding: number[]): void {
+  if (embedding.length !== FINDING_EMBEDDING_DIMENSIONS) {
+    throw new Error(
+      `Finding embedding had ${embedding.length} dimensions; expected ${FINDING_EMBEDDING_DIMENSIONS}`,
+    );
+  }
 }
