@@ -23,6 +23,7 @@ import {
   startMergeStateSignalCron,
 } from './learning/merge-state-inferrer.js';
 import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
+import { captureCommentReply as captureReplyFeedback } from './learning/reply-handler.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
 import { ReviewCancellationCoordinator } from './worker/cancellation.js';
@@ -251,6 +252,18 @@ export async function main(): Promise<void> {
         });
         await sink.markMergeStateSignalsRolledUp({ pullRequestId, rolledUpAt: Date.now() });
         return { recorded: closeReactions.recorded + mergeState.recorded };
+      },
+    },
+    replyCapturer: {
+      async captureCommentReply({ repo, pullNumber, pullRequestId, comment }) {
+        return await captureReplyFeedback({
+          repo,
+          pullNumber,
+          pullRequestId,
+          comment,
+          store: sink,
+          github,
+        });
       },
     },
   });

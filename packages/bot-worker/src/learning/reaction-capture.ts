@@ -1,14 +1,18 @@
 import type { ReactionKind } from '@sandy/shared-types';
-import type { RepoRef } from '../webhook/events.js';
-import { findingIdsFromCommentTrailer } from './comment-trailer.js';
+import type { GitHubCommentKind, RepoRef } from '../webhook/events.js';
+import {
+  type FindingCommentTarget,
+  findingIdsFromTrailerMatching,
+  knownFindingIdsForTargets,
+} from './comment-findings.js';
 
 export type CapturedReactionKind = Extract<ReactionKind, '👍' | '👎'>;
-export type ReactionCaptureCommentKind = 'pull_request_review_comment' | 'issue_comment';
+export type ReactionCaptureCommentKind = GitHubCommentKind;
+export type RecordedReactionInput =
+  | { findingId: string; kind: Exclude<ReactionKind, 'reply'>; replyText?: never }
+  | { findingId: string; kind: 'reply'; replyText: string };
 
-export interface ReactionTarget {
-  findingId: string;
-  githubCommentId?: number;
-}
+export interface ReactionTarget extends FindingCommentTarget {}
 
 export interface ReactionCaptureComment {
   id: number;
@@ -37,7 +41,7 @@ export interface ReactionCaptureGitHub {
 
 export interface ReactionCaptureStore {
   listReactionTargetsForPr(pullRequestId: string): Promise<ReactionTarget[]>;
-  recordReaction(input: { findingId: string; kind: CapturedReactionKind }): Promise<void>;
+  recordReaction(input: RecordedReactionInput): Promise<void>;
 }
 
 export interface CapturePrCloseReactionsInput {
@@ -95,7 +99,7 @@ function reactionCaptureCandidates(
   targets: readonly ReactionTarget[],
   comments: readonly ReactionCaptureComment[],
 ): ReactionCaptureCandidate[] {
-  const knownFindingIds = new Set(targets.map((target) => target.findingId));
+  const knownFindingIds = knownFindingIdsForTargets(targets);
   const candidatesByCommentId = new Map<number, ReactionCaptureCandidate>();
 
   for (const target of targets) {
@@ -111,10 +115,7 @@ function reactionCaptureCandidates(
     if (storedCandidate !== undefined) {
       storedCandidate.kind = comment.kind;
     }
-    for (const findingId of findingIdsFromCommentTrailer(comment.body)) {
-      if (!knownFindingIds.has(findingId)) {
-        continue;
-      }
+    for (const findingId of findingIdsFromTrailerMatching(comment.body, knownFindingIds)) {
       const candidate = candidateForComment(candidatesByCommentId, comment.id);
       candidate.kind = comment.kind;
       candidate.findingIds.add(findingId);

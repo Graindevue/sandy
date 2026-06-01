@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import {
+  type CommentReplyCapturer,
   type DispatchLogger,
   type DispatchOptions,
   dispatchEvent,
@@ -39,6 +40,8 @@ export interface WebhookServerOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
   /** Optional close-time poller for Sandy learning signals. */
   closeSignalCapturer?: PrCloseSignalCapturer;
+  /** Optional real-time capture for replies under Sandy review comments. */
+  replyCapturer?: CommentReplyCapturer;
   /** Optional local cancellation registry for jobs superseded by push deliveries. */
   reviewCanceller?: ReviewCanceller;
   /** Logger; defaults to `console`. */
@@ -177,6 +180,7 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
   if (
     options.forkDeclineCommenter === undefined &&
     options.closeSignalCapturer === undefined &&
+    options.replyCapturer === undefined &&
     options.reviewCanceller === undefined
   ) {
     return undefined;
@@ -187,6 +191,9 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
   }
   if (options.closeSignalCapturer !== undefined) {
     dispatch.closeSignalCapturer = options.closeSignalCapturer;
+  }
+  if (options.replyCapturer !== undefined) {
+    dispatch.replyCapturer = options.replyCapturer;
   }
   if (options.reviewCanceller !== undefined) {
     dispatch.reviewCanceller = options.reviewCanceller;

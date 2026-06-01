@@ -67,6 +67,7 @@ export const agentRunStatus = v.union(
 export const reactionKind = v.union(
   v.literal('👍' satisfies ReactionKind),
   v.literal('👎' satisfies ReactionKind),
+  v.literal('reply' satisfies ReactionKind),
   v.literal('mergedFixed' satisfies ReactionKind),
   v.literal('mergedIgnored' satisfies ReactionKind),
 );

@@ -7,9 +7,9 @@ import type {
   MergeStateTarget,
 } from '../learning/merge-state-inferrer.js';
 import type {
-  CapturedReactionKind,
   ReactionCaptureStore,
   ReactionTarget,
+  RecordedReactionInput,
 } from '../learning/reaction-capture.js';
 import type { RepoRef } from './events.js';
 
@@ -150,11 +150,17 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
     return findings.map(findingCommentTarget);
   }
 
-  async recordReaction(input: { findingId: string; kind: CapturedReactionKind }): Promise<void> {
-    await this.#client.mutation(api.reactions.recordReaction, {
-      findingId: input.findingId as never,
-      kind: input.kind,
-    });
+  async recordReaction(input: RecordedReactionInput): Promise<void> {
+    const findingId = input.findingId as never;
+    if (input.kind === 'reply') {
+      await this.#client.mutation(api.reactions.recordReaction, {
+        findingId,
+        kind: input.kind,
+        replyText: input.replyText,
+      });
+      return;
+    }
+    await this.#client.mutation(api.reactions.recordReaction, { findingId, kind: input.kind });
   }
 
   async listMergeStateTargetsForPr(pullRequestId: string): Promise<MergeStateTarget[]> {

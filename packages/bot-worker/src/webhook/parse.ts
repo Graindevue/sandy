@@ -41,7 +41,12 @@ interface RawPullRequestPayload {
 interface RawCommentPayload {
   action?: string;
   repository?: RawRepoRef;
-  comment?: { body?: string };
+  comment?: {
+    id?: number;
+    body?: string;
+    in_reply_to?: number | null;
+    in_reply_to_id?: number | null;
+  };
   issue?: { pull_request?: unknown; number?: number };
   pull_request?: RawPullRequest;
 }
@@ -167,7 +172,13 @@ function parseCommentEvent(payload: RawCommentPayload, isReviewComment: boolean)
     // the GitHub API; the pure parser fails closed when called without one.
     return ignored('comment: pull_request details unavailable');
   }
-  return { kind: 'comment', repo, body, pr } satisfies CommentEvent;
+  return {
+    kind: 'comment',
+    repo,
+    body,
+    pr,
+    ...commentMetadata(payload, isReviewComment),
+  } satisfies CommentEvent;
 }
 
 export interface PullRequestResolver {
@@ -211,7 +222,34 @@ async function parseResolvableIssueCommentEvent(
   if (pr === null) {
     return ignored('issue_comment: pull_request details unavailable');
   }
-  return { kind: 'comment', repo, body, pr } satisfies CommentEvent;
+  return {
+    kind: 'comment',
+    repo,
+    body,
+    pr,
+    ...commentMetadata(payload, false),
+  } satisfies CommentEvent;
+}
+
+function commentMetadata(
+  payload: RawCommentPayload,
+  isReviewComment: boolean,
+): Pick<CommentEvent, 'commentKind'> &
+  Partial<Pick<CommentEvent, 'githubCommentId' | 'inReplyToId'>> {
+  const metadata: Pick<CommentEvent, 'commentKind'> &
+    Partial<Pick<CommentEvent, 'githubCommentId' | 'inReplyToId'>> = {
+    commentKind: isReviewComment ? 'pull_request_review_comment' : 'issue_comment',
+  };
+  if (typeof payload.comment?.id === 'number') {
+    metadata.githubCommentId = payload.comment.id;
+  }
+  if (isReviewComment) {
+    const inReplyToId = payload.comment?.in_reply_to_id ?? payload.comment?.in_reply_to;
+    if (typeof inReplyToId === 'number') {
+      metadata.inReplyToId = inReplyToId;
+    }
+  }
+  return metadata;
 }
 
 async function parseResolvablePushEvent(

@@ -118,6 +118,24 @@ describe('parseEvent — pull_request_review_comment action (finding #2)', () =>
     );
     expect(event.kind).toBe('ignored');
   });
+
+  it('parses reply metadata from a created review comment', () => {
+    const event = parseEvent('pull_request_review_comment', {
+      action: 'created',
+      repository: REPO,
+      comment: {
+        id: 303,
+        body: 'This finding is not useful.',
+        in_reply_to_id: 101,
+      },
+      pull_request: rawPullRequest(),
+    });
+
+    const comment = expectComment(event);
+    expect(comment.commentKind).toBe('pull_request_review_comment');
+    expect(comment.githubCommentId).toBe(303);
+    expect(comment.inReplyToId).toBe(101);
+  });
 });
 
 describe('parseEventForDispatch — issue_comment hydration', () => {

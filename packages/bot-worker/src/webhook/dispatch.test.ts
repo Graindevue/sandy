@@ -105,7 +105,13 @@ class FakeForkDeclineCommenter {
 }
 
 function comment(body: string, prOverrides: Partial<PullRequestFacts> = {}): CommentEvent {
-  return { kind: 'comment', repo: BASE_REPO, body, pr: prFacts(prOverrides) };
+  return {
+    kind: 'comment',
+    repo: BASE_REPO,
+    commentKind: 'issue_comment',
+    body,
+    pr: prFacts(prOverrides),
+  };
 }
 
 function pr(
@@ -233,6 +239,75 @@ describe('dispatchEvent', () => {
 
     expect(captured).toEqual([{ state: 'merged' }]);
     expect(sink.upserts[0]?.state).toBe('merged');
+  });
+
+  it('captures reply feedback for a review-comment reply without enqueuing a review', async () => {
+    const sink = new FakeSink(false);
+    const replies: Array<{
+      repo: RepoRef;
+      pullNumber: number;
+      pullRequestId: string;
+      comment: { id: number; body: string; inReplyToId?: number };
+    }> = [];
+
+    const outcome = await dispatchEvent(
+      {
+        ...comment('This finding is not useful.'),
+        commentKind: 'pull_request_review_comment',
+        githubCommentId: 303,
+        inReplyToId: 101,
+      },
+      sink,
+      silentLogger,
+      {
+        replyCapturer: {
+          async captureCommentReply(input) {
+            replies.push(input);
+            return { recorded: 1 };
+          },
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
+    expect(replies).toEqual([
+      {
+        repo: BASE_REPO,
+        pullNumber: 7,
+        pullRequestId: 'pr:repo:tony-co/sandy#7',
+        comment: {
+          id: 303,
+          body: 'This finding is not useful.',
+          inReplyToId: 101,
+        },
+      },
+    ]);
+    expect(sink.enqueued).toHaveLength(0);
+  });
+
+  it('does not send PR Conversation comments to the reply capturer', async () => {
+    const sink = new FakeSink(false);
+    const replies: unknown[] = [];
+
+    await dispatchEvent(
+      {
+        ...comment('Top-level PR comment'),
+        commentKind: 'issue_comment',
+        githubCommentId: 303,
+      },
+      sink,
+      silentLogger,
+      {
+        replyCapturer: {
+          async captureCommentReply(input) {
+            replies.push(input);
+            return { recorded: 1 };
+          },
+        },
+      },
+    );
+
+    expect(replies).toEqual([]);
   });
 
   // AC: a fork PR is declined with a documented-limitation message, not reviewed.
