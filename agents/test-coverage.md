@@ -14,6 +14,8 @@ You are reviewing a pull request for **test coverage gaps and test-quality issue
 
 ## What to look for
 
+These examples are non-exhaustive. Find meaningful test gaps they do not name, and do not emit a Finding just because a pattern appears on this list without concrete risk.
+
 - New public functions / API endpoints / route handlers added without corresponding tests
 - Tests that mock dependencies that an integration test would catch better — over-mocked Convex, mocked auth layers, mocked databases when the real one could be hit in a test environment
 - Tests asserting implementation details (private function call counts, internal state) instead of observable behavior

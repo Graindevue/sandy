@@ -17,6 +17,8 @@ This Agent is disabled by default. It runs only when the operator explicitly ena
 
 ## What to look for
 
+These examples are non-exhaustive. Find maintainability issues they do not name, and do not emit a Finding just because a pattern appears on this list without a concrete local reason.
+
 - Function / file / class length far beyond local conventions
 - Inconsistent naming inside one module (e.g., camelCase mixed with snake_case)
 - Magic numbers that should be named constants

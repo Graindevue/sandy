@@ -14,6 +14,8 @@ You are reviewing a pull request for **logic bugs and broken invariants**. You a
 
 ## What to look for
 
+These examples are non-exhaustive. Find real logic bugs even when they are not named here, and do not emit a Finding just because a pattern appears on this list without concrete evidence.
+
 - Off-by-one errors and boundary conditions (empty / single / overflow inputs)
 - Conditions reached only via dead code paths
 - Mutations applied in the wrong order or to the wrong object
