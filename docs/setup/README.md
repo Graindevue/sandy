@@ -17,9 +17,9 @@ You also need:
 - A **[Codex][codex]** login on the host — the Phase 1 `logic` Agent runs on
   Codex (`vendor: codex`). Run `codex login` once (uses your ChatGPT
   subscription); the worker stages that credential into each Agent container
-  (see [`sandcastle-image.md`](./sandcastle-image.md)). An OpenAI API key, or
+  (see [`sandcastle-image.md`](./sandcastle-image.md)). OpenAI API-key auth, or
   running `logic` on **[Anthropic][anthropic]** Claude instead, are both
-  supported — see [`github-app.md`](./github-app.md)
+  supported as optional Agent runtime choices — see [`github-app.md`](./github-app.md)
 - **[Tailscale][tailscale]** for webhook ingress (recommended)
 - **[`opensrc`][opensrc]** installed globally (ADR [0008](../adr/0008-opensrc-for-framework-source-truth.md))
 

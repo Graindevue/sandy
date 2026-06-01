@@ -556,8 +556,7 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const archetypeAssignedFindings =
-      await this.#archetypeAssigner.assignArchetypes(persistedFindings);
+    const archetypeAssignedFindings = await this.#assignArchetypesOrPassThrough(persistedFindings);
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
     const postable = synthesizePostableReview({
       archetypeAssignedFindings,
@@ -571,6 +570,20 @@ export class ReviewExecutor {
       input.siblingShas,
       postable.summary,
     );
+  }
+
+  async #assignArchetypesOrPassThrough(
+    findings: readonly PersistedFinding[],
+  ): Promise<ArchetypeAssignedFinding[]> {
+    try {
+      return await this.#archetypeAssigner.assignArchetypes(findings);
+    } catch (error) {
+      console.warn(
+        'Skipping Finding archetype assignment; posting review without learning metadata',
+        error,
+      );
+      return findings.map((finding) => ({ ...finding, archetypeSuppressionWeight: 0 }));
+    }
   }
 
   async #postReviewResult(

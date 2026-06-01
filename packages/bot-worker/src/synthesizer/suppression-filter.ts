@@ -12,7 +12,11 @@ export function selectPostableFindings(
 
   for (const { id, archetypeId, archetypeSuppressionWeight, finding } of findings) {
     if (archetypeSuppressionWeight < SUPPRESSION_WEIGHT_THRESHOLD) {
-      postable.push({ id, archetypeId, finding });
+      postable.push({
+        id,
+        finding,
+        ...(archetypeId === undefined ? {} : { archetypeId }),
+      });
     }
   }
 

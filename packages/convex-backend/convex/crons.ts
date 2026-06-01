@@ -36,12 +36,6 @@ export const reapStuckJobs = internalMutation({
 const crons = cronJobs();
 
 crons.interval('reap stuck ReviewJobs', { minutes: 5 }, internal.crons.reapStuckJobs, {});
-crons.interval(
-  'cluster recent Findings',
-  { minutes: 10 },
-  internal.archetypes.clusterRecentFindings,
-  {},
-);
 crons.daily(
   'infer SuggestedRules from reactions',
   { hourUTC: 3, minuteUTC: 0 },

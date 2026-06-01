@@ -5,7 +5,7 @@ import {
   SUGGESTED_RULE_STATUSES,
   SUGGESTED_RULE_TYPES,
 } from '../../shared-types/src/learning.js';
-import schema, { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from '../convex/schema.js';
+import schema, { NOMIC_EMBED_TEXT_DIMENSIONS } from '../convex/schema.js';
 import {
   arrayType,
   expectFields,
@@ -41,6 +41,10 @@ describe('Phase 3 Convex schema foundation', () => {
     ]);
   });
 
+  it('uses nomic-embed-text embedding dimensions', () => {
+    expect(NOMIC_EMBED_TEXT_DIMENSIONS).toBe(768);
+  });
+
   it('defines learning-loop table fields and Finding extensions', () => {
     for (const tableName of learningLoopTables) {
       expectFields(table(tableName), expectedLearningTableFields[tableName]);
@@ -64,7 +68,7 @@ type LearningLoopTableName = (typeof learningLoopTables)[number];
 const archetypeVectorIndex = {
   indexDescriptor: 'by_exemplar_embedding_and_product',
   vectorField: 'exemplarEmbedding',
-  dimensions: TEXT_EMBEDDING_3_SMALL_DIMENSIONS,
+  dimensions: NOMIC_EMBED_TEXT_DIMENSIONS,
   filterFields: ['productId'],
 } satisfies VectorIndexExport;
 

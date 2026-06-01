@@ -34,16 +34,12 @@ watcher running while developing the backend.
 > just this line and `github-app.md` will fill in the rest:
 >
 > ```bash
-> # .config/.env — set this line (github-app.md adds the GitHub + OpenAI keys)
+> # .config/.env — set this line (github-app.md adds the GitHub keys)
 > CONVEX_URL=https://your-deployment.convex.cloud
 > ```
 
-Phase 3's backstop clustering cron also embeds Finding summaries from Convex,
-so set the same OpenAI key on the Convex deployment:
-
-```bash
-pnpm --filter @sandy/convex-backend exec convex env set OPENAI_API_KEY sk-...
-```
+Finding summaries are embedded by the bot worker through local Ollama, so Convex
+does not need an embedding API key.
 
 ## 2. Generate types and deploy the schema
 
@@ -81,17 +77,17 @@ deploys them; it doesn't restate the list. Phase 3 learning-loop tables
 (`archetypes`, `reactions`, and `suggestedRules`) are present.
 
 The `reapStuckJobs` cron runs every 5 minutes and marks ReviewJobs left
-`running` for more than 30 minutes as `failed`. The `clusterRecentFindings` cron
-runs every 10 minutes and assigns an Archetype to any Finding still missing one.
+`running` for more than 30 minutes as `failed`. The SuggestedRule inference cron
+runs daily after reactions have accumulated.
 
 ## 4. Verify
 
 The Convex dashboard (`npx convex dashboard` from
 `packages/convex-backend`, or <https://dashboard.convex.dev>) should show the
 schema tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
-functions under **Functions**, plus the `reapStuckJobs` and
-`clusterRecentFindings` crons under **Cron Jobs**. The tables are empty until
-Sandy observes its first PR.
+functions under **Functions**, plus the `reapStuckJobs` and SuggestedRule
+inference crons under **Cron Jobs**. The tables are empty until Sandy observes
+its first PR.
 
 ## Next
 

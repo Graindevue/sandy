@@ -1,34 +1,70 @@
 import { describe, expect, it } from 'vitest';
-import { OpenAIFindingEmbedder } from './embed.js';
+import { OllamaFindingEmbedder } from './embed.js';
 
-describe('OpenAIFindingEmbedder', () => {
-  it('requests text-embedding-3-small embeddings for Finding summaries', async () => {
+describe('OllamaFindingEmbedder', () => {
+  it('requests nomic-embed-text embeddings for Finding summaries', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init: Parameters<typeof fetch>[1] }> =
       [];
+    const vector = Array.from({ length: 768 }, (_, index) => index / 1000);
     const fakeFetch: typeof fetch = async (input, init) => {
       calls.push({ input, init });
-      return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
-        status: 200,
-      });
+      return new Response(JSON.stringify({ embedding: vector }), { status: 200 });
     };
-    const embedder = new OpenAIFindingEmbedder({
-      apiKey: 'sk-test',
+    const embedder = new OllamaFindingEmbedder({
       fetch: fakeFetch,
-      expectedDimensions: 3,
     });
 
     const embedding = await embedder.embedFindingSummary('The cache key ignores the tenant id.');
 
-    expect(embedding).toEqual([0.1, 0.2, 0.3]);
-    expect(calls[0]?.input).toBe('https://api.openai.com/v1/embeddings');
+    expect(embedding).toEqual(vector);
+    expect(calls[0]?.input).toBe('http://127.0.0.1:11434/api/embeddings');
     expect(calls[0]?.init?.method).toBe('POST');
     expect(calls[0]?.init?.headers).toEqual({
-      authorization: 'Bearer sk-test',
       'content-type': 'application/json',
     });
     expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({
-      model: 'text-embedding-3-small',
-      input: 'The cache key ignores the tenant id.',
+      model: 'nomic-embed-text',
+      prompt: 'The cache key ignores the tenant id.',
     });
+  });
+
+  it('uses a configured Ollama host', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init: Parameters<typeof fetch>[1] }> =
+      [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      calls.push({ input, init });
+      return new Response(JSON.stringify({ embedding: [0.1, 0.2, 0.3] }), { status: 200 });
+    };
+    const embedder = new OllamaFindingEmbedder({
+      fetch: fakeFetch,
+      host: 'http://ollama.internal:11434/',
+      expectedDimensions: 3,
+    });
+
+    await embedder.embedFindingSummary('The cache key ignores the tenant id.');
+
+    expect(calls[0]?.input).toBe('http://ollama.internal:11434/api/embeddings');
+  });
+
+  it('reports Ollama HTTP errors', async () => {
+    const embedder = new OllamaFindingEmbedder({
+      fetch: async () => new Response('model not found', { status: 404 }),
+    });
+
+    await expect(embedder.embedFindingSummary('summary')).rejects.toThrow(
+      /Ollama embedding request failed with 404: model not found/,
+    );
+  });
+
+  it('reports unreachable Ollama hosts', async () => {
+    const embedder = new OllamaFindingEmbedder({
+      fetch: async () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:11434');
+      },
+    });
+
+    await expect(embedder.embedFindingSummary('summary')).rejects.toThrow(
+      /Ollama embedding request failed: connect ECONNREFUSED 127\.0\.0\.1:11434/,
+    );
   });
 });

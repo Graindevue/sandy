@@ -17,7 +17,7 @@ import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import { FindingArchetypeAssigner } from './learning/archetype-assigner.js';
-import { OpenAIFindingEmbedder } from './learning/embed.js';
+import { OllamaFindingEmbedder } from './learning/embed.js';
 import {
   inferPrMergeStateSignals,
   startMergeStateSignalCron,
@@ -40,7 +40,7 @@ export interface WorkerConfig {
   convexUrl: string;
   githubAppId: string;
   githubPrivateKeyPath: string;
-  openAiApiKey: string;
+  ollamaHost: string;
   port: number;
   agentImage: string;
   maxChangedLines: number;
@@ -52,6 +52,7 @@ const DEFAULT_PORT = 3007;
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const DEFAULT_MAX_CHANGED_LINES = 5000;
 const DEFAULT_MAX_CONCURRENT_JOBS = 1;
+const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
 const AGENT_ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
 const APPLE_CONTAINER_PROVIDER_PACKAGE = '@sandy/apple-container-provider';
 
@@ -73,7 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   const convexUrl = requireEnv(env, 'CONVEX_URL');
   const githubAppId = requireEnv(env, 'GITHUB_APP_ID');
   const githubPrivateKeyPath = requireEnv(env, 'GITHUB_APP_PRIVATE_KEY_PATH');
-  const openAiApiKey = requireEnv(env, 'OPENAI_API_KEY');
+  const ollamaHost = parseOllamaHost(env.OLLAMA_HOST);
   const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
   const maxChangedLines =
     env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
@@ -89,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     convexUrl,
     githubAppId,
     githubPrivateKeyPath,
-    openAiApiKey,
+    ollamaHost,
     port,
     agentImage: parseAgentImage(env.SANDY_AGENT_IMAGE),
     maxChangedLines,
@@ -143,6 +144,15 @@ function parseAgentImage(raw: string | undefined): string {
   return trimmed.length === 0 ? DEFAULT_AGENT_IMAGE : trimmed;
 }
 
+function parseOllamaHost(raw: string | undefined): string {
+  if (raw === undefined) {
+    return DEFAULT_OLLAMA_HOST;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length === 0 ? DEFAULT_OLLAMA_HOST : trimmed;
+}
+
 function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const picked: Record<string, string> = {};
   for (const key of AGENT_ENV_KEYS) {
@@ -191,7 +201,7 @@ export async function main(): Promise<void> {
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
     archetypeAssigner: new FindingArchetypeAssigner(
-      new OpenAIFindingEmbedder({ apiKey: config.openAiApiKey }),
+      new OllamaFindingEmbedder({ host: config.ollamaHost }),
       executionStore,
     ),
     cancellationRegistry: cancellations,

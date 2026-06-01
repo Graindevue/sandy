@@ -6,7 +6,7 @@ export interface PersistedFinding {
 }
 
 export interface ArchetypeStampedFinding extends PersistedFinding {
-  archetypeId: string;
+  archetypeId?: string;
 }
 
 export interface ArchetypeAssignedFinding extends ArchetypeStampedFinding {

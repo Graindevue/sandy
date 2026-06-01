@@ -4,7 +4,6 @@ import type { Id } from './_generated/dataModel.js';
 import {
   type ActionCtx,
   action,
-  internalAction,
   internalMutation,
   internalQuery,
   mutation,
@@ -12,23 +11,15 @@ import {
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
 import { clampLimit } from './limits.js';
-import { embedFindingSummary } from './openaiEmbeddings.js';
-import { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from './schema.js';
+import { NOMIC_EMBED_TEXT_DIMENSIONS } from './schema.js';
 
 const ARCHETYPE_SIMILARITY_THRESHOLD = 0.85;
 const MAX_EXAMPLE_FINDING_IDS = 5;
 const DEFAULT_ARCHETYPE_QUERY_LIMIT = 50;
-const DEFAULT_CLUSTER_BATCH_SIZE = 20;
-const MAX_CLUSTER_BATCH_SIZE = 50;
 
 type AssignmentContext = {
   productId: Id<'products'>;
   currentArchetypeId?: Id<'archetypes'>;
-};
-
-type UnclusteredFinding = {
-  _id: Id<'findings'>;
-  summary: string;
 };
 
 type AssignmentResult = {
@@ -80,38 +71,6 @@ export const updateSuppressionWeight = mutation({
   },
 });
 
-export const clusterRecentFindings = internalAction({
-  args: {
-    limit: v.optional(v.number()),
-  },
-  returns: v.object({
-    attempted: v.number(),
-    clustered: v.number(),
-    failed: v.number(),
-  }),
-  handler: async (ctx, { limit }) => {
-    const findings: UnclusteredFinding[] = await ctx.runQuery(
-      internal.archetypes.unclusteredFindings,
-      limit === undefined ? {} : { limit },
-    );
-    let clustered = 0;
-    let failed = 0;
-
-    for (const finding of findings) {
-      try {
-        const embedding = await embedFindingSummary(finding.summary);
-        await assignEmbeddingToArchetype(ctx, { findingId: finding._id, embedding });
-        clustered += 1;
-      } catch (error) {
-        failed += 1;
-        warn(`failed to cluster Finding ${finding._id}`, error);
-      }
-    }
-
-    return { attempted: findings.length, clustered, failed };
-  },
-});
-
 export const assignmentContext = internalQuery({
   args: { findingId: v.id('findings') },
   returns: v.union(
@@ -134,25 +93,6 @@ export const assignmentContext = internalQuery({
       return { productId, currentArchetypeId: finding.archetypeId };
     }
     return { productId };
-  },
-});
-
-export const unclusteredFindings = internalQuery({
-  args: {
-    limit: v.optional(v.number()),
-  },
-  returns: v.array(
-    v.object({
-      _id: v.id('findings'),
-      summary: v.string(),
-    }),
-  ),
-  handler: async (ctx, { limit }): Promise<UnclusteredFinding[]> => {
-    const findings = await ctx.db
-      .query('findings')
-      .withIndex('by_archetype', (q) => q.eq('archetypeId', undefined))
-      .take(clampLimit(limit, DEFAULT_CLUSTER_BATCH_SIZE, MAX_CLUSTER_BATCH_SIZE));
-    return findings.map((finding) => ({ _id: finding._id, summary: finding.summary }));
   },
 });
 
@@ -287,16 +227,9 @@ function assignmentResultFor(archetype: {
 }
 
 function ensureEmbeddingDimensions(embedding: number[]): void {
-  if (embedding.length !== TEXT_EMBEDDING_3_SMALL_DIMENSIONS) {
+  if (embedding.length !== NOMIC_EMBED_TEXT_DIMENSIONS) {
     throw new Error(
-      `Finding embedding had ${embedding.length} dimensions; expected ${TEXT_EMBEDDING_3_SMALL_DIMENSIONS}`,
+      `Finding embedding had ${embedding.length} dimensions; expected ${NOMIC_EMBED_TEXT_DIMENSIONS}`,
     );
   }
-}
-
-function warn(message: string, error: unknown): void {
-  (globalThis as { console?: { warn(message: string, error: unknown): void } }).console?.warn(
-    message,
-    error,
-  );
 }

@@ -16,7 +16,7 @@ Activate the continuous-learning pipeline. Findings cluster into Archetypes via 
 archetypes: {
   productId,
   label,                  // human-readable, generated from exemplars
-  exemplarEmbedding,      // 1536-dim for text-embedding-3-small
+  exemplarEmbedding,      // 768-dim for nomic-embed-text
   exampleFindingIds,      // up to N=5 references
   count,
   suppressionWeight,      // 0.0 → 1.0; ≥0.7 = dropped by Synthesizer
@@ -49,12 +49,11 @@ suggestedRules: {
 - `reactions.ts` — mutation: `recordReaction`; subscription-friendly query: `recentByArchetype`.
 - `suggestedRules.ts` — mutation: `createIfEvidenceThresholdMet`; query: `subscribePending`; mutation: `markPromoted`.
 - `crons.ts` extended:
-  - `clusterRecentFindings` every 10 min — embeds new Findings, assigns Archetypes, updates `archetypes.count`.
   - `inferSuggestedRulesFromReactions` daily — looks for Archetypes with ≥3 negative reactions and no existing SuggestedRule; drafts one.
   - `rollupMergeStateSignals` daily — checks merged PRs for "merge-with-fix" vs "merge-without-fix" implicit signal per Finding.
 
 **`packages/bot-worker/`** (extended)
-- `src/learning/embed.ts` — `embedFindingSummary(summary)` via OpenAI `text-embedding-3-small`.
+- `src/learning/embed.ts` — `embedFindingSummary(summary)` via local Ollama `nomic-embed-text`.
 - `src/learning/archetype-assigner.ts` — runs after each Agent emits Findings; embeds and calls `assignOrCreateArchetype`.
 - `src/learning/reaction-handler.ts` — webhook handler for `pull_request_review_comment` reactions. Parses the HTML trailer to map back to the Finding; records the reaction.
 - `src/learning/reply-handler.ts` — for replies under bot comments: stores `replyText` on the reaction record. The drafting step (Convex cron) uses this to seed SuggestedRule description.
@@ -92,7 +91,7 @@ suggestedRules: {
 ## Dependencies
 
 - Phase 2 must be merged.
-- OpenAI API key for `text-embedding-3-small`.
+- Local Ollama server with `nomic-embed-text` available.
 - Anthropic API key for Haiku (Rule drafting).
 
 ## Open questions

@@ -19,7 +19,6 @@ describe('loadConfig PORT validation', () => {
     CONVEX_URL: 'https://example.convex.cloud',
     GITHUB_APP_ID: '123',
     GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
-    OPENAI_API_KEY: 'sk-openai',
   };
 
   it.each([
@@ -61,7 +60,6 @@ describe('loadConfig webhook secret', () => {
       CONVEX_URL: 'https://example.convex.cloud',
       GITHUB_APP_ID: '123',
       GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
-      OPENAI_API_KEY: 'sk-openai',
     });
     expect(config.webhookSecret).toBe('shh');
   });
@@ -72,7 +70,6 @@ describe('loadConfig webhook secret', () => {
         CONVEX_URL: 'https://example.convex.cloud',
         GITHUB_APP_ID: '123',
         GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
-        OPENAI_API_KEY: 'sk-openai',
       }),
     ).toThrow(/GITHUB_WEBHOOK_SECRET/);
   });
@@ -84,7 +81,6 @@ describe('loadConfig GitHub App credentials', () => {
     CONVEX_URL: 'https://example.convex.cloud',
     GITHUB_APP_ID: '123',
     GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
-    OPENAI_API_KEY: 'sk-openai',
   };
 
   it('requires GitHub App credentials for posting reviews and cloning private repos', () => {
@@ -94,8 +90,20 @@ describe('loadConfig GitHub App credentials', () => {
     );
   });
 
-  it('requires an OpenAI API key for Finding embeddings', () => {
-    expect(() => loadConfig({ ...baseEnv, OPENAI_API_KEY: undefined })).toThrow(/OPENAI_API_KEY/);
+  it('defaults the Finding embedder to the local Ollama host without an OpenAI key', () => {
+    const config = loadConfig(baseEnv);
+
+    expect(config.ollamaHost).toBe('http://127.0.0.1:11434');
+    expect(config.agentEnv).toEqual({});
+  });
+
+  it('reads OLLAMA_HOST for Finding embeddings', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      OLLAMA_HOST: 'http://ollama.internal:11434',
+    });
+
+    expect(config.ollamaHost).toBe('http://ollama.internal:11434');
   });
 
   it('parses review execution options', () => {
@@ -105,6 +113,7 @@ describe('loadConfig GitHub App credentials', () => {
       SANDY_REVIEW_MAX_CHANGED_LINES: '123',
       SANDY_REVIEW_MAX_CONCURRENT_JOBS: '2',
       ANTHROPIC_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'sk-openai',
     });
 
     expect(config.agentImage).toBe('custom-agent');

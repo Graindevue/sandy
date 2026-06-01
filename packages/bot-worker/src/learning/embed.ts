@@ -1,69 +1,86 @@
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
-const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
-const TEXT_EMBEDDING_3_SMALL_DIMENSIONS = 1536;
+const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
+const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
+const NOMIC_EMBED_TEXT_DIMENSIONS = 768;
 
 type FetchLike = typeof fetch;
 
-interface OpenAIEmbeddingResponse {
-  data?: Array<{
-    embedding?: unknown;
-  }>;
+interface OllamaEmbeddingResponse {
+  embedding?: unknown;
 }
 
-export interface OpenAIFindingEmbedderOptions {
-  apiKey: string;
+export interface OllamaFindingEmbedderOptions {
+  host?: string;
   fetch?: FetchLike;
   model?: string;
   expectedDimensions?: number;
 }
 
-export class OpenAIFindingEmbedder {
-  readonly #apiKey: string;
+export class OllamaFindingEmbedder {
+  readonly #endpoint: string;
   readonly #fetch: FetchLike;
   readonly #model: string;
   readonly #expectedDimensions: number;
 
-  constructor(options: OpenAIFindingEmbedderOptions) {
-    this.#apiKey = options.apiKey;
+  constructor(options: OllamaFindingEmbedderOptions = {}) {
+    this.#endpoint = `${normalizeOllamaHost(options.host)}/api/embeddings`;
     this.#fetch = options.fetch ?? fetch;
-    this.#model = options.model ?? OPENAI_EMBEDDING_MODEL;
-    this.#expectedDimensions = options.expectedDimensions ?? TEXT_EMBEDDING_3_SMALL_DIMENSIONS;
+    this.#model = options.model ?? OLLAMA_EMBEDDING_MODEL;
+    this.#expectedDimensions = options.expectedDimensions ?? NOMIC_EMBED_TEXT_DIMENSIONS;
   }
 
   async embedFindingSummary(summary: string): Promise<number[]> {
-    const response = await this.#fetch(OPENAI_EMBEDDINGS_URL, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.#apiKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.#model,
-        input: summary,
-      }),
-    });
+    const response = await this.#requestEmbedding(summary);
 
     if (!response.ok) {
       throw new Error(
-        `OpenAI embedding request failed with ${response.status}: ${await response.text()}`,
+        `Ollama embedding request failed with ${response.status}: ${await response.text()}`,
       );
     }
 
-    const body = (await response.json()) as OpenAIEmbeddingResponse;
-    const embedding = body.data?.[0]?.embedding;
+    const body = (await response.json()) as OllamaEmbeddingResponse;
+    const embedding = body.embedding;
     if (!isNumberArray(embedding)) {
-      throw new Error('OpenAI embedding response did not include a numeric embedding');
+      throw new Error('Ollama embedding response did not include a numeric embedding');
     }
     if (embedding.length !== this.#expectedDimensions) {
       throw new Error(
-        `OpenAI embedding response had ${embedding.length} dimensions; expected ${this.#expectedDimensions}`,
+        `Ollama embedding response had ${embedding.length} dimensions; expected ${this.#expectedDimensions}`,
       );
     }
 
     return embedding;
   }
+
+  async #requestEmbedding(summary: string): Promise<Response> {
+    try {
+      return await this.#fetch(this.#endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: this.#model,
+          prompt: summary,
+        }),
+      });
+    } catch (error) {
+      throw new Error(`Ollama embedding request failed: ${errorMessage(error)}`, { cause: error });
+    }
+  }
+}
+
+function normalizeOllamaHost(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed.length === 0) {
+    return DEFAULT_OLLAMA_HOST;
+  }
+  return trimmed.replace(/\/+$/, '');
 }
 
 function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number');
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

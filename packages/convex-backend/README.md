@@ -22,11 +22,11 @@ to every row.
 - **findings** — `recordFinding`, `recordSynthesizedReview`, `markPosted`,
   `listForPr`.
 - **learning loop** — `archetypes:assignOrCreateArchetype`, `byProduct`,
-  `updateSuppressionWeight`, and the internal backstop clustering functions.
+  and `updateSuppressionWeight`.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
-  ReviewJobs claimed more than 30 minutes ago as `failed`; `clusterRecentFindings`
-  runs every 10 minutes and assigns missing Archetypes.
+  ReviewJobs claimed more than 30 minutes ago as `failed`; the SuggestedRule
+  inference cron runs daily.
 
 ## Local setup
 

@@ -219,7 +219,7 @@ function formatFindingHeading(finding: Finding): string {
 
 function formatFindingDetailSections(
   id: string,
-  archetypeId: string,
+  archetypeId: string | undefined,
   finding: Finding,
   siblingShas: SiblingShas,
 ): string[] {
@@ -231,9 +231,16 @@ function formatFindingDetailSections(
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
-  parts.push(`<!-- bot:finding=${id} archetype=${archetypeId} -->`);
+  parts.push(formatCommentTrailer(id, archetypeId));
 
   return parts;
+}
+
+function formatCommentTrailer(id: string, archetypeId: string | undefined): string {
+  if (archetypeId === undefined) {
+    return `<!-- bot:finding=${id} -->`;
+  }
+  return `<!-- bot:finding=${id} archetype=${archetypeId} -->`;
 }
 
 function formatCrossRepoReferences(

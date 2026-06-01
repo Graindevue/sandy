@@ -104,22 +104,24 @@ GITHUB_WEBHOOK_SECRET=the-openssl-rand-hex-32-value-from-step-1
 # Convex deployment URL — see convex.md ("Where the URL goes")
 CONVEX_URL=https://your-deployment.convex.cloud
 
-# Learning-loop Finding embeddings.
-OPENAI_API_KEY=sk-...
+# Optional: learning-loop Finding embeddings default to local Ollama.
+# OLLAMA_HOST=http://127.0.0.1:11434
 
 # Optional alternate Agent vendor auth. The default Codex setup can still use
 # your host `codex login` (see sandcastle-image.md); set Anthropic only if you
-# switch an Agent to vendor: claude.
+# switch an Agent to vendor: claude. Set OpenAI only if you switch an Agent to
+# OpenAI API-key auth instead of Codex subscription auth.
 #   ANTHROPIC_API_KEY=sk-ant-...
+#   OPENAI_API_KEY=sk-...
 ```
 
 > **One file, set in pieces.** If you followed the [setup order](./README.md),
 > [`convex.md`](./convex.md) ran before this doc; whichever doc you reach first,
 > create `.config/.env` and the later docs just set their own line above. Set
-> `CONVEX_URL` to the value Convex printed. `OPENAI_API_KEY` is required for
-> Phase 3 Finding embeddings even when the default Codex Agent authenticates
-> through your host `codex login`; add `ANTHROPIC_API_KEY` only if you switch an
-> Agent to Claude.
+> `CONVEX_URL` to the value Convex printed. Finding embeddings use local Ollama
+> at `http://127.0.0.1:11434` by default; set `OLLAMA_HOST` only if the worker
+> should call a different Ollama host. Add `ANTHROPIC_API_KEY` or
+> `OPENAI_API_KEY` only if you switch an Agent to that provider's API-key auth.
 
 > **Private key format.** Sandy reads the key from the path above. If you prefer
 > to inline the key instead of pointing at a file, that's an instance choice the

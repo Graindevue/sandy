@@ -221,6 +221,19 @@ describe('PullRequestPoster', () => {
     expect(body).toContain('- + 1 more in `acme/mobile`');
   });
 
+  it('omits archetype metadata from the trailer when learning assignment is unavailable', () => {
+    const body = formatFindingBody(
+      {
+        id: 'finding-1',
+        finding: baseFinding,
+      },
+      {},
+    );
+
+    expect(body).toContain('<!-- bot:finding=finding-1 -->');
+    expect(body).not.toContain('archetype=undefined');
+  });
+
   it('folds findings without a reviewed-repo anchor into the summary comment', async () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
