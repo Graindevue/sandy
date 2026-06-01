@@ -11,6 +11,7 @@ import {
   query,
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
+import { clampLimit } from './limits.js';
 import { embedFindingSummary } from './openaiEmbeddings.js';
 import { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from './schema.js';
 
@@ -291,13 +292,6 @@ function ensureEmbeddingDimensions(embedding: number[]): void {
       `Finding embedding had ${embedding.length} dimensions; expected ${TEXT_EMBEDDING_3_SMALL_DIMENSIONS}`,
     );
   }
-}
-
-function clampLimit(value: number | undefined, fallback: number, max: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  return Math.max(1, Math.min(Math.floor(value), max));
 }
 
 function warn(message: string, error: unknown): void {

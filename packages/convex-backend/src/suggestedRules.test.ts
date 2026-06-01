@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { recentByArchetype } from '../convex/reactions.js';
 import {
+  candidatesForReactionInference,
   createIfEvidenceThresholdMet,
   draftSuggestedRuleDescription,
   inferSuggestedRulesFromReactions,
@@ -244,18 +245,7 @@ function fakeActionCtx(): ReturnType<typeof fakeCtx> & {
     if ('archetypeId' in args) {
       return await invoke(recentByArchetype, ctx, args);
     }
-    const archetypes = await ctx.db.query('archetypes').take(100);
-    const candidates = [];
-    for (const archetype of archetypes) {
-      const existing = await ctx.db
-        .query('suggestedRules')
-        .withIndex('by_source_archetype', (q) => q.eq('sourceArchetypeId', archetype._id))
-        .take(1);
-      if (existing.length === 0) {
-        candidates.push({ archetypeId: archetype._id, label: archetype.label });
-      }
-    }
-    return candidates;
+    return await invoke(candidatesForReactionInference, ctx, args);
   };
   ctx.runMutation = async (_ref, args) => {
     return await invoke(createIfEvidenceThresholdMet, ctx, args);
