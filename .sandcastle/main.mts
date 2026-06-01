@@ -178,6 +178,16 @@ const hooks = {
   },
 };
 
+// The planner only reads the issue tracker and reasons about a dependency graph
+// (see plan-prompt.md) — it never builds, tests, or runs convex codegen. Unlike
+// the executor/merger sandboxes (isolated git worktrees), it runs against the
+// live host repo, so the workspace-prep hooks above are both useless and unsafe
+// there: convex codegen's esbuild fails against the host's macOS node_modules,
+// and `pnpm install` / `convex dev` would mutate the host checkout (the latter
+// rewrites packages/convex-backend/.env.local to the anonymous deployment).
+// Give the planner no setup hooks.
+const plannerHooks = { sandbox: { onSandboxReady: [] } };
+
 const copyToWorktree: string[] = [];
 
 // Repository branching policy (AGENTS.md): work targets staging only.
@@ -264,7 +274,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   let plan: sandcastle.RunResult;
   try {
     plan = await sandcastle.run({
-      hooks,
+      hooks: plannerHooks,
       sandbox: sandboxProvider,
       name: 'planner',
       // One iteration is enough: the planner just needs to read and reason,
