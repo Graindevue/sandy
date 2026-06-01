@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import {
+  type CommentReplyCapturer,
   type DispatchLogger,
   type DispatchOptions,
   dispatchEvent,
   type ForkDeclineCommenter,
+  type PrCloseSignalCapturer,
 } from './dispatch.js';
 import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
@@ -36,6 +38,10 @@ export interface WebhookServerOptions {
   pullRequestResolver?: PullRequestResolver;
   /** Optional GitHub side-effect used to surface documented v1 fork declines. */
   forkDeclineCommenter?: ForkDeclineCommenter;
+  /** Optional close-time poller for Sandy learning signals. */
+  closeSignalCapturer?: PrCloseSignalCapturer;
+  /** Optional real-time capture for replies under Sandy review comments. */
+  replyCapturer?: CommentReplyCapturer;
   /** Optional local cancellation registry for jobs superseded by push deliveries. */
   reviewCanceller?: ReviewCanceller;
   /** Logger; defaults to `console`. */
@@ -171,12 +177,23 @@ export function createWebhookHandler(
 }
 
 function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undefined {
-  if (options.forkDeclineCommenter === undefined && options.reviewCanceller === undefined) {
+  if (
+    options.forkDeclineCommenter === undefined &&
+    options.closeSignalCapturer === undefined &&
+    options.replyCapturer === undefined &&
+    options.reviewCanceller === undefined
+  ) {
     return undefined;
   }
   const dispatch: DispatchOptions = {};
   if (options.forkDeclineCommenter !== undefined) {
     dispatch.forkDeclineCommenter = options.forkDeclineCommenter;
+  }
+  if (options.closeSignalCapturer !== undefined) {
+    dispatch.closeSignalCapturer = options.closeSignalCapturer;
+  }
+  if (options.replyCapturer !== undefined) {
+    dispatch.replyCapturer = options.replyCapturer;
   }
   if (options.reviewCanceller !== undefined) {
     dispatch.reviewCanceller = options.reviewCanceller;

@@ -105,6 +105,22 @@ describe('ConvexExecutionStore', () => {
     });
   });
 
+  it('assigns an Archetype through the Convex action', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    const assigned = await store.assignArchetype({
+      findingId: 'finding-1',
+      embedding: [0.1, 0.2, 0.3],
+    });
+
+    expect(client.actions[0]?.args).toEqual({
+      findingId: 'finding-1',
+      embedding: [0.1, 0.2, 0.3],
+    });
+    expect(assigned).toEqual({ archetypeId: 'archetype-1', suppressionWeight: 0.25 });
+  });
+
   it('records an Agent run with Cross-Repo Search rationale', async () => {
     const client = new FakeConvexClient();
     const store = new ConvexExecutionStore(client);
@@ -142,6 +158,7 @@ describe('ConvexExecutionStore', () => {
 class FakeConvexClient implements ConvexExecutionClient {
   readonly queries: Array<{ args: Record<string, unknown> }> = [];
   readonly mutations: Array<{ args: Record<string, unknown> }> = [];
+  readonly actions: Array<{ args: Record<string, unknown> }> = [];
 
   async query(
     _query: Parameters<ConvexExecutionClient['query']>[0],
@@ -160,5 +177,13 @@ class FakeConvexClient implements ConvexExecutionClient {
       return args.findings.map((_finding, index) => `finding-${index + 1}`);
     }
     return 'finding-1';
+  }
+
+  async action(
+    _action: Parameters<ConvexExecutionClient['action']>[0],
+    args: Record<string, unknown>,
+  ) {
+    this.actions.push({ args });
+    return { archetypeId: 'archetype-1', suppressionWeight: 0.25 };
   }
 }

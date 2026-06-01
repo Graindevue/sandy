@@ -34,9 +34,12 @@ watcher running while developing the backend.
 > just this line and `github-app.md` will fill in the rest:
 >
 > ```bash
-> # .config/.env — set this line (github-app.md adds the GitHub + agent-auth keys)
+> # .config/.env — set this line (github-app.md adds the GitHub keys)
 > CONVEX_URL=https://your-deployment.convex.cloud
 > ```
+
+Finding evidence is embedded by the bot worker through local Ollama, so Convex
+does not need an embedding API key.
 
 ## 2. Generate types and deploy the schema
 
@@ -65,25 +68,26 @@ worker's `CONVEX_URL` at whichever deployment you intend to run against.
 
 ## 3. What gets deployed
 
-The Phase 1 schema and the worker's mutations/queries — six tables, plus
-`enqueue`/`claim`/`record`-style functions — are inventoried in the package's own
+The schema tables and the worker's mutations/queries/actions — `enqueue`/
+`claim`/`record`-style functions and learning-loop assignment functions — are
+inventoried in the package's own
 [`README.md`](../../packages/convex-backend/README.md) and
 [`convex/schema.ts`](../../packages/convex-backend/convex/schema.ts). This doc
-deploys them; it doesn't restate the list.
+deploys them; it doesn't restate the list. Phase 3 learning-loop tables
+(`archetypes`, `reactions`, and `suggestedRules`) are present.
 
-Two scoping notes to set expectations: the Archetype, Reaction, and
-SuggestedRule tables are **not** in this schema — they arrive in Phase 3 with the
-learning loop. The `reapStuckJobs` cron does ship in Phase 1 operational
-hardening: it runs every 5 minutes and marks ReviewJobs left `running` for more
-than 30 minutes as `failed`.
+The `reapStuckJobs` cron runs every 5 minutes and marks ReviewJobs left
+`running` for more than 30 minutes as `failed`. The SuggestedRule inference cron
+runs daily after reactions have accumulated.
 
 ## 4. Verify
 
 The Convex dashboard (`npx convex dashboard` from
-`packages/convex-backend`, or <https://dashboard.convex.dev>) should show the six
-tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
-functions under **Functions**, plus the `reapStuckJobs` cron under **Cron Jobs**.
-The tables are empty until Sandy observes its first PR.
+`packages/convex-backend`, or <https://dashboard.convex.dev>) should show the
+schema tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
+functions under **Functions**, plus the `reapStuckJobs` and SuggestedRule
+inference crons under **Cron Jobs**. The tables are empty until Sandy observes
+its first PR.
 
 ## Next
 

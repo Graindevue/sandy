@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   GitHubReviewPoster,
   IssueCommentInput,
-  PersistedFinding,
   PullRequestTarget,
   ReviewCommentInput,
 } from './poster.js';
 import { formatFindingBody, PullRequestPoster } from './poster.js';
+import type { ArchetypeStampedFinding } from './review-findings.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -45,7 +45,7 @@ const consumerPermalink =
   'https://github.com/acme/consumer/blob/consumer-main-sha/src/orders.ts#L31';
 
 describe('PullRequestPoster', () => {
-  it('posts inline comments with the load-bearing finding trailer', async () => {
+  it('posts inline comments with the load-bearing finding and archetype trailer', async () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
@@ -64,7 +64,7 @@ describe('PullRequestPoster', () => {
         pullNumber: 12,
         commitId: 'abc123',
         path: 'src/cache.ts',
-        body: expect.stringContaining('<!-- bot:finding=finding-1 -->'),
+        body: expect.stringContaining('<!-- bot:finding=finding-1 archetype=archetype-1 -->'),
         line: 24,
         side: 'RIGHT',
         startLine: 22,
@@ -128,7 +128,9 @@ describe('PullRequestPoster', () => {
     expect(github.reviewComments[0]?.body).toContain('The write path skips validation.');
     expect(github.issueComments[0]?.body).toContain('Sandy review posted 2 findings.');
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
-    expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
+    expect(github.issueComments[0]?.body).toContain(
+      '<!-- bot:finding=finding-1 archetype=archetype-1 -->',
+    );
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('finding finding-1'),
       expect.any(Error),
@@ -202,6 +204,7 @@ describe('PullRequestPoster', () => {
     const body = formatFindingBody(
       {
         id: 'finding-1',
+        archetypeId: 'archetype-1',
         finding: {
           ...baseFinding,
           crossRepoReferences: references,
@@ -216,6 +219,19 @@ describe('PullRequestPoster', () => {
     expect(body.match(/https:\/\/github\.com/g)).toHaveLength(10);
     expect(body).toContain('- + 1 more in `acme/consumer`');
     expect(body).toContain('- + 1 more in `acme/mobile`');
+  });
+
+  it('omits archetype metadata from the trailer when learning assignment is unavailable', () => {
+    const body = formatFindingBody(
+      {
+        id: 'finding-1',
+        finding: baseFinding,
+      },
+      {},
+    );
+
+    expect(body).toContain('<!-- bot:finding=finding-1 -->');
+    expect(body).not.toContain('archetype=undefined');
   });
 
   it('folds findings without a reviewed-repo anchor into the summary comment', async () => {
@@ -242,7 +258,9 @@ describe('PullRequestPoster', () => {
     expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
-    expect(github.issueComments[0]?.body).toContain('<!-- bot:finding=finding-1 -->');
+    expect(github.issueComments[0]?.body).toContain(
+      '<!-- bot:finding=finding-1 archetype=archetype-1 -->',
+    );
     expect(github.issueComments[0]?.body).toContain(consumerPermalink);
   });
 
@@ -262,8 +280,11 @@ describe('PullRequestPoster', () => {
   });
 });
 
-function persistedFinding(overrides: Partial<Finding> = {}, id = 'finding-1'): PersistedFinding {
-  return { id, finding: { ...baseFinding, ...overrides } };
+function persistedFinding(
+  overrides: Partial<Finding> = {},
+  id = 'finding-1',
+): ArchetypeStampedFinding {
+  return { id, archetypeId: 'archetype-1', finding: { ...baseFinding, ...overrides } };
 }
 
 class FakeGitHubReviewPoster implements GitHubReviewPoster {

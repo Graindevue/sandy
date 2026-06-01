@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { record as recordAgentRun } from '../convex/agentRuns.js';
 import { listForPr, recordFinding, recordSynthesizedReview } from '../convex/findings.js';
+import {
+  clearOnClose,
+  listMergedForMergeStateBackfill,
+  markMergeStateSignalsRolledUp,
+} from '../convex/pullRequests.js';
+import { recordMergeStateReaction } from '../convex/reactions.js';
 import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
 
 describe('Phase 2 Convex schema handlers', () => {
@@ -153,6 +159,128 @@ describe('Phase 2 Convex schema handlers', () => {
       }),
     );
   });
+
+  it('clears reviewActive without clobbering a merged PR state', async () => {
+    const ctx = fakeCtx();
+    const pullRequestId = await ctx.db.insert('pullRequests', {
+      repoId: 'repos:1',
+      number: 12,
+      state: 'merged',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'PR',
+      author: 'octocat',
+      url: 'https://example.test/pr/12',
+      reviewActive: true,
+    });
+
+    await invoke(clearOnClose, ctx, { pullRequestId });
+
+    expect(ctx.db.getDoc(pullRequestId)).toEqual(
+      expect.objectContaining({ state: 'merged', reviewActive: false }),
+    );
+  });
+
+  it('records at most one merge-state reaction per Finding', async () => {
+    const ctx = fakeCtx();
+    await ctx.db.insert('reactions', { findingId: 'findings:1', kind: '👍' });
+
+    await expect(
+      invoke(recordMergeStateReaction, ctx, {
+        findingId: 'findings:1',
+        kind: 'mergedFixed',
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      invoke(recordMergeStateReaction, ctx, {
+        findingId: 'findings:1',
+        kind: 'mergedIgnored',
+      }),
+    ).resolves.toBe(false);
+
+    expect(ctx.db.tables.get('reactions')).toEqual([
+      expect.objectContaining({ findingId: 'findings:1', kind: '👍' }),
+      expect.objectContaining({ findingId: 'findings:1', kind: 'mergedFixed' }),
+    ]);
+  });
+
+  it('lists merged PRs pending merge-state rollup and marks them rolled up', async () => {
+    const ctx = fakeCtx();
+    const repoId = await ctx.db.insert('repos', {
+      productId: 'products:1',
+      owner: 'acme',
+      name: 'widget',
+      fullName: 'acme/widget',
+      defaultBranch: 'main',
+    });
+    const pendingId = await ctx.db.insert('pullRequests', {
+      repoId,
+      number: 12,
+      state: 'merged',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'Pending',
+      author: 'octocat',
+      url: 'https://example.test/pr/12',
+      reviewActive: false,
+    });
+    await ctx.db.insert('pullRequests', {
+      repoId,
+      number: 13,
+      state: 'merged',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'Done',
+      author: 'octocat',
+      url: 'https://example.test/pr/13',
+      reviewActive: false,
+      mergeStateSignalsRolledUpAt: 100,
+    });
+    await ctx.db.insert('pullRequests', {
+      repoId,
+      number: 14,
+      state: 'closed',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'Closed',
+      author: 'octocat',
+      url: 'https://example.test/pr/14',
+      reviewActive: false,
+    });
+    await ctx.db.insert('pullRequests', {
+      repoId: 'repos:404',
+      number: 15,
+      state: 'merged',
+      draft: false,
+      headSha: 'head-sha',
+      baseRef: 'main',
+      title: 'Missing repo',
+      author: 'octocat',
+      url: 'https://example.test/pr/15',
+      reviewActive: false,
+    });
+
+    await expect(invoke(listMergedForMergeStateBackfill, ctx, { limit: 10 })).resolves.toEqual([
+      {
+        pullRequestId: pendingId,
+        repo: { owner: 'acme', name: 'widget' },
+        pullNumber: 12,
+      },
+    ]);
+
+    await invoke(markMergeStateSignalsRolledUp, ctx, {
+      pullRequestId: pendingId,
+      rolledUpAt: 1234,
+    });
+
+    expect(ctx.db.getDoc(pendingId)).toEqual(
+      expect.objectContaining({ mergeStateSignalsRolledUpAt: 1234 }),
+    );
+  });
 });
 
 type ConvexFunctionForTest = {
@@ -241,7 +369,17 @@ class FakeQuery {
     return this;
   }
 
+  async take(limit: number): Promise<Array<Record<string, unknown>>> {
+    return this.rows.slice(0, limit);
+  }
+
   async collect(): Promise<Array<Record<string, unknown>>> {
     return this.rows;
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>> {
+    for (const row of this.rows) {
+      yield row;
+    }
   }
 }

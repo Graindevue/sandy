@@ -1,4 +1,5 @@
 import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
+import type { PostableFinding } from './review-findings.js';
 
 export interface PullRequestTarget {
   owner: string;
@@ -6,11 +7,6 @@ export interface PullRequestTarget {
   pullNumber: number;
   /** The PR head SHA GitHub requires when creating inline review comments. */
   headSha: string;
-}
-
-export interface PersistedFinding {
-  id: string;
-  finding: Finding;
 }
 
 export interface PostedFinding {
@@ -52,7 +48,7 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  findings: readonly PersistedFinding[];
+  findings: readonly PostableFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary: string;
@@ -78,7 +74,7 @@ export class PullRequestPoster {
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
     const inlinePosted: PostedFinding[] = [];
-    const summaryOnly: PersistedFinding[] = [];
+    const summaryOnly: PostableFinding[] = [];
 
     for (const persisted of input.findings) {
       if (!isReviewedRepoAnchor(input.target, persisted.finding.anchor.repo)) {
@@ -128,7 +124,7 @@ export class PullRequestPoster {
 
 function buildReviewCommentInput(
   target: PullRequestTarget,
-  persisted: PersistedFinding,
+  persisted: PostableFinding,
   siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
@@ -165,7 +161,7 @@ function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): bo
 
 function appendSummaryOnlyFindings(
   summary: string,
-  findings: readonly PersistedFinding[],
+  findings: readonly PostableFinding[],
   siblingShas: SiblingShas,
 ): string {
   if (findings.length === 0) {
@@ -180,16 +176,14 @@ function appendSummaryOnlyFindings(
   ].join('\n\n');
 }
 
-function formatSummaryOnlyFinding(
-  { id, finding }: PersistedFinding,
-  siblingShas: SiblingShas,
-): string {
+function formatSummaryOnlyFinding(postable: PostableFinding, siblingShas: SiblingShas): string {
+  const { finding } = postable;
   const parts = [
     formatFindingHeading(finding),
     `Anchor: ${formatAnchor(finding.anchor)}`,
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, finding, siblingShas),
+    ...formatFindingDetailSections(postable, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -203,15 +197,13 @@ function formatAnchor(anchor: Finding['anchor']): string {
   return `${anchor.repo}/${anchor.path}:${line}`;
 }
 
-export function formatFindingBody(
-  { id, finding }: PersistedFinding,
-  siblingShas: SiblingShas,
-): string {
+export function formatFindingBody(postable: PostableFinding, siblingShas: SiblingShas): string {
+  const { finding } = postable;
   const parts = [
     formatFindingHeading(finding),
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, finding, siblingShas),
+    ...formatFindingDetailSections(postable, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -222,10 +214,10 @@ function formatFindingHeading(finding: Finding): string {
 }
 
 function formatFindingDetailSections(
-  id: string,
-  finding: Finding,
+  postable: PostableFinding,
   siblingShas: SiblingShas,
 ): string[] {
+  const { id, finding } = postable;
   const parts: string[] = [];
 
   if (finding.suggestedFix !== undefined) {
@@ -234,9 +226,16 @@ function formatFindingDetailSections(
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
-  parts.push(`<!-- bot:finding=${id} -->`);
+  parts.push(formatCommentTrailer(id, postable.archetypeId));
 
   return parts;
+}
+
+function formatCommentTrailer(id: string, archetypeId: string | undefined): string {
+  if (archetypeId === undefined) {
+    return `<!-- bot:finding=${id} -->`;
+  }
+  return `<!-- bot:finding=${id} archetype=${archetypeId} -->`;
 }
 
 function formatCrossRepoReferences(

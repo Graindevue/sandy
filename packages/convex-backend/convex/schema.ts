@@ -7,17 +7,22 @@ import {
   crossRepoSearchRationale,
   findingAnchor,
   pullRequestState,
+  reactionKind,
   reviewJobStatus,
   reviewTrigger,
   severity,
   siblingShas,
+  suggestedRuleStatus,
+  suggestedRuleType,
 } from './validators.js';
 
 /**
- * Phase 1 schema. Archetype / reaction / suggestedRules tables land in Phase 3.
+ * Sandy's durable queue, review, and learning-loop schema.
  * Convex adds `_id` and `_creationTime` to every row; `_creationTime` is the
  * canonical "created at" timestamp, so no table stores one explicitly.
  */
+export const FINDING_EMBEDDING_DIMENSIONS = 768;
+
 export default defineSchema({
   products: defineTable({
     slug: v.string(),
@@ -45,7 +50,13 @@ export default defineSchema({
     author: v.string(),
     url: v.string(),
     reviewActive: v.boolean(),
-  }).index('by_repo_and_number', ['repoId', 'number']),
+    mergeStateSignalsRolledUpAt: v.optional(v.number()),
+  })
+    .index('by_repo_and_number', ['repoId', 'number'])
+    .index('by_state_and_merge_state_signals_rolled_up_at', [
+      'state',
+      'mergeStateSignalsRolledUpAt',
+    ]),
 
   reviewJobs: defineTable({
     pullRequestId: v.id('pullRequests'),
@@ -78,12 +89,50 @@ export default defineSchema({
     evidence: v.string(),
     suggestedFix: v.optional(v.string()),
     category: v.string(),
+    embedding: v.optional(v.array(v.float64())),
+    archetypeId: v.optional(v.id('archetypes')),
     // Set after the Finding is posted, linking it to its GitHub comment for the
     // Comment Trailer / reaction loop.
     githubCommentId: v.optional(v.number()),
   })
     .index('by_review_job', ['reviewJobId'])
-    .index('by_pull_request', ['pullRequestId']),
+    .index('by_pull_request', ['pullRequestId'])
+    .index('by_archetype', ['archetypeId']),
+
+  archetypes: defineTable({
+    productId: v.id('products'),
+    agentKey: v.string(),
+    scopeKey: v.string(),
+    label: v.string(),
+    exemplarEmbedding: v.array(v.float64()),
+    exampleFindingIds: v.array(v.id('findings')),
+    count: v.number(),
+    suppressionWeight: v.number(),
+  })
+    .index('by_product', ['productId'])
+    .index('by_product_and_agent_key', ['productId', 'agentKey'])
+    .vectorIndex('by_exemplar_embedding_and_scope_key', {
+      vectorField: 'exemplarEmbedding',
+      dimensions: FINDING_EMBEDDING_DIMENSIONS,
+      filterFields: ['scopeKey'],
+    }),
+
+  reactions: defineTable({
+    findingId: v.id('findings'),
+    kind: reactionKind,
+    replyText: v.optional(v.string()),
+  }).index('by_finding', ['findingId']),
+
+  suggestedRules: defineTable({
+    productId: v.id('products'),
+    type: suggestedRuleType,
+    status: suggestedRuleStatus,
+    description: v.string(),
+    sourceArchetypeId: v.id('archetypes'),
+    evidence: v.string(),
+  })
+    .index('by_status', ['status'])
+    .index('by_source_archetype', ['sourceArchetypeId']),
 
   agentRuns: defineTable({
     reviewJobId: v.id('reviewJobs'),

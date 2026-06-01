@@ -26,7 +26,13 @@ function prFacts(overrides: Partial<PullRequestFacts> = {}): PullRequestFacts {
 }
 
 function commentEvent(body: string, prOverrides: Partial<PullRequestFacts> = {}): CommentEvent {
-  return { kind: 'comment', repo: BASE_REPO, body, pr: prFacts(prOverrides) };
+  return {
+    kind: 'comment',
+    repo: BASE_REPO,
+    commentKind: 'issue_comment',
+    body,
+    pr: prFacts(prOverrides),
+  };
 }
 
 function prEvent(

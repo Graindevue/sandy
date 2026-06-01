@@ -22,6 +22,14 @@ Apply this to every changed area:
 4. **Could sensitive data leak to logs / responses / cached contexts?** Tokens, PII, internal IDs, error stack traces, internal URLs, secrets accidentally serialized into JSON responses.
 5. **What state remains if the code fails mid-execution?** Partial writes, dangling locks, half-applied auth state.
 
+## Evidence standard
+
+Security findings need a concrete attack path or data exposure path, not just a suspicious pattern. The patterns below are non-exhaustive seed examples.
+
+For framework/library-specific security behavior (Next.js caching, Convex auth, Better Auth sessions, webhook helpers, SDK signature verification), follow the shared Framework source verification contract before emitting a Finding. For app-level security behavior, evidence can be code quotes, `rg` results, config excerpts, and ApiSurfaceManifest entries.
+
+Training memory is not evidence for an auth, cache, or SDK behavior claim. If you cannot verify the behavior well enough for the confidence threshold below, suppress the Finding.
+
 ## High-severity patterns to recognize
 
 - Unauthenticated mutation called from a public action / route handler
@@ -37,7 +45,7 @@ Apply this to every changed area:
 
 ## How to investigate
 
-- Use `opensrc path <framework>` to verify auth APIs (Better Auth, Next.js Server Actions, Convex auth) — model training data is often outdated on auth specifics.
+- Use installed-version source to verify auth APIs and SDK helpers when a Finding depends on their behavior.
 - Use `rg` to find similar patterns elsewhere in the Product. If the same insecure pattern exists in 3 places, flag a Rule candidate.
 - Cross-reference the ApiSurfaceManifest: every new public API surface (HTTP route, Convex mutation, server action) requires explicit security analysis.
 - Read framework configuration files (`next.config.ts`, `convex/auth.ts`, etc.) for context.

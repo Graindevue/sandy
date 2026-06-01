@@ -1,0 +1,60 @@
+import type { Finding } from '@sandy/shared-types';
+import { describe, expect, it } from 'vitest';
+import type { ArchetypeAssignedFinding } from '../worker/review-findings.js';
+import { selectPostableFindings } from './suppression-filter.js';
+
+const baseFinding: Finding = {
+  severity: 'P1',
+  confidence: 4,
+  agentKey: 'logic',
+  anchor: {
+    repo: 'acme/widget',
+    path: 'src/cache.ts',
+    lineStart: 12,
+    lineEnd: 12,
+  },
+  summary: 'The cache key ignores the tenant id.',
+  evidence: 'The lookup only uses userId.',
+  suggestedFix: 'Include tenantId.',
+  category: 'logic',
+};
+
+describe('selectPostableFindings', () => {
+  it('drops Findings whose Archetype suppression weight is at or above the threshold', () => {
+    const findings = [
+      assignedFinding('below-threshold', 0.69),
+      assignedFinding('at-threshold', 0.7),
+      assignedFinding('above-threshold', 1),
+      assignedFinding('not-a-number', Number.NaN),
+    ];
+
+    expect(selectPostableFindings(findings)).toEqual([
+      {
+        id: 'below-threshold',
+        archetypeId: 'archetype-below-threshold',
+        finding: { ...baseFinding, summary: 'Finding below-threshold' },
+      },
+    ]);
+  });
+
+  it('keeps pass-through Findings postable when learning assignment is unavailable', () => {
+    expect(
+      selectPostableFindings([
+        {
+          id: 'finding-1',
+          archetypeSuppressionWeight: 0,
+          finding: baseFinding,
+        },
+      ]),
+    ).toEqual([{ id: 'finding-1', finding: baseFinding }]);
+  });
+});
+
+function assignedFinding(id: string, archetypeSuppressionWeight: number): ArchetypeAssignedFinding {
+  return {
+    id,
+    archetypeId: `archetype-${id}`,
+    archetypeSuppressionWeight,
+    finding: { ...baseFinding, summary: `Finding ${id}` },
+  };
+}

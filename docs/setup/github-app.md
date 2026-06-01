@@ -45,7 +45,7 @@ everything else at **No access** — Sandy needs nothing more in Phase 1.
 | Permission | Access | Why |
 |------------|--------|-----|
 | **Pull requests** | **Read & write** | Read PR metadata and diffs; post inline comments + the summary comment. |
-| **Contents** | **Read-only** | Clone and fetch registered Repos to local disk. |
+| **Contents** | **Read & write** | Read clones and fetches registered Repos to local disk. Write lets the learning loop open the `.bot/product-rules.md` PR when an operator promotes a SuggestedRule to a positive Rule (Phase 3). Without write, positive promotion fails with `403 Resource not accessible by integration` on branch creation. |
 | **Issues** | **Read-only** | Required to subscribe to the **Issue comment** event in step 3 — GitHub gates that event on the Issues permission, even though `@bot review` arrives as a comment on a PR. Without it, "Issue comment" won't appear in the events list. Read-only suffices; Sandy never writes to Issues. |
 | **Metadata** | **Read-only** | Mandatory baseline; GitHub auto-selects it. |
 
@@ -104,20 +104,24 @@ GITHUB_WEBHOOK_SECRET=the-openssl-rand-hex-32-value-from-step-1
 # Convex deployment URL — see convex.md ("Where the URL goes")
 CONVEX_URL=https://your-deployment.convex.cloud
 
-# Agent vendor auth. The Phase 1 `logic` Agent runs on Codex (vendor: codex)
-# using your host `codex login` (ChatGPT subscription) — the worker stages
-# ~/.codex/auth.json into the Agent container (see sandcastle-image.md), so the
-# default setup needs NO key here. Set ONE of these only if you deviate:
-#   OPENAI_API_KEY=sk-...        # Codex API-key auth instead of a subscription login
-#   ANTHROPIC_API_KEY=sk-ant-... # only if you switch `logic` to vendor: claude
+# Optional: learning-loop Finding embeddings default to local Ollama.
+# OLLAMA_HOST=http://127.0.0.1:11434
+
+# Optional alternate Agent vendor auth. The default Codex setup can still use
+# your host `codex login` (see sandcastle-image.md); set Anthropic only if you
+# switch an Agent to vendor: claude. Set OpenAI only if you switch an Agent to
+# OpenAI API-key auth instead of Codex subscription auth.
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   OPENAI_API_KEY=sk-...
 ```
 
 > **One file, set in pieces.** If you followed the [setup order](./README.md),
 > [`convex.md`](./convex.md) ran before this doc; whichever doc you reach first,
 > create `.config/.env` and the later docs just set their own line above. Set
-> `CONVEX_URL` to the value Convex printed. The default Codex `logic` Agent needs
-> no API key here — it authenticates from your host `codex login`; add
-> `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` only if you deviate (see above).
+> `CONVEX_URL` to the value Convex printed. Finding embeddings use local Ollama
+> at `http://127.0.0.1:11434` by default; set `OLLAMA_HOST` only if the worker
+> should call a different Ollama host. Add `ANTHROPIC_API_KEY` or
+> `OPENAI_API_KEY` only if you switch an Agent to that provider's API-key auth.
 
 > **Private key format.** Sandy reads the key from the path above. If you prefer
 > to inline the key instead of pointing at a file, that's an instance choice the

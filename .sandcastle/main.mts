@@ -145,29 +145,51 @@ const MAX_ITERATIONS = 10;
 // existence: a file-existence check passed even when platform-native bindings
 // were missing, which led to agents committing code without running tests.
 // Sandy builds with `pnpm -r` (no turbo), so we probe vitest directly.
-// The second step configures a login-free anonymous Convex deployment and warms
-// the convex-local-backend binary (ADR 0013) so `pnpm --filter
+// The convex step then configures a login-free anonymous Convex deployment and
+// warms the convex-local-backend binary (ADR 0013) so `pnpm --filter
 // @sandy/convex-backend build` (convex codegen) works for the agents and the
 // merge gate. `--typecheck disable` keeps sandbox setup decoupled from
 // TypeScript — the agents run `pnpm type-check` themselves. CONVEX_AGENT_MODE is
 // set on the provider env, so this is non-interactive. The first sandbox on a
 // fresh host downloads the backend binary into the bind-mounted cache; the rest
 // reuse it.
+//
+// CONVEX_DEPLOYMENT is cleared inline: convex selects a deployment from the
+// environment (incl. a dotenv-loaded .env.local) BEFORE it consults
+// CONVEX_AGENT_MODE, so a real `dev:` deployment wins and forces an interactive
+// login. The planner runs against the live host repo (no isolated worktree), so
+// the host's gitignored packages/convex-backend/.env.local is visible inside the
+// sandbox. dotenv won't override an already-set env var and convex treats an
+// empty CONVEX_DEPLOYMENT as unset, so this pins the anonymous path everywhere.
+//
+// Both steps are ONE hook chained with `&&`, not two array entries: Sandcastle
+// runs onSandboxReady hooks concurrently (Effect.all, unbounded). As separate
+// hooks, `pnpm --filter @sandy/convex-backend exec convex` races the still-
+// running `pnpm install` and resolves the convex bin from a half-linked
+// node_modules — failing with `Command "convex" not found` (exit 254). Chaining
+// forces install → codegen, and skips convex if the install itself fails.
 const hooks = {
   sandbox: {
     onSandboxReady: [
       {
         command:
-          'pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile',
-        timeoutMs: 600_000,
-      },
-      {
-        command: 'pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
+          '( pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile )' +
+          ' && CONVEX_DEPLOYMENT= pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
         timeoutMs: 600_000,
       },
     ],
   },
 };
+
+// The planner only reads the issue tracker and reasons about a dependency graph
+// (see plan-prompt.md) — it never builds, tests, or runs convex codegen. Unlike
+// the executor/merger sandboxes (isolated git worktrees), it runs against the
+// live host repo, so the workspace-prep hooks above are both useless and unsafe
+// there: convex codegen's esbuild fails against the host's macOS node_modules,
+// and `pnpm install` / `convex dev` would mutate the host checkout (the latter
+// rewrites packages/convex-backend/.env.local to the anonymous deployment).
+// Give the planner no setup hooks.
+const plannerHooks = { sandbox: { onSandboxReady: [] } };
 
 const copyToWorktree: string[] = [];
 
@@ -255,7 +277,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   let plan: sandcastle.RunResult;
   try {
     plan = await sandcastle.run({
-      hooks,
+      hooks: plannerHooks,
       sandbox: sandboxProvider,
       name: 'planner',
       // One iteration is enough: the planner just needs to read and reason,

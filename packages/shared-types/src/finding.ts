@@ -4,6 +4,9 @@ export type Severity = 'P0' | 'P1' | 'P2';
 /** Agent confidence in a Finding, 0 (lowest) to 5 (highest). */
 export type Confidence = 0 | 1 | 2 | 3 | 4 | 5;
 
+/** Stable identifier for a Finding (a Convex document id at runtime). */
+export type FindingId = string;
+
 /**
  * Finding category. Known values align with the default Agent personas in
  * `agents/` (`logic`, `security`, `convex`, `nextjs`, `i18n`, `style`,

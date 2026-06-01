@@ -136,5 +136,7 @@ function product(repos: RepoConfig[]): ProductConfig {
     name: 'Acme',
     repos,
     agents: [],
+    agentSelectionMode: 'default',
+    agentOverrides: {},
   };
 }

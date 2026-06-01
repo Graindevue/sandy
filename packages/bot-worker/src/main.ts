@@ -7,7 +7,7 @@ import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { BotConfigReader } from './config/bot-config-reader.js';
 import type { ProductConfig, RepoConfig } from './config/bot-yaml.js';
-import { ConfigLoader } from './config/loader.js';
+import { applyProductRuntimeOverride, ConfigLoader } from './config/loader.js';
 import {
   defaultCloneBaseDir,
   defaultConfigLoaderOptions,
@@ -16,6 +16,19 @@ import {
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
+import {
+  disabledArchetypeAssigner,
+  FindingArchetypeAssigner,
+} from './learning/archetype-assigner.js';
+import { DEFAULT_OLLAMA_HOST, OllamaFindingEmbedder } from './learning/embed.js';
+import {
+  inferPrMergeStateSignals,
+  startMergeStateSignalCron,
+} from './learning/merge-state-inferrer.js';
+import { provisionOllamaEmbeddingBackend } from './learning/ollama-provisioner.js';
+import { PromotionWorker } from './learning/promotion-worker.js';
+import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
+import { captureCommentReply as captureReplyFeedback } from './learning/reply-handler.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
 import { ReviewCancellationCoordinator } from './worker/cancellation.js';
@@ -31,6 +44,7 @@ export interface WorkerConfig {
   convexUrl: string;
   githubAppId: string;
   githubPrivateKeyPath: string;
+  ollamaHost: string;
   port: number;
   agentImage: string;
   maxChangedLines: number;
@@ -63,6 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   const convexUrl = requireEnv(env, 'CONVEX_URL');
   const githubAppId = requireEnv(env, 'GITHUB_APP_ID');
   const githubPrivateKeyPath = requireEnv(env, 'GITHUB_APP_PRIVATE_KEY_PATH');
+  const ollamaHost = parseOllamaHost(env.OLLAMA_HOST);
   const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
   const maxChangedLines =
     env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
@@ -78,6 +93,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     convexUrl,
     githubAppId,
     githubPrivateKeyPath,
+    ollamaHost,
     port,
     agentImage: parseAgentImage(env.SANDY_AGENT_IMAGE),
     maxChangedLines,
@@ -131,6 +147,15 @@ function parseAgentImage(raw: string | undefined): string {
   return trimmed.length === 0 ? DEFAULT_AGENT_IMAGE : trimmed;
 }
 
+function parseOllamaHost(raw: string | undefined): string {
+  if (raw === undefined) {
+    return DEFAULT_OLLAMA_HOST;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length === 0 ? DEFAULT_OLLAMA_HOST : trimmed;
+}
+
 function pickAgentEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const picked: Record<string, string> = {};
   for (const key of AGENT_ENV_KEYS) {
@@ -158,6 +183,7 @@ export async function main(): Promise<void> {
     appId: config.githubAppId,
     privateKey: await readPrivateKey(repoRoot, config.githubPrivateKeyPath),
   });
+  startMergeStateSignalCron({ store: sink, github, logger: console });
   const cloneManager = new CloneManager({
     baseDir: defaultCloneBaseDir(process.env),
     cloneUrl: (repo) => github.cloneUrlForRepo(repo),
@@ -170,12 +196,24 @@ export async function main(): Promise<void> {
   });
   const cancellations = new ReviewCancellationCoordinator();
   const poster = new PullRequestPoster(github);
+  const executionStore = new ConvexExecutionStore(reactiveClient);
+  const ollama = await provisionOllamaEmbeddingBackend({
+    host: config.ollamaHost,
+    logger: console,
+  });
+  const archetypeAssigner = ollama.ready
+    ? new FindingArchetypeAssigner(
+        new OllamaFindingEmbedder({ host: ollama.host, model: ollama.model }),
+        executionStore,
+      )
+    : disabledArchetypeAssigner;
   const executor = new ReviewExecutor({
-    store: new ConvexExecutionStore(reactiveClient),
+    store: executionStore,
     cloneManager,
     diffInspector: github,
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
+    archetypeAssigner,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
     manifestBuilder: {
@@ -197,6 +235,17 @@ export async function main(): Promise<void> {
     maxConcurrentJobs: config.maxConcurrentJobs,
   });
   claimant.start();
+  new PromotionWorker({
+    client: reactiveClient,
+    github,
+    reviewSink: sink,
+    resolveAgentKeys: (repo) =>
+      resolveConfiguredAgents(configLoader, {
+        owner: repo.owner,
+        name: repo.name,
+        defaultBranch: repo.defaultBranch,
+      }).map((agent) => agent.key),
+  }).start();
 
   await startWebhookServer(config.port, {
     webhookSecret: config.webhookSecret,
@@ -210,6 +259,42 @@ export async function main(): Promise<void> {
           repo: repo.name,
           issueNumber: pullNumber,
           body,
+        });
+      },
+    },
+    closeSignalCapturer: {
+      async capturePrCloseSignals({ repo, pullNumber, pullRequestId, state }) {
+        const closeReactions = await captureCloseReactions({
+          repo,
+          pullNumber,
+          pullRequestId,
+          store: sink,
+          github,
+        });
+        if (state !== 'merged') {
+          return closeReactions;
+        }
+
+        const mergeState = await inferPrMergeStateSignals({
+          repo,
+          pullNumber,
+          pullRequestId,
+          store: sink,
+          github,
+        });
+        await sink.markMergeStateSignalsRolledUp({ pullRequestId, rolledUpAt: Date.now() });
+        return { recorded: closeReactions.recorded + mergeState.recorded };
+      },
+    },
+    replyCapturer: {
+      async captureCommentReply({ repo, pullNumber, pullRequestId, comment }) {
+        return await captureReplyFeedback({
+          repo,
+          pullNumber,
+          pullRequestId,
+          comment,
+          store: sink,
+          github,
         });
       },
     },
@@ -400,16 +485,18 @@ export function resolveConfiguredAgents(
   if (resolved === null) {
     return [];
   }
-  if (resolved.product.agents.length > 0) {
+  if (resolved.product.agentSelectionMode === 'explicit') {
     return resolved.product.agents.map((agentKey) => {
       const agent = loader.config.agents.get(agentKey);
       if (agent === undefined) {
         throw new Error(`configured Agent ${JSON.stringify(agentKey)} is not loaded`);
       }
-      return { ...agent, defaultEnabled: true };
+      return applyProductRuntimeOverride(resolved.product, { ...agent, defaultEnabled: true });
     });
   }
-  return [...loader.config.agents.values()];
+  return [...loader.config.agents.values()].map((agent) =>
+    applyProductRuntimeOverride(resolved.product, agent),
+  );
 }
 
 export async function resolveReviewBotConfig(

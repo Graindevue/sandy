@@ -5,9 +5,12 @@ import type {
   CrossRepoSearchStatus,
   CrossRepoSearchTrigger,
   PullRequestState,
+  ReactionKind,
   ReviewJobStatus,
   ReviewTrigger,
   Severity,
+  SuggestedRuleStatus,
+  SuggestedRuleType,
 } from '@sandy/shared-types';
 import { v } from 'convex/values';
 
@@ -59,6 +62,27 @@ export const agentRunStatus = v.union(
   v.literal('completed' satisfies AgentRunStatus),
   v.literal('failed' satisfies AgentRunStatus),
   v.literal('timed_out' satisfies AgentRunStatus),
+);
+
+export const reactionKind = v.union(
+  v.literal('👍' satisfies ReactionKind),
+  v.literal('👎' satisfies ReactionKind),
+  v.literal('reply' satisfies ReactionKind),
+  v.literal('mergedFixed' satisfies ReactionKind),
+  v.literal('mergedIgnored' satisfies ReactionKind),
+);
+
+export const suggestedRuleType = v.union(
+  v.literal('positive' satisfies SuggestedRuleType),
+  v.literal('suppression' satisfies SuggestedRuleType),
+);
+
+export const suggestedRuleStatus = v.union(
+  v.literal('suggested' satisfies SuggestedRuleStatus),
+  v.literal('promoteToPositive' satisfies SuggestedRuleStatus),
+  v.literal('promoteToSuppression' satisfies SuggestedRuleStatus),
+  v.literal('rejected' satisfies SuggestedRuleStatus),
+  v.literal('promoted' satisfies SuggestedRuleStatus),
 );
 
 export const findingAnchor = v.object({

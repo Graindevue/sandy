@@ -1,3 +1,4 @@
+import type { AgentVendor } from '@sandy/shared-types';
 import { parse as parseYaml } from 'yaml';
 
 /**
@@ -21,14 +22,25 @@ export interface RepoConfig {
   defaultBranch: string;
 }
 
+export type AgentSelectionMode = 'default' | 'explicit';
+
+export interface AgentRuntimeOverride {
+  vendor: AgentVendor;
+  model: string;
+}
+
 /** A Product as declared in `bot.yaml`. */
 export interface ProductConfig {
   slug: string;
   name: string;
   /** One or more Repos; guaranteed non-empty after validation. */
   repos: RepoConfig[];
-  /** Agent keys to run for this Product; empty when the file omits `agents`. */
+  /** Exact Agent keys to run when `agentSelectionMode === 'explicit'`. */
   agents: string[];
+  /** Whether `agents` is an exact Product set or default/auto selection applies. */
+  agentSelectionMode: AgentSelectionMode;
+  /** Product-scoped runtime overrides keyed by Agent key. */
+  agentOverrides: Record<string, AgentRuntimeOverride>;
 }
 
 /** The validated contents of `bot.yaml`. */
@@ -53,6 +65,8 @@ interface RawProduct {
 interface RawConfig {
   products?: unknown;
 }
+
+const AGENT_VENDORS: readonly AgentVendor[] = ['claude', 'codex', 'cursor', 'copilot'];
 
 /**
  * Parse the raw text of `bot.yaml` into a validated {@link BotConfig}. Throws on
@@ -124,7 +138,9 @@ function parseProduct(
     parseRepo(rawRepo, `${where} (${slug}).repos[${repoIndex}]`, slug, seenRepos),
   );
 
-  return { slug, name, repos, agents: parseAgents(product.agents, `${where}.agents`) };
+  const agents = parseAgents(product.agents, `${where}.agents`);
+
+  return { slug, name, repos, ...agents };
 }
 
 function parseRepo(
@@ -159,14 +175,102 @@ function parseRepo(
   return { owner, name, fullName, defaultBranch };
 }
 
-function parseAgents(value: unknown, where: string): string[] {
+function parseAgents(
+  value: unknown,
+  where: string,
+): {
+  agents: string[];
+  agentSelectionMode: AgentSelectionMode;
+  agentOverrides: Record<string, AgentRuntimeOverride>;
+} {
   if (value === undefined) {
-    return [];
+    return { agents: [], agentSelectionMode: 'default', agentOverrides: {} };
   }
+  if (Array.isArray(value)) {
+    return {
+      agents: parseAgentKeyList(value, where),
+      // Preserve today's behavior: an empty list behaves like omitting `agents`.
+      agentSelectionMode: value.length === 0 ? 'default' : 'explicit',
+      agentOverrides: {},
+    };
+  }
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`bot.yaml: ${where} must be either a list of Agent-key strings or a mapping`);
+  }
+
+  const object = value as Record<string, unknown>;
+  assertKnownKeys(object, ['enable', 'overrides'], where);
+
+  const hasEnable = Object.hasOwn(object, 'enable');
+  return {
+    agents: hasEnable ? parseAgentKeyList(object.enable, `${where}.enable`) : [],
+    agentSelectionMode: hasEnable ? 'explicit' : 'default',
+    agentOverrides: parseAgentRuntimeOverrides(object.overrides, `${where}.overrides`),
+  };
+}
+
+function parseAgentKeyList(value: unknown, where: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error(`bot.yaml: ${where} must be a list of Agent-key strings`);
   }
   return value as string[];
+}
+
+function parseAgentRuntimeOverrides(
+  value: unknown,
+  where: string,
+): Record<string, AgentRuntimeOverride> {
+  if (value === undefined) {
+    return {};
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`bot.yaml: ${where} must be a mapping of Agent keys to runtime overrides`);
+  }
+
+  const overrides: Record<string, AgentRuntimeOverride> = {};
+  for (const [key, rawOverride] of Object.entries(value)) {
+    if (key.trim().length === 0 || key !== key.trim()) {
+      throw new Error(`bot.yaml: ${where} contains an invalid Agent key ${JSON.stringify(key)}`);
+    }
+    overrides[key] = parseAgentRuntimeOverride(rawOverride, `${where}.${key}`);
+  }
+  return overrides;
+}
+
+function parseAgentRuntimeOverride(value: unknown, where: string): AgentRuntimeOverride {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`bot.yaml: ${where} must be a mapping with vendor and model`);
+  }
+  const object = value as Record<string, unknown>;
+  assertKnownKeys(object, ['vendor', 'model'], where);
+  return {
+    vendor: requireVendor(object.vendor, `${where}.vendor`),
+    model: requireString(object.model, `${where}.model`),
+  };
+}
+
+function requireVendor(value: unknown, where: string): AgentVendor {
+  if (typeof value !== 'string' || !AGENT_VENDORS.includes(value as AgentVendor)) {
+    throw new Error(
+      `bot.yaml: ${where} must be one of ${AGENT_VENDORS.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as AgentVendor;
+}
+
+function assertKnownKeys(
+  object: Record<string, unknown>,
+  allowedKeys: readonly string[],
+  where: string,
+): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) {
+      throw new Error(
+        `bot.yaml: ${where}.${key} is not supported (allowed: ${allowedKeys.join(', ')})`,
+      );
+    }
+  }
 }
 
 function requireString(value: unknown, where: string): string {

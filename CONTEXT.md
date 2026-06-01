@@ -28,6 +28,11 @@ A single reviewer persona — a system prompt + a vendor/model selection + a too
 
 Agents are NOT software components — they are configuration data. Adding a new Agent does not require code changes to Sandy.
 
+## Agent Runtime Override
+
+A configuration choice that changes an existing Agent's vendor/model selection without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime.
+_Avoid_: Agent override, custom Agent
+
 ## Finding
 
 A single issue raised by an Agent during a Review. Carries:
@@ -46,7 +51,12 @@ Stored in Convex; persists across PRs for learning purposes.
 
 ## Archetype
 
-A cluster of Findings that are semantically similar. Identified via embedding similarity (cosine > 0.85) on Finding summaries using `text-embedding-3-small`. Carries a `suppressionWeight` that the Synthesizer applies at posting time. Mutable state in Convex — not version-controlled.
+A cluster of Findings that are semantically similar. Identified via embedding
+similarity (cosine >= 0.8) within one Product and Agent on 768-dimensional
+Finding **evidence** embeddings supplied by the bot worker through local Ollama
+`nomic-embed-text` (evidence describes the underlying mechanism and clusters more
+reliably than the surface-variable summary). Carries a `suppressionWeight` that the Synthesizer applies at
+posting time. Mutable state in Convex — not version-controlled.
 
 ## Rule
 
@@ -100,7 +110,11 @@ A 👍 or 👎 emoji reaction (or a reply, or an inferred merge-state signal) at
 
 ## Comment Trailer
 
-The HTML comment `<!-- bot:finding=<id> archetype=<id> -->` Sandy appends to every posted Finding. Lets the reaction webhook map back to records. Load-bearing — do not remove.
+The HTML comment Sandy appends to every posted Finding. The full learning
+trailer is `<!-- bot:finding=<id> archetype=<id> -->`; if learning assignment is
+temporarily unavailable, Sandy still emits `<!-- bot:finding=<id> -->` so the
+reaction webhook can map feedback back to the Finding. Load-bearing — do not
+remove.
 
 ## Sticky Opt-In
 

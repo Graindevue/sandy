@@ -1,5 +1,16 @@
 import { createSign } from 'node:crypto';
 import { isIgnoredPath } from '../config/ignore.js';
+import type {
+  MergeStateCommit,
+  MergeStateCommitFile,
+  MergeStateGitHub,
+} from '../learning/merge-state-inferrer.js';
+import type {
+  CommentReaction,
+  ReactionCaptureComment,
+  ReactionCaptureCommentKind,
+  ReactionCaptureGitHub,
+} from '../learning/reaction-capture.js';
 import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
 import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
@@ -28,9 +39,15 @@ interface InstallationToken {
 const GITHUB_API_BASE = 'https://api.github.com';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const PRODUCT_RULES_PATH = '.bot/product-rules.md';
 
 export class GitHubAppClient
-  implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver
+  implements
+    GitHubReviewPoster,
+    ReviewDiffInspector,
+    PullRequestResolver,
+    ReactionCaptureGitHub,
+    MergeStateGitHub
 {
   readonly #appId: string;
   readonly #privateKey: string;
@@ -58,30 +75,24 @@ export class GitHubAppClient
     target: PullRequestTarget,
     ignorePatterns: readonly string[] = [],
   ): Promise<number> {
+    const files = await this.#listPaginated<unknown>(
+      target.owner,
+      target.repo,
+      `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files`,
+    );
     let total = 0;
-    let page = 1;
-    while (true) {
-      const files = await this.#installationRequest<unknown[]>(
-        target.owner,
-        target.repo,
-        `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files?per_page=100&page=${page}`,
-      );
-      for (const file of files) {
-        if (typeof file === 'object' && file !== null) {
-          const filename = (file as { filename?: unknown }).filename;
-          if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
-            continue;
-          }
-          const additions = Number((file as { additions?: unknown }).additions ?? 0);
-          const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
-          total += additions + deletions;
+    for (const file of files) {
+      if (typeof file === 'object' && file !== null) {
+        const filename = (file as { filename?: unknown }).filename;
+        if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
+          continue;
         }
+        const additions = Number((file as { additions?: unknown }).additions ?? 0);
+        const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
+        total += additions + deletions;
       }
-      if (files.length < 100) {
-        return total;
-      }
-      page += 1;
     }
+    return total;
   }
 
   async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
@@ -143,9 +154,262 @@ export class GitHubAppClient
     return null;
   }
 
+  async listReactionCaptureComments(input: {
+    repo: RepoRef;
+    pullNumber: number;
+  }): Promise<ReactionCaptureComment[]> {
+    const [reviewComments, issueComments] = await Promise.all([
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/comments`,
+        'pull_request_review_comment',
+      ),
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/issues/${input.pullNumber}/comments`,
+        'issue_comment',
+      ),
+    ]);
+    return [...reviewComments, ...issueComments];
+  }
+
+  async listCommentReactions(input: {
+    repo: RepoRef;
+    commentId: number;
+    commentKind?: ReactionCaptureCommentKind;
+  }): Promise<CommentReaction[]> {
+    if (input.commentKind !== undefined) {
+      return await this.#listReactionsByKind(input.repo, input.commentId, input.commentKind);
+    }
+
+    try {
+      return await this.#listReactionsByKind(
+        input.repo,
+        input.commentId,
+        'pull_request_review_comment',
+      );
+    } catch (error) {
+      if (!isGitHubNotFound(error)) {
+        throw error;
+      }
+      return await this.#listReactionsByKind(input.repo, input.commentId, 'issue_comment');
+    }
+  }
+
+  async listPullRequestCommits(input: {
+    repo: RepoRef;
+    pullNumber: number;
+  }): Promise<MergeStateCommit[]> {
+    const raw = await this.#listPaginated<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/commits`,
+    );
+    return raw.map(parsePullRequestCommit).filter(isDefined);
+  }
+
+  async listCommitFiles(input: {
+    repo: RepoRef;
+    commitSha: string;
+  }): Promise<MergeStateCommitFile[]> {
+    const raw = await this.#installationRequest<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/commits/${input.commitSha}`,
+    );
+    return parseCommitFiles(raw);
+  }
+
   async cloneUrlForRepo(repo: RepoForWorktree): Promise<string> {
     const token = await this.#installationToken(repo.owner, repo.name);
     return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repo.owner}/${repo.name}.git`;
+  }
+
+  async openProductRulesPullRequest(input: {
+    repo: {
+      owner: string;
+      name: string;
+      defaultBranch: string;
+    };
+    suggestedRuleId: string;
+    ruleLine: string;
+  }): Promise<PullRequestFacts> {
+    const branchName = productRuleBranchName(input.suggestedRuleId);
+    const baseSha = await this.#getBranchHeadSha(input.repo, input.repo.defaultBranch);
+    await this.#createBranchIfMissing(input.repo, branchName, baseSha);
+
+    const existingFile = await this.#readTextFile(input.repo, PRODUCT_RULES_PATH, branchName);
+    const content = appendProductRuleLine(existingFile?.content ?? '', input.ruleLine);
+    const writeInput: {
+      path: string;
+      branchName: string;
+      content: string;
+      message: string;
+      sha?: string;
+    } = {
+      path: PRODUCT_RULES_PATH,
+      branchName,
+      content,
+      message: `Add product rule from SuggestedRule ${input.suggestedRuleId}`,
+    };
+    if (existingFile !== null) {
+      writeInput.sha = existingFile.sha;
+    }
+    const headSha = await this.#writeTextFile(input.repo, writeInput);
+
+    const existingPullRequest = await this.resolvePullRequestForPush(
+      { owner: input.repo.owner, name: input.repo.name },
+      branchName,
+      headSha,
+    );
+    if (existingPullRequest !== null) {
+      return existingPullRequest;
+    }
+
+    const raw = await this.#installationRequest<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/pulls`,
+      {
+        method: 'POST',
+        body: {
+          title: `Add product rule from SuggestedRule ${input.suggestedRuleId}`,
+          head: branchName,
+          base: input.repo.defaultBranch,
+          body: productRulePullRequestBody(input.suggestedRuleId, input.ruleLine),
+          draft: false,
+        },
+      },
+    );
+    const pullRequest = parsePullRequestFacts(raw);
+    if (pullRequest === null) {
+      throw new Error('GitHub did not return a valid product-rules pull request');
+    }
+    return pullRequest;
+  }
+
+  async #listReactions(repo: RepoRef, path: string): Promise<CommentReaction[]> {
+    const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
+    return raw.map(parseCommentReaction).filter(isDefined);
+  }
+
+  async #getBranchHeadSha(
+    repo: { owner: string; name: string },
+    branchName: string,
+  ): Promise<string> {
+    const raw = await this.#installationRequest<unknown>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/git/ref/heads/${branchName}`,
+    );
+    return parseGitRefSha(raw);
+  }
+
+  async #createBranchIfMissing(
+    repo: { owner: string; name: string },
+    branchName: string,
+    baseSha: string,
+  ): Promise<void> {
+    try {
+      await this.#installationRequest<unknown>(
+        repo.owner,
+        repo.name,
+        `/repos/${repo.owner}/${repo.name}/git/refs`,
+        {
+          method: 'POST',
+          body: { ref: `refs/heads/${branchName}`, sha: baseSha },
+        },
+      );
+    } catch (error) {
+      if (isGitHubStatus(error, 422)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async #readTextFile(
+    repo: { owner: string; name: string },
+    path: string,
+    branchName: string,
+  ): Promise<{ sha: string; content: string } | null> {
+    try {
+      const raw = await this.#installationRequest<unknown>(
+        repo.owner,
+        repo.name,
+        `/repos/${repo.owner}/${repo.name}/contents/${path}?ref=${encodeURIComponent(branchName)}`,
+      );
+      return parseRepositoryTextFile(raw);
+    } catch (error) {
+      if (isGitHubNotFound(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async #writeTextFile(
+    repo: { owner: string; name: string },
+    input: {
+      path: string;
+      branchName: string;
+      content: string;
+      message: string;
+      sha?: string;
+    },
+  ): Promise<string> {
+    const body: Record<string, unknown> = {
+      message: input.message,
+      content: Buffer.from(input.content, 'utf8').toString('base64'),
+      branch: input.branchName,
+    };
+    if (input.sha !== undefined) {
+      body.sha = input.sha;
+    }
+    const raw = await this.#installationRequest<unknown>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/contents/${input.path}`,
+      { method: 'PUT', body },
+    );
+    return parseContentCommitSha(raw);
+  }
+
+  async #listReactionsByKind(
+    repo: RepoRef,
+    commentId: number,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<CommentReaction[]> {
+    return await this.#listReactions(repo, commentReactionsPath(repo, commentId, commentKind));
+  }
+
+  async #listReactionCaptureComments(
+    repo: RepoRef,
+    path: string,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<ReactionCaptureComment[]> {
+    const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
+    return raw
+      .map((comment) => parseReactionCaptureComment(comment, commentKind))
+      .filter(isDefined);
+  }
+
+  async #listPaginated<T>(owner: string, repo: string, path: string): Promise<T[]> {
+    const all: T[] = [];
+    let page = 1;
+    while (true) {
+      const separator = path.includes('?') ? '&' : '?';
+      const pageItems = await this.#installationRequest<T[]>(
+        owner,
+        repo,
+        `${path}${separator}per_page=100&page=${page}`,
+      );
+      all.push(...pageItems);
+      if (pageItems.length < 100) {
+        return all;
+      }
+      page += 1;
+    }
   }
 
   async #installationRequest<T>(
@@ -212,12 +476,31 @@ export class GitHubAppClient
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(
+      throw new GitHubApiError(
         `GitHub API ${options.method ?? 'GET'} ${path} failed (${response.status}): ${text}`,
+        response.status,
       );
     }
     return (text.length === 0 ? null : JSON.parse(text)) as T;
   }
+}
+
+class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'GitHubApiError';
+  }
+}
+
+function isGitHubNotFound(error: unknown): boolean {
+  return error instanceof GitHubApiError && error.status === 404;
+}
+
+function isGitHubStatus(error: unknown, status: number): boolean {
+  return error instanceof GitHubApiError && error.status === status;
 }
 
 function createGitHubAppJwt(options: {
@@ -302,4 +585,171 @@ function parseRepoRef(raw: unknown): RepoRef | null {
   return typeof object.owner?.login === 'string' && typeof object.name === 'string'
     ? { owner: object.owner.login, name: object.name }
     : null;
+}
+
+function parseGitRefSha(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub ref response was not an object');
+  }
+  const sha = (raw as { object?: { sha?: unknown } }).object?.sha;
+  if (typeof sha !== 'string' || sha.length === 0) {
+    throw new Error('GitHub ref response did not include object.sha');
+  }
+  return sha;
+}
+
+function parseRepositoryTextFile(raw: unknown): { sha: string; content: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('GitHub contents response was not a file object');
+  }
+  const file = raw as {
+    type?: unknown;
+    sha?: unknown;
+    encoding?: unknown;
+    content?: unknown;
+  };
+  if (
+    file.type !== 'file' ||
+    typeof file.sha !== 'string' ||
+    file.encoding !== 'base64' ||
+    typeof file.content !== 'string'
+  ) {
+    throw new Error('GitHub contents response did not include a base64 file');
+  }
+  return {
+    sha: file.sha,
+    content: Buffer.from(file.content.replaceAll(/\s/g, ''), 'base64').toString('utf8'),
+  };
+}
+
+function parseContentCommitSha(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub contents update response was not an object');
+  }
+  const sha = (raw as { commit?: { sha?: unknown } }).commit?.sha;
+  if (typeof sha !== 'string' || sha.length === 0) {
+    throw new Error('GitHub contents update response did not include commit.sha');
+  }
+  return sha;
+}
+
+function productRuleBranchName(suggestedRuleId: string): string {
+  const slug = suggestedRuleId
+    .trim()
+    .replaceAll(/[^A-Za-z0-9._-]+/g, '-')
+    .replaceAll(/^-+|-+$/g, '');
+  return `sandy/suggested-rule-${slug.length === 0 ? 'rule' : slug}`;
+}
+
+function appendProductRuleLine(content: string, ruleLine: string): string {
+  const normalizedContent = content.replace(/\r\n/g, '\n').trimEnd();
+  const normalizedRule = ruleLine.trim();
+  if (normalizedContent.length === 0) {
+    return `${normalizedRule}\n`;
+  }
+  return `${normalizedContent}\n${normalizedRule}\n`;
+}
+
+function productRulePullRequestBody(suggestedRuleId: string, ruleLine: string): string {
+  return [
+    `Promotes SuggestedRule \`${suggestedRuleId}\` into \`${PRODUCT_RULES_PATH}\`.`,
+    '',
+    'Rule:',
+    '',
+    ruleLine,
+    '',
+    'Sandy opts this PR into review so the drafted rule is checked before merge.',
+  ].join('\n');
+}
+
+function commentReactionsPath(
+  repo: RepoRef,
+  commentId: number,
+  commentKind: ReactionCaptureCommentKind,
+): string {
+  switch (commentKind) {
+    case 'pull_request_review_comment':
+      return `/repos/${repo.owner}/${repo.name}/pulls/comments/${commentId}/reactions`;
+    case 'issue_comment':
+      return `/repos/${repo.owner}/${repo.name}/issues/comments/${commentId}/reactions`;
+  }
+}
+
+function parseReactionCaptureComment(
+  raw: unknown,
+  kind: ReactionCaptureCommentKind,
+): ReactionCaptureComment | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as { id?: unknown; body?: unknown; created_at?: unknown };
+  if (typeof object.id !== 'number' || typeof object.body !== 'string') {
+    return undefined;
+  }
+  const createdAt = parseTimestamp(object.created_at);
+  return createdAt === undefined
+    ? { id: object.id, body: object.body, kind }
+    : { id: object.id, body: object.body, kind, createdAt };
+}
+
+function parseCommentReaction(raw: unknown): CommentReaction | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const content = (raw as { content?: unknown }).content;
+  return typeof content === 'string' ? { content } : undefined;
+}
+
+function parsePullRequestCommit(raw: unknown): MergeStateCommit | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as {
+    sha?: unknown;
+    commit?: { committer?: { date?: unknown }; author?: { date?: unknown } };
+  };
+  if (typeof object.sha !== 'string') {
+    return undefined;
+  }
+  const committedAt =
+    parseTimestamp(object.commit?.committer?.date) ?? parseTimestamp(object.commit?.author?.date);
+  return committedAt === undefined ? undefined : { sha: object.sha, committedAt };
+}
+
+function parseCommitFiles(raw: unknown): MergeStateCommitFile[] {
+  if (typeof raw !== 'object' || raw === null) {
+    return [];
+  }
+  const files = (raw as { files?: unknown }).files;
+  return Array.isArray(files) ? files.map(parseCommitFile).filter(isDefined) : [];
+}
+
+function parseCommitFile(raw: unknown): MergeStateCommitFile | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as { filename?: unknown; previous_filename?: unknown; patch?: unknown };
+  if (typeof object.filename !== 'string') {
+    return undefined;
+  }
+  const file: MergeStateCommitFile = { filename: object.filename };
+  if (typeof object.previous_filename === 'string') {
+    file.previousFilename = object.previous_filename;
+  }
+  if (typeof object.patch === 'string') {
+    file.patch = object.patch;
+  }
+  return file;
+}
+
+function parseTimestamp(raw: unknown): number | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const timestamp = Date.parse(raw);
+  return Number.isNaN(timestamp) ? undefined : timestamp;
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }

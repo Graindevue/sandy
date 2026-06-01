@@ -1,4 +1,4 @@
-import { cronJobs, type FunctionReference } from 'convex/server';
+import { cronJobs } from 'convex/server';
 import { v } from 'convex/values';
 import { internal } from './_generated/api.js';
 import { internalMutation } from './_generated/server.js';
@@ -7,8 +7,6 @@ import {
   STUCK_REVIEW_JOB_ERROR,
   stuckReviewJobCutoff,
 } from './reviewJobReaper.js';
-
-type ReapStuckJobsReference = FunctionReference<'mutation', 'internal', { now?: number }, number>;
 
 export const reapStuckJobs = internalMutation({
   args: { now: v.optional(v.number()) },
@@ -37,12 +35,12 @@ export const reapStuckJobs = internalMutation({
 
 const crons = cronJobs();
 
-const internalRefs = internal as unknown as {
-  crons: {
-    reapStuckJobs: ReapStuckJobsReference;
-  };
-};
-
-crons.interval('reap stuck ReviewJobs', { minutes: 5 }, internalRefs.crons.reapStuckJobs, {});
+crons.interval('reap stuck ReviewJobs', { minutes: 5 }, internal.crons.reapStuckJobs, {});
+crons.daily(
+  'infer SuggestedRules from reactions',
+  { hourUTC: 3, minuteUTC: 0 },
+  internal.suggestedRules.inferSuggestedRulesFromReactions,
+  {},
+);
 
 export default crons;

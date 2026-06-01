@@ -1,7 +1,11 @@
 import type { AgentProvider, RunOptions, RunResult, SandboxProvider } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './sandcastle-runner.js';
+import {
+  buildReviewPrompt,
+  SANDY_WORKER_CONTAINER_PREFIX,
+  SandcastleRunner,
+} from './sandcastle-runner.js';
 
 const logicAgent: AgentDefinition = {
   key: 'logic',
@@ -111,7 +115,31 @@ describe('SandcastleRunner', () => {
     expect(runCalls[0]?.prompt).toContain('Repo-local Rules');
     expect(runCalls[0]?.prompt).toContain('- Keep widget cache keys tenant-scoped.');
     expect(runCalls[0]?.prompt).toContain('generated/**');
+    expect(runCalls[0]?.prompt).toContain('Agent priors and active Rules');
+    expect(runCalls[0]?.prompt).not.toContain('Framework source verification');
     expect(runCalls[0]?.prompt).toContain('<findings>');
+  });
+
+  it('adds the source verification contract for opensrc-enabled Agents', () => {
+    const prompt = buildReviewPrompt({
+      agent: { ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] },
+      worktreePath: '/tmp/sandy/worktrees/job-1',
+      pullRequest: {
+        owner: 'acme',
+        repo: 'widget',
+        number: 12,
+        headSha: 'abc123',
+        baseRef: 'main',
+        title: 'Fix cache key',
+        url: 'https://github.com/acme/widget/pull/12',
+      },
+      apiSurfaceManifest: '## Framework Versions\n\n- next: 16.0.0',
+    });
+
+    expect(prompt).toContain('Framework source verification');
+    expect(prompt).toContain('Before emitting a Finding whose correctness depends on framework');
+    expect(prompt).toContain('Record the verification in the Finding.evidence');
+    expect(prompt).toContain('Memory or generic training knowledge is not evidence');
   });
 });
 

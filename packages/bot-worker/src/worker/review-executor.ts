@@ -11,7 +11,11 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
-import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
+import {
+  type AgentReviewOutput,
+  synthesizeAgentOutputs,
+  synthesizePostableReview,
+} from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
@@ -20,12 +24,16 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
-  PersistedFinding,
   PostedFinding,
   PostReviewResultInput,
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
+import type {
+  ArchetypeAssignedFinding,
+  PersistedFinding,
+  PostableFinding,
+} from './review-findings.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -173,6 +181,10 @@ export interface ReviewPoster {
   postScopeDeclined(input: PostScopeDeclinedInput): Promise<void>;
 }
 
+export interface ReviewArchetypeAssigner {
+  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeAssignedFinding[]>;
+}
+
 export interface ReviewManifestBuilder {
   buildManifest(
     productId: string,
@@ -192,6 +204,7 @@ export interface ReviewExecutorOptions {
   diffInspector: ReviewDiffInspector;
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
+  archetypeAssigner: ReviewArchetypeAssigner;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
   manifestBuilder?: ReviewManifestBuilder;
@@ -211,6 +224,7 @@ export class ReviewExecutor {
   readonly #diffInspector: ReviewDiffInspector;
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
+  readonly #archetypeAssigner: ReviewArchetypeAssigner;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
   readonly #manifestBuilder: ReviewManifestBuilder | null;
@@ -228,6 +242,7 @@ export class ReviewExecutor {
     this.#diffInspector = options.diffInspector;
     this.#runner = options.runner;
     this.#poster = options.poster;
+    this.#archetypeAssigner = options.archetypeAssigner;
     this.#resolveAgent = options.resolveAgent;
     this.#resolveAgents = options.resolveAgents ?? null;
     this.#manifestBuilder = options.manifestBuilder ?? null;
@@ -541,17 +556,26 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const archetypeAssignedFindings =
+      await this.#archetypeAssigner.assignArchetypes(persistedFindings);
+    await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const postable = synthesizePostableReview({
+      archetypeAssignedFindings,
+      agentOutputs: input.agentOutputs,
+      changedLineCount: input.changedLineCount,
+      rawFindingCount: synthesized.rawFindingCount,
+    });
     await this.#postReviewResult(
       input.target,
-      persistedFindings,
+      postable.findings,
       input.siblingShas,
-      synthesized.summary,
+      postable.summary,
     );
   }
 
   async #postReviewResult(
     target: PullRequestTarget,
-    findings: PersistedFinding[],
+    findings: PostableFinding[],
     siblingShas: SiblingShas,
     summary: string,
   ): Promise<void> {

@@ -17,9 +17,9 @@ You also need:
 - A **[Codex][codex]** login on the host — the Phase 1 `logic` Agent runs on
   Codex (`vendor: codex`). Run `codex login` once (uses your ChatGPT
   subscription); the worker stages that credential into each Agent container
-  (see [`sandcastle-image.md`](./sandcastle-image.md)). An OpenAI API key, or
+  (see [`sandcastle-image.md`](./sandcastle-image.md)). OpenAI API-key auth, or
   running `logic` on **[Anthropic][anthropic]** Claude instead, are both
-  supported — see [`github-app.md`](./github-app.md)
+  supported as optional Agent runtime choices — see [`github-app.md`](./github-app.md)
 - **[Tailscale][tailscale]** for webhook ingress (recommended)
 - **[`opensrc`][opensrc]** installed globally (ADR [0008](../adr/0008-opensrc-for-framework-source-truth.md))
 
@@ -44,7 +44,7 @@ Follow these in order. Each builds on the previous one.
 | 2 | [`convex.md`](./convex.md) | Create a Convex deployment and deploy the Phase 1 schema. |
 | 3 | [`github-app.md`](./github-app.md) | Register the "Sandy" GitHub App, install it on repos, capture credentials into `.config/.env`. |
 | 4 | [`tailscale.md`](./tailscale.md) | Expose the webhook server (host port **3007**) to GitHub via Tailscale Funnel. |
-| 5 | [`bot-yaml.md`](./bot-yaml.md) | Author `.config/bot.yaml` — declare your Products, their Repos, and Agent selection. |
+| 5 | [`bot-yaml.md`](./bot-yaml.md) | Author `.config/bot.yaml` — declare your Products, their Repos, Agent selection, and runtime overrides. |
 | 6 | [`launchd.md`](./launchd.md) | Install a launchd service that supervises the worker and runs it on boot. |
 
 After the launchd service is running and the Funnel URL is registered as the

@@ -1,6 +1,10 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { synthesizeAgentOutputs, synthesizeReview } from './synthesizer.js';
+import {
+  synthesizeAgentOutputs,
+  synthesizePostableReview,
+  synthesizeReview,
+} from './synthesizer.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -144,4 +148,57 @@ describe('synthesizeReview', () => {
 
     expect(result.confidenceScore).toBe(4);
   });
+
+  it('builds a postable review after applying Archetype suppression', () => {
+    const suppressedFinding: Finding = {
+      ...baseFinding,
+      severity: 'P0',
+      confidence: 5,
+      summary: 'The cache key ignores the tenant id.',
+    };
+    const postableFinding: Finding = {
+      ...baseFinding,
+      severity: 'P2',
+      confidence: 1,
+      anchor: { ...baseFinding.anchor, lineStart: 23, lineEnd: 23 },
+      summary: 'The retry loop never backs off after a rate limit.',
+    };
+
+    const result = synthesizePostableReview({
+      archetypeAssignedFindings: [
+        assignedFinding('finding-1', suppressedFinding, 0.7),
+        assignedFinding('finding-2', postableFinding, 0.69),
+      ],
+      agentOutputs: [
+        {
+          agentKey: 'logic',
+          payload: {
+            summary: 'Two issues found.',
+            crossRepoSearch: skippedCrossRepoSearch,
+            findings: [],
+          },
+        },
+      ],
+      changedLineCount: 80,
+      rawFindingCount: 2,
+    });
+
+    expect(result.findings).toEqual([
+      { id: 'finding-2', archetypeId: 'archetype-finding-2', finding: postableFinding },
+    ]);
+    expect(result.summary).toContain('Confidence score: 1/5');
+    expect(result.summary).toContain('Synthesized 2 raw findings into 1 posted finding.');
+    expect(result.summary).toContain('Two issues found.');
+    expect(result.summary).toContain(postableFinding.summary);
+    expect(result.summary).not.toContain(suppressedFinding.summary);
+  });
 });
+
+function assignedFinding(id: string, finding: Finding, archetypeSuppressionWeight: number) {
+  return {
+    id,
+    archetypeId: `archetype-${id}`,
+    archetypeSuppressionWeight,
+    finding,
+  };
+}

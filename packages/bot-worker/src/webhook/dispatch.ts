@@ -1,6 +1,6 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ReviewCanceller } from '../worker/cancellation.js';
-import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
+import type { CommentEvent, ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { EnqueueInput, ReviewSink } from './sink.js';
 import { evaluateTrigger } from './trigger-evaluator.js';
@@ -34,8 +34,32 @@ export interface ForkDeclineCommenter {
   postForkDeclined(input: { repo: RepoRef; pullNumber: number; body: string }): Promise<void>;
 }
 
+export interface PrCloseSignalCapturer {
+  capturePrCloseSignals(input: {
+    repo: RepoRef;
+    pullNumber: number;
+    pullRequestId: string;
+    state: PullRequestFacts['state'];
+  }): Promise<{ recorded: number } | undefined>;
+}
+
+export interface CommentReplyCapturer {
+  captureCommentReply(input: {
+    repo: RepoRef;
+    pullNumber: number;
+    pullRequestId: string;
+    comment: {
+      id: number;
+      body: string;
+      inReplyToId?: number;
+    };
+  }): Promise<{ recorded: number } | undefined>;
+}
+
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
+  closeSignalCapturer?: PrCloseSignalCapturer;
+  replyCapturer?: CommentReplyCapturer;
   reviewCanceller?: ReviewCanceller;
 }
 
@@ -92,7 +116,22 @@ export async function dispatchEvent(
 
   const pullRequestId = await upsertPr(sink, repoId, event, pr);
 
+  if (event.kind === 'comment') {
+    await captureCommentReply(event, pullRequestId, logger, options.replyCapturer);
+  }
+
   if (decision.clearReviewActive) {
+    const captureResult = await options.closeSignalCapturer?.capturePrCloseSignals({
+      repo,
+      pullNumber: pr.number,
+      pullRequestId,
+      state: pr.state,
+    });
+    if (captureResult !== undefined) {
+      logger.info(
+        `captured ${captureResult.recorded} close-time signal(s) on closed PR ${fullName(repo)}#${pr.number}`,
+      );
+    }
     await sink.clearOnClose(pullRequestId);
     logger.info(`cleared reviewActive on closed PR ${fullName(repo)}#${pr.number}`);
     return { action: 'cleared', pullRequestId };
@@ -128,6 +167,37 @@ export async function dispatchEvent(
   }
 
   return { action: 'enqueued', reviewJobId: enqueueResult.reviewJobId, trigger };
+}
+
+async function captureCommentReply(
+  event: CommentEvent,
+  pullRequestId: string,
+  logger: DispatchLogger,
+  replyCapturer: CommentReplyCapturer | undefined,
+): Promise<void> {
+  if (
+    replyCapturer === undefined ||
+    event.commentKind !== 'pull_request_review_comment' ||
+    event.githubCommentId === undefined
+  ) {
+    return;
+  }
+
+  const comment =
+    event.inReplyToId === undefined
+      ? { id: event.githubCommentId, body: event.body }
+      : { id: event.githubCommentId, body: event.body, inReplyToId: event.inReplyToId };
+  const captureResult = await replyCapturer.captureCommentReply({
+    repo: event.repo,
+    pullNumber: event.pr.number,
+    pullRequestId,
+    comment,
+  });
+  if (captureResult !== undefined && captureResult.recorded > 0) {
+    logger.info(
+      `captured ${captureResult.recorded} reply reaction(s) on ${fullName(event.repo)}#${event.pr.number}`,
+    );
+  }
 }
 
 async function enqueueReviewForTrigger(

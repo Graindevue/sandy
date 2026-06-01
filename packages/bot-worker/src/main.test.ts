@@ -90,6 +90,22 @@ describe('loadConfig GitHub App credentials', () => {
     );
   });
 
+  it('defaults the Finding embedder to the local Ollama host without an OpenAI key', () => {
+    const config = loadConfig(baseEnv);
+
+    expect(config.ollamaHost).toBe('http://127.0.0.1:11434');
+    expect(config.agentEnv).toEqual({});
+  });
+
+  it('reads OLLAMA_HOST for Finding embeddings', () => {
+    const config = loadConfig({
+      ...baseEnv,
+      OLLAMA_HOST: 'http://ollama.internal:11434',
+    });
+
+    expect(config.ollamaHost).toBe('http://ollama.internal:11434');
+  });
+
   it('parses review execution options', () => {
     const config = loadConfig({
       ...baseEnv,
@@ -97,12 +113,16 @@ describe('loadConfig GitHub App credentials', () => {
       SANDY_REVIEW_MAX_CHANGED_LINES: '123',
       SANDY_REVIEW_MAX_CONCURRENT_JOBS: '2',
       ANTHROPIC_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'sk-openai',
     });
 
     expect(config.agentImage).toBe('custom-agent');
     expect(config.maxChangedLines).toBe(123);
     expect(config.maxConcurrentJobs).toBe(2);
-    expect(config.agentEnv).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+    expect(config.agentEnv).toEqual({
+      ANTHROPIC_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'sk-openai',
+    });
   });
 });
 
@@ -159,7 +179,7 @@ describe('resolveConfiguredAgents', () => {
         ]),
       },
       resolveForRepo: () => ({
-        product: product([]),
+        product: product({ mode: 'default' }),
         agents: [logicAgent],
       }),
     };
@@ -171,6 +191,32 @@ describe('resolveConfiguredAgents', () => {
     ).toEqual(['logic', 'style']);
   });
 
+  it('applies Product runtime overrides to default-selection candidates without mutating loaded Agents', () => {
+    const logicAgent = agent('logic');
+    const loader = {
+      config: {
+        agents: new Map([[logicAgent.key, logicAgent]]),
+      },
+      resolveForRepo: () => ({
+        product: product({
+          mode: 'default',
+          overrides: { logic: { vendor: 'codex', model: 'gpt-5.6' } },
+        }),
+        agents: [logicAgent],
+      }),
+    };
+
+    const [resolved] = resolveConfiguredAgents(loader, {
+      owner: 'acme',
+      name: 'widget',
+      defaultBranch: 'main',
+    });
+
+    expect(resolved).toMatchObject({ key: 'logic', vendor: 'codex', model: 'gpt-5.6' });
+    expect(resolved).not.toBe(logicAgent);
+    expect(logicAgent).toMatchObject({ vendor: 'claude', model: 'opus' });
+  });
+
   it('treats Product-explicit Agents as enabled selection candidates', () => {
     const styleAgent = { ...agent('style'), defaultEnabled: false as const };
     const loader = {
@@ -178,7 +224,7 @@ describe('resolveConfiguredAgents', () => {
         agents: new Map([[styleAgent.key, styleAgent]]),
       },
       resolveForRepo: () => ({
-        product: product(['style']),
+        product: product({ mode: 'explicit', agents: ['style'] }),
         agents: [styleAgent],
       }),
     };
@@ -191,6 +237,45 @@ describe('resolveConfiguredAgents', () => {
 
     expect(resolved?.key).toBe('style');
     expect(resolved?.defaultEnabled).toBe(true);
+  });
+
+  it('applies Product runtime overrides to Product-explicit candidates', () => {
+    const logicAgent = agent('logic');
+    const securityAgent = agent('security');
+    const loader = {
+      config: {
+        agents: new Map([
+          [logicAgent.key, logicAgent],
+          [securityAgent.key, securityAgent],
+        ]),
+      },
+      resolveForRepo: () => ({
+        product: product({
+          mode: 'explicit',
+          agents: ['logic'],
+          overrides: {
+            logic: { vendor: 'codex', model: 'gpt-5.6' },
+            security: { vendor: 'claude', model: 'sonnet' },
+          },
+        }),
+        agents: [logicAgent],
+      }),
+    };
+
+    const resolved = resolveConfiguredAgents(loader, {
+      owner: 'acme',
+      name: 'widget',
+      defaultBranch: 'main',
+    });
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        key: 'logic',
+        vendor: 'codex',
+        model: 'gpt-5.6',
+        defaultEnabled: true,
+      }),
+    ]);
   });
 });
 
@@ -207,6 +292,8 @@ describe('resolveReviewBotConfig', () => {
       name: 'Acme',
       repos: [repo],
       agents: [],
+      agentSelectionMode: 'default' as const,
+      agentOverrides: {},
     };
     const calls: unknown[] = [];
 
@@ -306,7 +393,11 @@ function agent(key: string): AgentDefinition {
   };
 }
 
-function product(agents: string[]) {
+function product(options: {
+  mode: 'default' | 'explicit';
+  agents?: string[];
+  overrides?: Record<string, { vendor: 'claude' | 'codex' | 'cursor' | 'copilot'; model: string }>;
+}) {
   return {
     slug: 'acme',
     name: 'Acme',
@@ -318,6 +409,8 @@ function product(agents: string[]) {
         defaultBranch: 'main',
       },
     ],
-    agents,
+    agents: options.agents ?? [],
+    agentSelectionMode: options.mode,
+    agentOverrides: options.overrides ?? {},
   };
 }
