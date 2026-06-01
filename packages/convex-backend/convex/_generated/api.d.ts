@@ -21,6 +21,7 @@ import type * as pullRequests from "../pullRequests.js";
 import type * as reactionEvidence from "../reactionEvidence.js";
 import type * as reactions from "../reactions.js";
 import type * as reviewJobReaper from "../reviewJobReaper.js";
+import type * as reviewJobWrites from "../reviewJobWrites.js";
 import type * as reviewJobs from "../reviewJobs.js";
 import type * as suggestedRuleInference from "../suggestedRuleInference.js";
 import type * as suggestedRules from "../suggestedRules.js";
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   reactionEvidence: typeof reactionEvidence;
   reactions: typeof reactions;
   reviewJobReaper: typeof reviewJobReaper;
+  reviewJobWrites: typeof reviewJobWrites;
   reviewJobs: typeof reviewJobs;
   suggestedRuleInference: typeof suggestedRuleInference;
   suggestedRules: typeof suggestedRules;

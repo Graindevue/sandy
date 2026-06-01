@@ -65,6 +65,21 @@ export interface EnqueueSupersedingResult {
   enqueued: boolean;
 }
 
+export interface RecordPositivePromotionInput {
+  suggestedRuleId: string;
+  repoId: string;
+  pullRequest: UpsertPullRequestInputWithoutRepo;
+  agentKeys: string[];
+}
+
+export interface RecordPositivePromotionResult {
+  promoted: boolean;
+  pullRequestId: string;
+  reviewJobId: string;
+}
+
+export type UpsertPullRequestInputWithoutRepo = Omit<UpsertPullRequestInput, 'repoId'>;
+
 /**
  * Production {@link ReviewSink} backed by `ConvexHttpClient` and the generated
  * `api`. The Convex document ids round-trip through Sandy as opaque strings;
@@ -141,6 +156,17 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
       agentKeys: input.agentKeys,
       supersededAt: Date.now(),
     })) as EnqueueSupersedingResult;
+  }
+
+  async recordPositivePromotion(
+    input: RecordPositivePromotionInput,
+  ): Promise<RecordPositivePromotionResult> {
+    return (await this.#client.mutation(api.suggestedRules.recordPositivePromotion, {
+      suggestedRuleId: input.suggestedRuleId as never,
+      repoId: input.repoId as never,
+      pullRequest: input.pullRequest,
+      agentKeys: input.agentKeys,
+    })) as RecordPositivePromotionResult;
   }
 
   async listReactionTargetsForPr(pullRequestId: string): Promise<ReactionTarget[]> {

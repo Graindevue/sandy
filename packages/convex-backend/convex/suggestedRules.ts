@@ -1,9 +1,16 @@
 import { v } from 'convex/values';
 import { api, internal } from './_generated/api.js';
 import type { Doc, Id } from './_generated/dataModel.js';
-import { internalAction, internalQuery, mutation, query } from './_generated/server.js';
+import {
+  internalAction,
+  internalQuery,
+  type MutationCtx,
+  mutation,
+  query,
+} from './_generated/server.js';
 import { clampLimit } from './limits.js';
 import { type RecentArchetypeReaction, recentArchetypeReactions } from './reactionEvidence.js';
+import { insertPendingReviewJob } from './reviewJobWrites.js';
 import {
   draftSuggestedRuleDescription,
   evidenceMeetsSuggestedRuleThreshold,
@@ -14,7 +21,7 @@ import {
   reactionForInference,
   scoreReactionEvidence,
 } from './suggestedRuleInference.js';
-import { suggestedRuleStatus } from './validators.js';
+import { pullRequestState, suggestedRuleStatus } from './validators.js';
 
 export { draftSuggestedRuleDescription, scoreReactionEvidence } from './suggestedRuleInference.js';
 
@@ -37,6 +44,11 @@ type CandidateArchetype = {
 type PositivePromotionFinding = Pick<
   Doc<'findings'>,
   '_id' | 'summary' | 'evidence' | 'category' | 'anchor'
+>;
+
+type PositivePromotionPullRequest = Pick<
+  Doc<'pullRequests'>,
+  'number' | 'state' | 'draft' | 'headSha' | 'baseRef' | 'title' | 'author' | 'url'
 >;
 
 /** SuggestedRules waiting for an operator decision. */
@@ -222,6 +234,52 @@ export const markPromoted = mutation({
   },
 });
 
+/** Record the PR Sandy opened for a positive SuggestedRule and opt it into Review. */
+export const recordPositivePromotion = mutation({
+  args: {
+    suggestedRuleId: v.id('suggestedRules'),
+    repoId: v.id('repos'),
+    pullRequest: v.object({
+      number: v.number(),
+      state: pullRequestState,
+      draft: v.boolean(),
+      headSha: v.string(),
+      baseRef: v.string(),
+      title: v.string(),
+      author: v.string(),
+      url: v.string(),
+    }),
+    agentKeys: v.array(v.string()),
+  },
+  returns: v.object({
+    promoted: v.boolean(),
+    pullRequestId: v.id('pullRequests'),
+    reviewJobId: v.id('reviewJobs'),
+  }),
+  handler: async (ctx, { suggestedRuleId, repoId, pullRequest, agentKeys }) => {
+    const suggestedRule = await ctx.db.get(suggestedRuleId);
+    if (suggestedRule === null) {
+      throw new Error(`SuggestedRule ${suggestedRuleId} does not exist`);
+    }
+
+    const pullRequestId = await upsertReviewActivePullRequest(ctx, repoId, pullRequest);
+    const reviewJobId = await insertPendingReviewJob(ctx, {
+      pullRequestId,
+      repoId,
+      headSha: pullRequest.headSha,
+      trigger: 'opened',
+      agentKeys,
+    });
+
+    if (suggestedRule.status !== 'promoteToPositive') {
+      return { promoted: false, pullRequestId, reviewJobId };
+    }
+
+    await ctx.db.patch(suggestedRuleId, { status: 'promoted' });
+    return { promoted: true, pullRequestId, reviewJobId };
+  },
+});
+
 /** Daily cron target: infer draft SuggestedRules from repeated negative reactions. */
 export const inferSuggestedRulesFromReactions = internalAction({
   args: {
@@ -361,6 +419,23 @@ function mostAffectedRepo(
     }
   }
   return winnerCount === 0 ? null : winner;
+}
+
+async function upsertReviewActivePullRequest(
+  ctx: MutationCtx,
+  repoId: Id<'repos'>,
+  pullRequest: PositivePromotionPullRequest,
+): Promise<Id<'pullRequests'>> {
+  const existing = await ctx.db
+    .query('pullRequests')
+    .withIndex('by_repo_and_number', (q) => q.eq('repoId', repoId).eq('number', pullRequest.number))
+    .unique();
+  const fields = { repoId, ...pullRequest, reviewActive: true };
+  if (existing !== null) {
+    await ctx.db.patch(existing._id, fields);
+    return existing._id;
+  }
+  return await ctx.db.insert('pullRequests', fields);
 }
 
 async function promotionExemplars(

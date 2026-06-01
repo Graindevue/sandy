@@ -1,22 +1,14 @@
-import type { ReviewJobStatus, ReviewTrigger, SiblingShas } from '@sandy/shared-types';
+import type { ReviewJobStatus } from '@sandy/shared-types';
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel.js';
-import { type MutationCtx, mutation, query } from './_generated/server.js';
+import { mutation, query } from './_generated/server.js';
+import { insertPendingReviewJob } from './reviewJobWrites.js';
 import { confidence, reviewJobStatus, reviewTrigger, siblingShas } from './validators.js';
 
 const ACTIVE_REVIEW_JOB_STATUSES = [
   'pending',
   'running',
 ] as const satisfies readonly ReviewJobStatus[];
-
-interface PendingReviewJobInput {
-  pullRequestId: Id<'pullRequests'>;
-  repoId: Id<'repos'>;
-  headSha: string;
-  trigger: ReviewTrigger;
-  agentKeys: string[];
-  siblingShas?: SiblingShas;
-}
 
 /** Enqueue a new `pending` ReviewJob and return its id. */
 export const enqueue = mutation({
@@ -84,23 +76,6 @@ export const enqueueSuperseding = mutation({
     return { reviewJobId, supersededJobIds, enqueued: true };
   },
 });
-
-function insertPendingReviewJob(
-  ctx: MutationCtx,
-  input: PendingReviewJobInput,
-): Promise<Id<'reviewJobs'>> {
-  return ctx.db.insert('reviewJobs', {
-    pullRequestId: input.pullRequestId,
-    repoId: input.repoId,
-    headSha: input.headSha,
-    trigger: input.trigger,
-    agentKeys: input.agentKeys,
-    confidenceScore: 0,
-    agentRuns: [],
-    siblingShas: input.siblingShas ?? {},
-    status: 'pending',
-  });
-}
 
 /** Record the sibling default-branch SHAs pinned for this ReviewJob. */
 export const setSiblingShas = mutation({

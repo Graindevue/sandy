@@ -104,38 +104,24 @@ describe('PromotionWorker', () => {
         ruleLine: '- Keep tenant cache keys stable when cached data crosses account boundaries.',
       },
     ]);
-    expect(sink.upserts).toEqual([
+    expect(sink.records).toEqual([
       {
+        suggestedRuleId: 'suggestedRules:2',
         repoId: 'repos:1',
-        number: 45,
-        state: 'open',
-        draft: false,
-        headSha: 'promotion-sha',
-        baseRef: 'main',
-        title: 'Add product rule from SuggestedRule suggestedRules:2',
-        author: 'sandy[bot]',
-        url: 'https://github.com/acme/api/pull/45',
-      },
-    ]);
-    expect(sink.reviewActive).toEqual([{ pullRequestId: 'pullRequests:1', active: true }]);
-    expect(sink.enqueued).toEqual([
-      {
-        pullRequestId: 'pullRequests:1',
-        repoId: 'repos:1',
-        headSha: 'promotion-sha',
-        trigger: 'opened',
+        pullRequest: {
+          number: 45,
+          state: 'open',
+          draft: false,
+          headSha: 'promotion-sha',
+          baseRef: 'main',
+          title: 'Add product rule from SuggestedRule suggestedRules:2',
+          author: 'sandy[bot]',
+          url: 'https://github.com/acme/api/pull/45',
+        },
         agentKeys: ['logic', 'security'],
       },
     ]);
-    expect(client.mutations).toEqual([
-      {
-        mutation: api.suggestedRules.markPromoted,
-        args: {
-          suggestedRuleId: 'suggestedRules:2',
-          expectedStatus: 'promoteToPositive',
-        },
-      },
-    ]);
+    expect(client.mutations).toEqual([]);
   });
 });
 
@@ -224,21 +210,14 @@ class FakeProductRuleGitHub {
 }
 
 class FakePromotionReviewSink {
-  upserts: Array<Record<string, unknown>> = [];
-  reviewActive: Array<{ pullRequestId: string; active: boolean }> = [];
-  enqueued: Array<Record<string, unknown>> = [];
+  records: Array<Record<string, unknown>> = [];
 
-  async upsertPullRequest(input: Record<string, unknown>): Promise<string> {
-    this.upserts.push(input);
-    return 'pullRequests:1';
-  }
-
-  async setReviewActive(pullRequestId: string, active: boolean): Promise<void> {
-    this.reviewActive.push({ pullRequestId, active });
-  }
-
-  async enqueueReviewJob(input: Record<string, unknown>): Promise<string> {
-    this.enqueued.push(input);
-    return 'reviewJobs:1';
+  async recordPositivePromotion(input: Record<string, unknown>) {
+    this.records.push(input);
+    return {
+      promoted: true,
+      pullRequestId: 'pullRequests:1',
+      reviewJobId: 'reviewJobs:1',
+    };
   }
 }

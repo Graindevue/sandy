@@ -8,6 +8,7 @@ import {
   inferSuggestedRulesFromReactions,
   markPromoted,
   promoteSuppression,
+  recordPositivePromotion,
   scoreReactionEvidence,
   subscribePending,
   subscribePositivePromotions,
@@ -207,6 +208,57 @@ describe('SuggestedRule inference from reactions', () => {
     ).resolves.toBe(true);
 
     expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'promoted' }));
+  });
+
+  it('records a positive promotion PR, opts it into Review, and enqueues one ReviewJob', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId, repoId } = await seedArchetypeWithFindings(ctx);
+    const suggestedRuleId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'promoteToPositive'),
+    );
+
+    await expect(
+      invoke(recordPositivePromotion, ctx, {
+        suggestedRuleId,
+        repoId,
+        pullRequest: {
+          number: 45,
+          state: 'open',
+          draft: false,
+          headSha: 'promotion-sha',
+          baseRef: 'main',
+          title: 'Add product rule from SuggestedRule suggestedRules:2',
+          author: 'sandy[bot]',
+          url: 'https://github.com/acme/widget/pull/45',
+        },
+        agentKeys: ['logic', 'security'],
+      }),
+    ).resolves.toEqual({
+      promoted: true,
+      pullRequestId: 'pullRequests:2',
+      reviewJobId: 'reviewJobs:1',
+    });
+
+    expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'promoted' }));
+    expect(ctx.db.getDoc('pullRequests:2')).toEqual(
+      expect.objectContaining({
+        repoId,
+        number: 45,
+        reviewActive: true,
+        headSha: 'promotion-sha',
+      }),
+    );
+    expect(ctx.db.getDoc('reviewJobs:1')).toEqual(
+      expect.objectContaining({
+        pullRequestId: 'pullRequests:2',
+        repoId,
+        headSha: 'promotion-sha',
+        trigger: 'opened',
+        agentKeys: ['logic', 'security'],
+        status: 'pending',
+      }),
+    );
   });
 
   it('does not promote a SuggestedRule whose operator decision changed', async () => {
@@ -558,6 +610,13 @@ class FakeQuery {
 
   async take(limit: number): Promise<Array<Record<string, unknown>>> {
     return this.rows.slice(0, limit);
+  }
+
+  async unique(): Promise<Record<string, unknown> | null> {
+    if (this.rows.length > 1) {
+      throw new Error('query returned more than one row');
+    }
+    return this.rows[0] ?? null;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>> {
