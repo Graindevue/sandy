@@ -7,6 +7,7 @@ import {
   type ReactionCaptureGitHub,
   type ReactionCaptureStore,
   type ReactionTarget,
+  type RecordedReactionInput,
 } from './reaction-capture.js';
 
 describe('capturePrCloseReactions', () => {
@@ -111,7 +112,7 @@ describe('capturePrCloseReactions', () => {
 });
 
 class FakeReactionStore implements ReactionCaptureStore {
-  readonly recorded: Array<{ findingId: string; kind: '👍' | '👎' }> = [];
+  readonly recorded: RecordedReactionInput[] = [];
 
   constructor(private readonly targets: ReactionTarget[]) {}
 
@@ -119,7 +120,7 @@ class FakeReactionStore implements ReactionCaptureStore {
     return this.targets;
   }
 
-  async recordReaction(input: { findingId: string; kind: '👍' | '👎' }): Promise<void> {
+  async recordReaction(input: RecordedReactionInput): Promise<void> {
     this.recorded.push(input);
   }
 }

@@ -10,7 +10,7 @@ export type ReactionId = string;
 /** Stable identifier for a SuggestedRule (a Convex document id at runtime). */
 export type SuggestedRuleId = string;
 
-export const REACTION_KINDS = ['👍', '👎', 'mergedFixed', 'mergedIgnored'] as const;
+export const REACTION_KINDS = ['👍', '👎', 'reply', 'mergedFixed', 'mergedIgnored'] as const;
 
 /** Feedback signal attached to a posted Finding. */
 export type ReactionKind = (typeof REACTION_KINDS)[number];

@@ -212,6 +212,75 @@ describe('dispatchEvent', () => {
     expect(sink.clearCalls).toEqual(['pr:repo:tony-co/sandy#7']);
   });
 
+  it('captures reply feedback for a review-comment reply without enqueuing a review', async () => {
+    const sink = new FakeSink(false);
+    const replies: Array<{
+      repo: RepoRef;
+      pullNumber: number;
+      pullRequestId: string;
+      comment: { id: number; body: string; inReplyToId?: number };
+    }> = [];
+
+    const outcome = await dispatchEvent(
+      {
+        ...comment('This finding is not useful.'),
+        commentKind: 'pull_request_review_comment',
+        githubCommentId: 303,
+        inReplyToId: 101,
+      },
+      sink,
+      silentLogger,
+      {
+        replyCapturer: {
+          async captureCommentReply(input) {
+            replies.push(input);
+            return { recorded: 1 };
+          },
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
+    expect(replies).toEqual([
+      {
+        repo: BASE_REPO,
+        pullNumber: 7,
+        pullRequestId: 'pr:repo:tony-co/sandy#7',
+        comment: {
+          id: 303,
+          body: 'This finding is not useful.',
+          inReplyToId: 101,
+        },
+      },
+    ]);
+    expect(sink.enqueued).toHaveLength(0);
+  });
+
+  it('does not send PR Conversation comments to the reply capturer', async () => {
+    const sink = new FakeSink(false);
+    const replies: unknown[] = [];
+
+    await dispatchEvent(
+      {
+        ...comment('Top-level PR comment'),
+        commentKind: 'issue_comment',
+        githubCommentId: 303,
+      },
+      sink,
+      silentLogger,
+      {
+        replyCapturer: {
+          async captureCommentReply(input) {
+            replies.push(input);
+            return { recorded: 1 };
+          },
+        },
+      },
+    );
+
+    expect(replies).toEqual([]);
+  });
+
   // AC: a fork PR is declined with a documented-limitation message, not reviewed.
   it('declines a fork PR on mention without upserting or enqueuing', async () => {
     const warn = vi.fn();

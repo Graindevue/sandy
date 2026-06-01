@@ -2,9 +2,9 @@ import { api } from '@sandy/convex-backend/api';
 import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ConvexHttpClient } from 'convex/browser';
 import type {
-  CapturedReactionKind,
   ReactionCaptureStore,
   ReactionTarget,
+  RecordedReactionInput,
 } from '../learning/reaction-capture.js';
 import type { RepoRef } from './events.js';
 
@@ -149,10 +149,13 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore {
     );
   }
 
-  async recordReaction(input: { findingId: string; kind: CapturedReactionKind }): Promise<void> {
+  async recordReaction(input: RecordedReactionInput): Promise<void> {
+    const args =
+      input.replyText === undefined
+        ? { findingId: input.findingId as never, kind: input.kind }
+        : { findingId: input.findingId as never, kind: input.kind, replyText: input.replyText };
     await this.#client.mutation(api.reactions.recordReaction, {
-      findingId: input.findingId as never,
-      kind: input.kind,
+      ...args,
     });
   }
 }
