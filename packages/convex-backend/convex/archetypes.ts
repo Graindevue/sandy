@@ -19,8 +19,6 @@ const MAX_EXAMPLE_FINDING_IDS = 5;
 const DEFAULT_ARCHETYPE_QUERY_LIMIT = 50;
 
 type AssignmentContext = {
-  productId: Id<'products'>;
-  agentKey: string;
   scopeKey: string;
   currentArchetypeId?: Id<'archetypes'>;
 };
@@ -92,8 +90,6 @@ export const assignmentContext = internalQuery({
   args: { findingId: v.id('findings') },
   returns: v.union(
     v.object({
-      productId: v.id('products'),
-      agentKey: v.string(),
       scopeKey: v.string(),
       currentArchetypeId: v.optional(v.id('archetypes')),
     }),
@@ -111,13 +107,11 @@ export const assignmentContext = internalQuery({
     const scopeKey = archetypeScopeKey(productId, finding.agentKey);
     if (finding.archetypeId !== undefined) {
       return {
-        productId,
-        agentKey: finding.agentKey,
         scopeKey,
         currentArchetypeId: finding.archetypeId,
       };
     }
-    return { productId, agentKey: finding.agentKey, scopeKey };
+    return { scopeKey };
   },
 });
 
@@ -198,7 +192,6 @@ async function assignEmbeddingToArchetype(
     return await ctx.runMutation(internal.archetypes.persistAssignment, {
       findingId: args.findingId,
       embedding: args.embedding,
-      matchedArchetypeId: context.currentArchetypeId,
     });
   }
 

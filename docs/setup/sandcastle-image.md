@@ -58,7 +58,7 @@ If a Review later fails with a Codex auth error after a long idle period, run an
 `codex` command on the host to refresh the token.
 
 > **Prefer Agent API-key auth, or want Claude instead?** `OPENAI_API_KEY` is
-> already required in `.config/.env` for Finding embeddings; Codex can also use
+> already required in `.config/.env` for worker-side Finding embeddings; Codex can also use
 > it for API-key auth (no `codex login` needed). Or switch the `logic` Agent to
 > `vendor: claude` and set `ANTHROPIC_API_KEY` (see
 > [`github-app.md`](./github-app.md) and [`bot-yaml.md`](./bot-yaml.md)).

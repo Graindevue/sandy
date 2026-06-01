@@ -50,12 +50,12 @@ suggestedRules: {
 - `reactions.ts` — mutation: `recordReaction`; subscription-friendly query: `recentByArchetype`.
 - `suggestedRules.ts` — mutation: `createIfEvidenceThresholdMet`; query: `subscribePending`; mutation: `markPromoted`.
 - `crons.ts` extended:
-  - Finding embeddings are worker-supplied; Convex does not embed server-side.
+  - Finding embeddings are 768-dimensional and worker-supplied; Convex does not embed server-side.
   - `inferSuggestedRulesFromReactions` daily — looks for Archetypes with ≥3 negative reactions and no existing SuggestedRule; drafts one.
   - `rollupMergeStateSignals` daily — checks merged PRs for "merge-with-fix" vs "merge-without-fix" implicit signal per Finding.
 
 **`packages/bot-worker/`** (extended)
-- `src/learning/embed.ts` — `embedFindingSummary(summary)` via the local Finding embedder.
+- `src/learning/embed.ts` — `embedFindingSummary(summary)` via the worker-side Finding embedder.
 - `src/learning/archetype-assigner.ts` — runs after each Agent emits Findings; embeds and calls `assignOrCreateArchetype`.
 - `src/learning/reaction-handler.ts` — webhook handler for `pull_request_review_comment` reactions. Parses the HTML trailer to map back to the Finding; records the reaction.
 - `src/learning/reply-handler.ts` — for replies under bot comments: stores `replyText` on the reaction record. The drafting step (Convex cron) uses this to seed SuggestedRule description.

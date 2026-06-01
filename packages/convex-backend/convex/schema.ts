@@ -114,7 +114,7 @@ export default defineSchema({
     .vectorIndex('by_exemplar_embedding_and_scope_key', {
       vectorField: 'exemplarEmbedding',
       dimensions: FINDING_EMBEDDING_DIMENSIONS,
-      filterFields: ['scopeKey', 'productId', 'agentKey'],
+      filterFields: ['scopeKey'],
     }),
 
   reactions: defineTable({

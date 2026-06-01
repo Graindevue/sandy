@@ -1,6 +1,6 @@
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
-const TEXT_EMBEDDING_3_SMALL_DIMENSIONS = 1536;
+export const FINDING_EMBEDDING_DIMENSIONS = 768;
 
 type FetchLike = typeof fetch;
 
@@ -14,20 +14,20 @@ export interface OpenAIFindingEmbedderOptions {
   apiKey: string;
   fetch?: FetchLike;
   model?: string;
-  expectedDimensions?: number;
+  dimensions?: number;
 }
 
 export class OpenAIFindingEmbedder {
   readonly #apiKey: string;
   readonly #fetch: FetchLike;
   readonly #model: string;
-  readonly #expectedDimensions: number;
+  readonly #dimensions: number;
 
   constructor(options: OpenAIFindingEmbedderOptions) {
     this.#apiKey = options.apiKey;
     this.#fetch = options.fetch ?? fetch;
     this.#model = options.model ?? OPENAI_EMBEDDING_MODEL;
-    this.#expectedDimensions = options.expectedDimensions ?? TEXT_EMBEDDING_3_SMALL_DIMENSIONS;
+    this.#dimensions = options.dimensions ?? FINDING_EMBEDDING_DIMENSIONS;
   }
 
   async embedFindingSummary(summary: string): Promise<number[]> {
@@ -40,6 +40,7 @@ export class OpenAIFindingEmbedder {
       body: JSON.stringify({
         model: this.#model,
         input: summary,
+        dimensions: this.#dimensions,
       }),
     });
 
@@ -54,9 +55,9 @@ export class OpenAIFindingEmbedder {
     if (!isNumberArray(embedding)) {
       throw new Error('OpenAI embedding response did not include a numeric embedding');
     }
-    if (embedding.length !== this.#expectedDimensions) {
+    if (embedding.length !== this.#dimensions) {
       throw new Error(
-        `OpenAI embedding response had ${embedding.length} dimensions; expected ${this.#expectedDimensions}`,
+        `OpenAI embedding response had ${embedding.length} dimensions; expected ${this.#dimensions}`,
       );
     }
 

@@ -68,7 +68,7 @@ const archetypeVectorIndex = {
   indexDescriptor: 'by_exemplar_embedding_and_scope_key',
   vectorField: 'exemplarEmbedding',
   dimensions: FINDING_EMBEDDING_DIMENSIONS,
-  filterFields: ['scopeKey', 'productId', 'agentKey'],
+  filterFields: ['scopeKey'],
 } satisfies VectorIndexExport;
 
 const expectedLearningTableFields = {

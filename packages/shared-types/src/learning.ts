@@ -35,6 +35,7 @@ export type SuggestedRuleStatus = (typeof SUGGESTED_RULE_STATUSES)[number];
 export interface Archetype {
   id: ArchetypeId;
   productId: ProductId;
+  agentKey: string;
   label: string;
   exemplarEmbedding: number[];
   exampleFindingIds: FindingId[];

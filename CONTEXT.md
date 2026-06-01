@@ -51,7 +51,7 @@ Stored in Convex; persists across PRs for learning purposes.
 
 ## Archetype
 
-A cluster of Findings that are semantically similar. Identified via embedding similarity (cosine > 0.85) on Finding summaries using `text-embedding-3-small`. Carries a `suppressionWeight` that the Synthesizer applies at posting time. Mutable state in Convex — not version-controlled.
+A cluster of Findings that are semantically similar within one Product and Agent. Identified via embedding similarity (cosine >= 0.8) on 768-dimensional, worker-supplied Finding summary embeddings. Carries a `suppressionWeight` that the Synthesizer applies at posting time. Mutable state in Convex — not version-controlled.
 
 ## Rule
 

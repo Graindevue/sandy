@@ -104,7 +104,7 @@ GITHUB_WEBHOOK_SECRET=the-openssl-rand-hex-32-value-from-step-1
 # Convex deployment URL — see convex.md ("Where the URL goes")
 CONVEX_URL=https://your-deployment.convex.cloud
 
-# Learning-loop Finding embeddings.
+# Worker-side 768-dimensional Finding embeddings.
 OPENAI_API_KEY=sk-...
 
 # Optional alternate Agent vendor auth. The default Codex setup can still use
@@ -117,7 +117,7 @@ OPENAI_API_KEY=sk-...
 > [`convex.md`](./convex.md) ran before this doc; whichever doc you reach first,
 > create `.config/.env` and the later docs just set their own line above. Set
 > `CONVEX_URL` to the value Convex printed. `OPENAI_API_KEY` is required for
-> Phase 3 Finding embeddings even when the default Codex Agent authenticates
+> the worker-side Phase 3 Finding embedder even when the default Codex Agent authenticates
 > through your host `codex login`; add `ANTHROPIC_API_KEY` only if you switch an
 > Agent to Claude.
 
