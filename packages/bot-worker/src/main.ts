@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { api } from '@sandy/convex-backend/api';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { BotConfigReader } from './config/bot-config-reader.js';
@@ -152,6 +153,7 @@ export async function main(): Promise<void> {
   const repoRoot = process.cwd();
   const configLoader = await ConfigLoader.create(defaultConfigLoaderOptions(repoRoot));
   configLoader.installSignalHandler();
+  await syncConfiguredProducts(httpClient, configLoader);
   const github = new GitHubAppClient({
     appId: config.githubAppId,
     privateKey: await readPrivateKey(repoRoot, config.githubPrivateKeyPath),
@@ -213,6 +215,33 @@ export async function main(): Promise<void> {
     },
   });
   console.info(`Sandy webhook server listening on :${config.port}`);
+}
+
+/**
+ * Reconcile the Products and Repos declared in `.config/bot.yaml` into Convex at
+ * startup so the executor's per-Review context (read from the Convex `repos`
+ * table) includes every sibling Repo. Without this, a Repo added to the config is
+ * registered only when a webhook for it first arrives — and only as its own
+ * single-Repo Product — so cross-repo Reviews would not see it.
+ */
+async function syncConfiguredProducts(
+  client: ConvexHttpClient,
+  configLoader: ConfigLoader,
+): Promise<void> {
+  const { products } = configLoader.config;
+  for (const product of products) {
+    await client.mutation(api.products.syncProduct, {
+      slug: product.slug,
+      name: product.name,
+      repos: product.repos.map((repo) => ({
+        owner: repo.owner,
+        name: repo.name,
+        fullName: repo.fullName,
+        defaultBranch: repo.defaultBranch,
+      })),
+    });
+  }
+  console.info(`Synced ${products.length} Product(s) from bot.yaml to Convex`);
 }
 
 async function cleanupWorkerAppleContainers(): Promise<void> {
