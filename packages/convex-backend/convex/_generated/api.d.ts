@@ -17,6 +17,7 @@ import type * as findings from "../findings.js";
 import type * as openaiEmbeddings from "../openaiEmbeddings.js";
 import type * as products from "../products.js";
 import type * as pullRequests from "../pullRequests.js";
+import type * as reactions from "../reactions.js";
 import type * as reviewJobReaper from "../reviewJobReaper.js";
 import type * as reviewJobs from "../reviewJobs.js";
 import type * as validators from "../validators.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   openaiEmbeddings: typeof openaiEmbeddings;
   products: typeof products;
   pullRequests: typeof pullRequests;
+  reactions: typeof reactions;
   reviewJobReaper: typeof reviewJobReaper;
   reviewJobs: typeof reviewJobs;
   validators: typeof validators;

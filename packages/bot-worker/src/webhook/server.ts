@@ -5,6 +5,7 @@ import {
   type DispatchOptions,
   dispatchEvent,
   type ForkDeclineCommenter,
+  type PrCloseReactionCapturer,
 } from './dispatch.js';
 import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
@@ -36,6 +37,8 @@ export interface WebhookServerOptions {
   pullRequestResolver?: PullRequestResolver;
   /** Optional GitHub side-effect used to surface documented v1 fork declines. */
   forkDeclineCommenter?: ForkDeclineCommenter;
+  /** Optional close-time poller for Sandy comment reactions. */
+  reactionCapturer?: PrCloseReactionCapturer;
   /** Optional local cancellation registry for jobs superseded by push deliveries. */
   reviewCanceller?: ReviewCanceller;
   /** Logger; defaults to `console`. */
@@ -171,12 +174,19 @@ export function createWebhookHandler(
 }
 
 function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undefined {
-  if (options.forkDeclineCommenter === undefined && options.reviewCanceller === undefined) {
+  if (
+    options.forkDeclineCommenter === undefined &&
+    options.reactionCapturer === undefined &&
+    options.reviewCanceller === undefined
+  ) {
     return undefined;
   }
   const dispatch: DispatchOptions = {};
   if (options.forkDeclineCommenter !== undefined) {
     dispatch.forkDeclineCommenter = options.forkDeclineCommenter;
+  }
+  if (options.reactionCapturer !== undefined) {
+    dispatch.reactionCapturer = options.reactionCapturer;
   }
   if (options.reviewCanceller !== undefined) {
     dispatch.reviewCanceller = options.reviewCanceller;

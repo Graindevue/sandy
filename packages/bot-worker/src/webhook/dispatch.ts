@@ -34,8 +34,17 @@ export interface ForkDeclineCommenter {
   postForkDeclined(input: { repo: RepoRef; pullNumber: number; body: string }): Promise<void>;
 }
 
+export interface PrCloseReactionCapturer {
+  capturePrCloseReactions(input: {
+    repo: RepoRef;
+    pullNumber: number;
+    pullRequestId: string;
+  }): Promise<{ recorded: number } | undefined>;
+}
+
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
+  reactionCapturer?: PrCloseReactionCapturer;
   reviewCanceller?: ReviewCanceller;
 }
 
@@ -93,6 +102,16 @@ export async function dispatchEvent(
   const pullRequestId = await upsertPr(sink, repoId, event, pr);
 
   if (decision.clearReviewActive) {
+    const captureResult = await options.reactionCapturer?.capturePrCloseReactions({
+      repo,
+      pullNumber: pr.number,
+      pullRequestId,
+    });
+    if (captureResult !== undefined) {
+      logger.info(
+        `captured ${captureResult.recorded} reaction(s) on closed PR ${fullName(repo)}#${pr.number}`,
+      );
+    }
     await sink.clearOnClose(pullRequestId);
     logger.info(`cleared reviewActive on closed PR ${fullName(repo)}#${pr.number}`);
     return { action: 'cleared', pullRequestId };

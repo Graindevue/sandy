@@ -1,5 +1,11 @@
 import { createSign } from 'node:crypto';
 import { isIgnoredPath } from '../config/ignore.js';
+import type {
+  CommentReaction,
+  ReactionCaptureComment,
+  ReactionCaptureCommentKind,
+  ReactionCaptureGitHub,
+} from '../learning/reaction-capture.js';
 import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
 import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
@@ -30,7 +36,7 @@ const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export class GitHubAppClient
-  implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver
+  implements GitHubReviewPoster, ReviewDiffInspector, PullRequestResolver, ReactionCaptureGitHub
 {
   readonly #appId: string;
   readonly #privateKey: string;
@@ -58,30 +64,24 @@ export class GitHubAppClient
     target: PullRequestTarget,
     ignorePatterns: readonly string[] = [],
   ): Promise<number> {
+    const files = await this.#listPaginated<unknown>(
+      target.owner,
+      target.repo,
+      `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files`,
+    );
     let total = 0;
-    let page = 1;
-    while (true) {
-      const files = await this.#installationRequest<unknown[]>(
-        target.owner,
-        target.repo,
-        `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files?per_page=100&page=${page}`,
-      );
-      for (const file of files) {
-        if (typeof file === 'object' && file !== null) {
-          const filename = (file as { filename?: unknown }).filename;
-          if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
-            continue;
-          }
-          const additions = Number((file as { additions?: unknown }).additions ?? 0);
-          const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
-          total += additions + deletions;
+    for (const file of files) {
+      if (typeof file === 'object' && file !== null) {
+        const filename = (file as { filename?: unknown }).filename;
+        if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
+          continue;
         }
+        const additions = Number((file as { additions?: unknown }).additions ?? 0);
+        const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
+        total += additions + deletions;
       }
-      if (files.length < 100) {
-        return total;
-      }
-      page += 1;
     }
+    return total;
   }
 
   async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
@@ -143,9 +143,93 @@ export class GitHubAppClient
     return null;
   }
 
+  async listReactionCaptureComments(input: {
+    repo: RepoRef;
+    pullNumber: number;
+  }): Promise<ReactionCaptureComment[]> {
+    const [reviewComments, issueComments] = await Promise.all([
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/comments`,
+        'pull_request_review_comment',
+      ),
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/issues/${input.pullNumber}/comments`,
+        'issue_comment',
+      ),
+    ]);
+    return [...reviewComments, ...issueComments];
+  }
+
+  async listCommentReactions(input: {
+    repo: RepoRef;
+    commentId: number;
+    commentKind?: ReactionCaptureCommentKind;
+  }): Promise<CommentReaction[]> {
+    if (input.commentKind !== undefined) {
+      return await this.#listReactionsByKind(input.repo, input.commentId, input.commentKind);
+    }
+
+    try {
+      return await this.#listReactionsByKind(
+        input.repo,
+        input.commentId,
+        'pull_request_review_comment',
+      );
+    } catch (error) {
+      if (!isGitHubNotFound(error)) {
+        throw error;
+      }
+      return await this.#listReactionsByKind(input.repo, input.commentId, 'issue_comment');
+    }
+  }
+
   async cloneUrlForRepo(repo: RepoForWorktree): Promise<string> {
     const token = await this.#installationToken(repo.owner, repo.name);
     return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repo.owner}/${repo.name}.git`;
+  }
+
+  async #listReactions(repo: RepoRef, path: string): Promise<CommentReaction[]> {
+    const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
+    return raw.map(parseCommentReaction).filter(isDefined);
+  }
+
+  async #listReactionsByKind(
+    repo: RepoRef,
+    commentId: number,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<CommentReaction[]> {
+    return await this.#listReactions(repo, commentReactionsPath(repo, commentId, commentKind));
+  }
+
+  async #listReactionCaptureComments(
+    repo: RepoRef,
+    path: string,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<ReactionCaptureComment[]> {
+    const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
+    return raw
+      .map((comment) => parseReactionCaptureComment(comment, commentKind))
+      .filter(isDefined);
+  }
+
+  async #listPaginated<T>(owner: string, repo: string, path: string): Promise<T[]> {
+    const all: T[] = [];
+    let page = 1;
+    while (true) {
+      const separator = path.includes('?') ? '&' : '?';
+      const pageItems = await this.#installationRequest<T[]>(
+        owner,
+        repo,
+        `${path}${separator}per_page=100&page=${page}`,
+      );
+      all.push(...pageItems);
+      if (pageItems.length < 100) {
+        return all;
+      }
+      page += 1;
+    }
   }
 
   async #installationRequest<T>(
@@ -212,12 +296,27 @@ export class GitHubAppClient
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(
+      throw new GitHubApiError(
         `GitHub API ${options.method ?? 'GET'} ${path} failed (${response.status}): ${text}`,
+        response.status,
       );
     }
     return (text.length === 0 ? null : JSON.parse(text)) as T;
   }
+}
+
+class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'GitHubApiError';
+  }
+}
+
+function isGitHubNotFound(error: unknown): boolean {
+  return error instanceof GitHubApiError && error.status === 404;
 }
 
 function createGitHubAppJwt(options: {
@@ -302,4 +401,42 @@ function parseRepoRef(raw: unknown): RepoRef | null {
   return typeof object.owner?.login === 'string' && typeof object.name === 'string'
     ? { owner: object.owner.login, name: object.name }
     : null;
+}
+
+function commentReactionsPath(
+  repo: RepoRef,
+  commentId: number,
+  commentKind: ReactionCaptureCommentKind,
+): string {
+  switch (commentKind) {
+    case 'pull_request_review_comment':
+      return `/repos/${repo.owner}/${repo.name}/pulls/comments/${commentId}/reactions`;
+    case 'issue_comment':
+      return `/repos/${repo.owner}/${repo.name}/issues/comments/${commentId}/reactions`;
+  }
+}
+
+function parseReactionCaptureComment(
+  raw: unknown,
+  kind: ReactionCaptureCommentKind,
+): ReactionCaptureComment | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const object = raw as { id?: unknown; body?: unknown };
+  return typeof object.id === 'number' && typeof object.body === 'string'
+    ? { id: object.id, body: object.body, kind }
+    : undefined;
+}
+
+function parseCommentReaction(raw: unknown): CommentReaction | undefined {
+  if (typeof raw !== 'object' || raw === null) {
+    return undefined;
+  }
+  const content = (raw as { content?: unknown }).content;
+  return typeof content === 'string' ? { content } : undefined;
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
