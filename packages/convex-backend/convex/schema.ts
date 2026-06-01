@@ -21,7 +21,7 @@ import {
  * Convex adds `_id` and `_creationTime` to every row; `_creationTime` is the
  * canonical "created at" timestamp, so no table stores one explicitly.
  */
-export const NOMIC_EMBED_TEXT_DIMENSIONS = 768;
+export const FINDING_EMBEDDING_DIMENSIONS = 768;
 
 export default defineSchema({
   products: defineTable({
@@ -101,6 +101,8 @@ export default defineSchema({
 
   archetypes: defineTable({
     productId: v.id('products'),
+    agentKey: v.string(),
+    scopeKey: v.string(),
     label: v.string(),
     exemplarEmbedding: v.array(v.float64()),
     exampleFindingIds: v.array(v.id('findings')),
@@ -108,10 +110,11 @@ export default defineSchema({
     suppressionWeight: v.number(),
   })
     .index('by_product', ['productId'])
-    .vectorIndex('by_exemplar_embedding_and_product', {
+    .index('by_product_and_agent_key', ['productId', 'agentKey'])
+    .vectorIndex('by_exemplar_embedding_and_scope_key', {
       vectorField: 'exemplarEmbedding',
-      dimensions: NOMIC_EMBED_TEXT_DIMENSIONS,
-      filterFields: ['productId'],
+      dimensions: FINDING_EMBEDDING_DIMENSIONS,
+      filterFields: ['scopeKey'],
     }),
 
   reactions: defineTable({

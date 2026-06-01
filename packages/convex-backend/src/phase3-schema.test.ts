@@ -5,7 +5,7 @@ import {
   SUGGESTED_RULE_STATUSES,
   SUGGESTED_RULE_TYPES,
 } from '../../shared-types/src/learning.js';
-import schema, { NOMIC_EMBED_TEXT_DIMENSIONS } from '../convex/schema.js';
+import schema, { FINDING_EMBEDDING_DIMENSIONS } from '../convex/schema.js';
 import {
   arrayType,
   expectFields,
@@ -24,6 +24,9 @@ const exportedSchema = exportSchema(schema);
 describe('Phase 3 Convex schema foundation', () => {
   it('defines learning-loop tables with their query indexes', () => {
     expectIndexes(table('archetypes'), [{ indexDescriptor: 'by_product', fields: ['productId'] }]);
+    expectIndexes(table('archetypes'), [
+      { indexDescriptor: 'by_product_and_agent_key', fields: ['productId', 'agentKey'] },
+    ]);
     expect(table('archetypes').vectorIndexes).toEqual([archetypeVectorIndex]);
     expectIndexes(table('reactions'), [{ indexDescriptor: 'by_finding', fields: ['findingId'] }]);
     expectIndexes(table('suggestedRules'), [
@@ -41,8 +44,8 @@ describe('Phase 3 Convex schema foundation', () => {
     ]);
   });
 
-  it('uses nomic-embed-text embedding dimensions', () => {
-    expect(NOMIC_EMBED_TEXT_DIMENSIONS).toBe(768);
+  it('uses the Finding embedding dimensions', () => {
+    expect(FINDING_EMBEDDING_DIMENSIONS).toBe(768);
   });
 
   it('defines learning-loop table fields and Finding extensions', () => {
@@ -66,15 +69,17 @@ const learningLoopTables = ['archetypes', 'reactions', 'suggestedRules'] as cons
 type LearningLoopTableName = (typeof learningLoopTables)[number];
 
 const archetypeVectorIndex = {
-  indexDescriptor: 'by_exemplar_embedding_and_product',
+  indexDescriptor: 'by_exemplar_embedding_and_scope_key',
   vectorField: 'exemplarEmbedding',
-  dimensions: NOMIC_EMBED_TEXT_DIMENSIONS,
-  filterFields: ['productId'],
+  dimensions: FINDING_EMBEDDING_DIMENSIONS,
+  filterFields: ['scopeKey'],
 } satisfies VectorIndexExport;
 
 const expectedLearningTableFields = {
   archetypes: {
     productId: required(idType('products')),
+    agentKey: required({ type: 'string' }),
+    scopeKey: required({ type: 'string' }),
     label: required({ type: 'string' }),
     exemplarEmbedding: required(arrayType({ type: 'number' })),
     exampleFindingIds: required(arrayType(idType('findings'))),

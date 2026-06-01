@@ -110,7 +110,7 @@ Per-Repo `.bot/` reading enabled:
 ## Open questions
 
 - Should the manifest persistence (`apiSurfaceManifests` table) cap at the last N manifests per Product? Recommend N=20.
-- What's the dedup cosine threshold for Findings? Start at 0.85 (same as Archetype clustering in Phase 3); tune from real data.
+- What's the dedup cosine threshold for Findings? Start at 0.85; tune from real data.
 - Per-Agent timeout for Apple Container execution? Recommend 5 minutes hard cap; force kill + record `agentRuns.status = 'timed_out'`.
 
 ## Sequencing within Phase 2

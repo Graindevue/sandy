@@ -69,7 +69,7 @@ worker's `CONVEX_URL` at whichever deployment you intend to run against.
 ## 3. What gets deployed
 
 The schema tables and the worker's mutations/queries/actions — `enqueue`/
-`claim`/`record`-style functions and learning-loop clustering functions — are
+`claim`/`record`-style functions and learning-loop assignment functions — are
 inventoried in the package's own
 [`README.md`](../../packages/convex-backend/README.md) and
 [`convex/schema.ts`](../../packages/convex-backend/convex/schema.ts). This doc

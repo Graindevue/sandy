@@ -4,6 +4,7 @@ import type { Id } from './_generated/dataModel.js';
 import {
   type ActionCtx,
   action,
+  internalAction,
   internalMutation,
   internalQuery,
   mutation,
@@ -11,14 +12,14 @@ import {
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
 import { clampLimit } from './limits.js';
-import { NOMIC_EMBED_TEXT_DIMENSIONS } from './schema.js';
+import { FINDING_EMBEDDING_DIMENSIONS } from './schema.js';
 
-const ARCHETYPE_SIMILARITY_THRESHOLD = 0.85;
+const ARCHETYPE_SIMILARITY_THRESHOLD = 0.8;
 const MAX_EXAMPLE_FINDING_IDS = 5;
 const DEFAULT_ARCHETYPE_QUERY_LIMIT = 50;
 
 type AssignmentContext = {
-  productId: Id<'products'>;
+  scopeKey: string;
   currentArchetypeId?: Id<'archetypes'>;
 };
 
@@ -71,11 +72,25 @@ export const updateSuppressionWeight = mutation({
   },
 });
 
+export const clusterRecentFindings = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  returns: v.object({
+    attempted: v.number(),
+    clustered: v.number(),
+    failed: v.number(),
+  }),
+  handler: async () => {
+    return { attempted: 0, clustered: 0, failed: 0 };
+  },
+});
+
 export const assignmentContext = internalQuery({
   args: { findingId: v.id('findings') },
   returns: v.union(
     v.object({
-      productId: v.id('products'),
+      scopeKey: v.string(),
       currentArchetypeId: v.optional(v.id('archetypes')),
     }),
     v.null(),
@@ -89,10 +104,14 @@ export const assignmentContext = internalQuery({
     if (productId === null) {
       return null;
     }
+    const scopeKey = archetypeScopeKey(productId, finding.agentKey);
     if (finding.archetypeId !== undefined) {
-      return { productId, currentArchetypeId: finding.archetypeId };
+      return {
+        scopeKey,
+        currentArchetypeId: finding.archetypeId,
+      };
     }
-    return { productId };
+    return { scopeKey };
   },
 });
 
@@ -123,9 +142,11 @@ export const persistAssignment = internalMutation({
       throw new Error(`Finding ${findingId} is not linked to a Product`);
     }
 
+    const scopeKey = archetypeScopeKey(productId, finding.agentKey);
+
     if (matchedArchetypeId !== undefined) {
       const matched = await ctx.db.get(matchedArchetypeId);
-      if (matched !== null && matched.productId === productId) {
+      if (matched !== null && matched.scopeKey === scopeKey) {
         const exampleFindingIds = appendExampleFindingId(matched.exampleFindingIds, findingId);
         await ctx.db.patch(findingId, { embedding, archetypeId: matchedArchetypeId });
         await ctx.db.patch(matchedArchetypeId, {
@@ -139,6 +160,8 @@ export const persistAssignment = internalMutation({
     const suppressionWeight = 0;
     const archetypeId = await ctx.db.insert('archetypes', {
       productId,
+      agentKey: finding.agentKey,
+      scopeKey,
       label: labelFromFindingSummary(finding.summary),
       exemplarEmbedding: embedding,
       exampleFindingIds: [findingId],
@@ -169,14 +192,13 @@ async function assignEmbeddingToArchetype(
     return await ctx.runMutation(internal.archetypes.persistAssignment, {
       findingId: args.findingId,
       embedding: args.embedding,
-      matchedArchetypeId: context.currentArchetypeId,
     });
   }
 
-  const nearest = await ctx.vectorSearch('archetypes', 'by_exemplar_embedding_and_product', {
+  const nearest = await ctx.vectorSearch('archetypes', 'by_exemplar_embedding_and_scope_key', {
     vector: args.embedding,
     limit: 1,
-    filter: (q) => q.eq('productId', context.productId),
+    filter: (q) => q.eq('scopeKey', context.scopeKey),
   });
   const match = nearest[0];
   const matchedArchetypeId =
@@ -226,10 +248,16 @@ function assignmentResultFor(archetype: {
   return { archetypeId: archetype._id, suppressionWeight: archetype.suppressionWeight };
 }
 
+// Convex vector filters support equality/or expressions, so this encodes the
+// exact (productId, agentKey) bucket as one equality-filterable field.
+function archetypeScopeKey(productId: Id<'products'>, agentKey: string): string {
+  return JSON.stringify([productId, agentKey]);
+}
+
 function ensureEmbeddingDimensions(embedding: number[]): void {
-  if (embedding.length !== NOMIC_EMBED_TEXT_DIMENSIONS) {
+  if (embedding.length !== FINDING_EMBEDDING_DIMENSIONS) {
     throw new Error(
-      `Finding embedding had ${embedding.length} dimensions; expected ${NOMIC_EMBED_TEXT_DIMENSIONS}`,
+      `Finding embedding had ${embedding.length} dimensions; expected ${FINDING_EMBEDDING_DIMENSIONS}`,
     );
   }
 }

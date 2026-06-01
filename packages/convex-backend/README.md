@@ -22,7 +22,8 @@ to every row.
 - **findings** — `recordFinding`, `recordSynthesizedReview`, `markPosted`,
   `listForPr`.
 - **learning loop** — `archetypes:assignOrCreateArchetype`, `byProduct`,
-  and `updateSuppressionWeight`.
+  `updateSuppressionWeight`, and a no-op `clusterRecentFindings` compatibility
+  action for old manual triggers.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
   ReviewJobs claimed more than 30 minutes ago as `failed`; the SuggestedRule

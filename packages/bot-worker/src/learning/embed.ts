@@ -1,6 +1,6 @@
 export const DEFAULT_OLLAMA_HOST = 'http://127.0.0.1:11434';
 const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
-const NOMIC_EMBED_TEXT_DIMENSIONS = 768;
+export const FINDING_EMBEDDING_DIMENSIONS = 768;
 
 type FetchLike = typeof fetch;
 
@@ -12,20 +12,20 @@ export interface OllamaFindingEmbedderOptions {
   host?: string;
   fetch?: FetchLike;
   model?: string;
-  expectedDimensions?: number;
+  dimensions?: number;
 }
 
 export class OllamaFindingEmbedder {
   readonly #endpoint: string;
   readonly #fetch: FetchLike;
   readonly #model: string;
-  readonly #expectedDimensions: number;
+  readonly #dimensions: number;
 
   constructor(options: OllamaFindingEmbedderOptions = {}) {
     this.#endpoint = `${normalizeOllamaHost(options.host)}/api/embeddings`;
     this.#fetch = options.fetch ?? fetch;
     this.#model = options.model ?? OLLAMA_EMBEDDING_MODEL;
-    this.#expectedDimensions = options.expectedDimensions ?? NOMIC_EMBED_TEXT_DIMENSIONS;
+    this.#dimensions = options.dimensions ?? FINDING_EMBEDDING_DIMENSIONS;
   }
 
   async embedFindingSummary(summary: string): Promise<number[]> {
@@ -42,9 +42,9 @@ export class OllamaFindingEmbedder {
     if (!isNumberArray(embedding)) {
       throw new Error('Ollama embedding response did not include a numeric embedding');
     }
-    if (embedding.length !== this.#expectedDimensions) {
+    if (embedding.length !== this.#dimensions) {
       throw new Error(
-        `Ollama embedding response had ${embedding.length} dimensions; expected ${this.#expectedDimensions}`,
+        `Ollama embedding response had ${embedding.length} dimensions; expected ${this.#dimensions}`,
       );
     }
 

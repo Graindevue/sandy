@@ -466,6 +466,8 @@ async function seedArchetypeWithFindings(ctx: ReturnType<typeof fakeCtx>) {
   });
   const archetypeId = await ctx.db.insert('archetypes', {
     productId,
+    agentKey: 'logic',
+    scopeKey: JSON.stringify([productId, 'logic']),
     label: 'Duplicate test coverage finding',
     exemplarEmbedding: [0.1],
     exampleFindingIds: [],

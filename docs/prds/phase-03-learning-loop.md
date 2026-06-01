@@ -15,8 +15,9 @@ Activate the continuous-learning pipeline. Findings cluster into Archetypes via 
 ```typescript
 archetypes: {
   productId,
+  agentKey,               // clusters are scoped to one reviewer persona
   label,                  // human-readable, generated from exemplars
-  exemplarEmbedding,      // 768-dim for nomic-embed-text
+  exemplarEmbedding,      // 768-dim worker-supplied nomic-embed-text Finding embedding
   exampleFindingIds,      // up to N=5 references
   count,
   suppressionWeight,      // 0.0 → 1.0; ≥0.7 = dropped by Synthesizer
@@ -45,10 +46,11 @@ suggestedRules: {
 ### Code
 
 **`packages/convex-backend/`** (extended)
-- `archetypes.ts` — mutation: `assignOrCreateArchetype(findingId, embedding)`; query: `byProduct`; mutation: `updateSuppressionWeight`.
+- `archetypes.ts` — mutation: `assignOrCreateArchetype(findingId, embedding)`; query: `byProduct`; mutation: `updateSuppressionWeight`; clusters are scoped by `(productId, agentKey)`.
 - `reactions.ts` — mutation: `recordReaction`; subscription-friendly query: `recentByArchetype`.
 - `suggestedRules.ts` — mutation: `createIfEvidenceThresholdMet`; query: `subscribePending`; mutation: `markPromoted`.
 - `crons.ts` extended:
+  - Finding embeddings are 768-dimensional and worker-supplied; Convex does not embed server-side.
   - `inferSuggestedRulesFromReactions` daily — looks for Archetypes with ≥3 negative reactions and no existing SuggestedRule; drafts one.
   - `rollupMergeStateSignals` daily — checks merged PRs for "merge-with-fix" vs "merge-without-fix" implicit signal per Finding.
 
