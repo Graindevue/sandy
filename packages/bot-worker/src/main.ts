@@ -215,7 +215,17 @@ export async function main(): Promise<void> {
     maxConcurrentJobs: config.maxConcurrentJobs,
   });
   claimant.start();
-  new PromotionWorker({ client: reactiveClient }).start();
+  new PromotionWorker({
+    client: reactiveClient,
+    github,
+    reviewSink: sink,
+    resolveAgentKeys: (repo) =>
+      resolveConfiguredAgents(configLoader, {
+        owner: repo.owner,
+        name: repo.name,
+        defaultBranch: repo.defaultBranch,
+      }).map((agent) => agent.key),
+  }).start();
 
   await startWebhookServer(config.port, {
     webhookSecret: config.webhookSecret,

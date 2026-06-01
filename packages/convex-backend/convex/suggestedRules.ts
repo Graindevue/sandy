@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { api, internal } from './_generated/api.js';
-import type { Id } from './_generated/dataModel.js';
+import type { Doc, Id } from './_generated/dataModel.js';
 import { internalAction, internalQuery, mutation, query } from './_generated/server.js';
 import { clampLimit } from './limits.js';
 import { type RecentArchetypeReaction, recentArchetypeReactions } from './reactionEvidence.js';
@@ -14,6 +14,7 @@ import {
   reactionForInference,
   scoreReactionEvidence,
 } from './suggestedRuleInference.js';
+import { suggestedRuleStatus } from './validators.js';
 
 export { draftSuggestedRuleDescription, scoreReactionEvidence } from './suggestedRuleInference.js';
 
@@ -23,11 +24,20 @@ const DEFAULT_CANDIDATE_LIMIT = 100;
 const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_RECENT_REACTION_LIMIT = 100;
 const MAX_RECENT_REACTION_LIMIT = 200;
+const DEFAULT_PROMOTION_EXEMPLAR_LIMIT = 5;
+const MAX_PROMOTION_EXEMPLAR_LIMIT = 10;
+const MAX_PROMOTION_FINDINGS = 100;
+const MAX_PRODUCT_REPOS = 100;
 
 type CandidateArchetype = {
   archetypeId: Id<'archetypes'>;
   label: string;
 };
+
+type PositivePromotionFinding = Pick<
+  Doc<'findings'>,
+  '_id' | 'summary' | 'evidence' | 'category' | 'anchor'
+>;
 
 /** SuggestedRules waiting for an operator decision. */
 export const subscribePending = query({
@@ -55,6 +65,76 @@ export const subscribeSuppressionPromotions = query({
       .withIndex('by_status', (q) => q.eq('status', 'promoteToSuppression'))
       .order('desc')
       .take(clampLimit(limit, DEFAULT_PENDING_LIMIT, MAX_PENDING_LIMIT));
+  },
+});
+
+/** Positive SuggestedRules where an operator decision is waiting for worker promotion. */
+export const subscribePositivePromotions = query({
+  args: {
+    limit: v.optional(v.number()),
+    exemplarLimit: v.optional(v.number()),
+  },
+  handler: async (ctx, { limit, exemplarLimit }) => {
+    const rules = await ctx.db
+      .query('suggestedRules')
+      .withIndex('by_status', (q) => q.eq('status', 'promoteToPositive'))
+      .order('desc')
+      .take(clampLimit(limit, DEFAULT_PENDING_LIMIT, MAX_PENDING_LIMIT));
+    const promotions = [];
+    for (const rule of rules) {
+      const archetype = await ctx.db.get(rule.sourceArchetypeId);
+      if (archetype === null) {
+        continue;
+      }
+
+      const [productRepos, recentFindings] = await Promise.all([
+        ctx.db
+          .query('repos')
+          .withIndex('by_product', (q) => q.eq('productId', rule.productId))
+          .take(MAX_PRODUCT_REPOS),
+        ctx.db
+          .query('findings')
+          .withIndex('by_archetype', (q) => q.eq('archetypeId', rule.sourceArchetypeId))
+          .order('desc')
+          .take(MAX_PROMOTION_FINDINGS),
+      ]);
+      const targetRepo = mostAffectedRepo(productRepos, recentFindings);
+      if (targetRepo === null) {
+        continue;
+      }
+
+      const exemplarCount = clampLimit(
+        exemplarLimit,
+        DEFAULT_PROMOTION_EXEMPLAR_LIMIT,
+        MAX_PROMOTION_EXEMPLAR_LIMIT,
+      );
+      const exemplars = await promotionExemplars(ctx.db, archetype, recentFindings, exemplarCount);
+      if (exemplars.length === 0) {
+        continue;
+      }
+
+      promotions.push({
+        _id: rule._id,
+        description: rule.description,
+        sourceArchetypeId: rule.sourceArchetypeId,
+        archetypeLabel: archetype.label,
+        targetRepo: {
+          _id: targetRepo._id,
+          owner: targetRepo.owner,
+          name: targetRepo.name,
+          fullName: targetRepo.fullName,
+          defaultBranch: targetRepo.defaultBranch,
+        },
+        exemplars: exemplars.map((finding) => ({
+          findingId: finding._id,
+          summary: finding.summary,
+          evidence: finding.evidence,
+          category: finding.category,
+          anchor: finding.anchor,
+        })),
+      });
+    }
+    return promotions;
   },
 });
 
@@ -126,11 +206,19 @@ export const promoteSuppression = mutation({
 export const markPromoted = mutation({
   args: {
     suggestedRuleId: v.id('suggestedRules'),
+    expectedStatus: v.optional(suggestedRuleStatus),
   },
-  returns: v.null(),
-  handler: async (ctx, { suggestedRuleId }) => {
+  returns: v.boolean(),
+  handler: async (ctx, { suggestedRuleId, expectedStatus }) => {
+    const suggestedRule = await ctx.db.get(suggestedRuleId);
+    if (suggestedRule === null) {
+      throw new Error(`SuggestedRule ${suggestedRuleId} does not exist`);
+    }
+    if (expectedStatus !== undefined && suggestedRule.status !== expectedStatus) {
+      return false;
+    }
     await ctx.db.patch(suggestedRuleId, { status: 'promoted' });
-    return null;
+    return true;
   },
 });
 
@@ -252,6 +340,62 @@ function serializeEvidence(
     suppressionWeight: score.suppressionWeight,
     reactions: score.supportingReactions,
   });
+}
+
+function mostAffectedRepo(
+  repos: readonly Doc<'repos'>[],
+  findings: readonly Pick<Doc<'findings'>, 'anchor'>[],
+): Doc<'repos'> | null {
+  const counts = new Map<string, number>();
+  for (const finding of findings) {
+    counts.set(finding.anchor.repo, (counts.get(finding.anchor.repo) ?? 0) + 1);
+  }
+
+  let winner: Doc<'repos'> | null = null;
+  let winnerCount = 0;
+  for (const repo of repos) {
+    const count = counts.get(repo.fullName) ?? 0;
+    if (count > winnerCount) {
+      winner = repo;
+      winnerCount = count;
+    }
+  }
+  return winnerCount === 0 ? null : winner;
+}
+
+async function promotionExemplars(
+  db: {
+    get<T extends 'findings'>(id: Id<T>): Promise<Doc<T> | null>;
+  },
+  archetype: Pick<Doc<'archetypes'>, 'exampleFindingIds'>,
+  recentFindings: readonly PositivePromotionFinding[],
+  limit: number,
+): Promise<PositivePromotionFinding[]> {
+  const seen = new Set<string>();
+  const exemplars: PositivePromotionFinding[] = [];
+  for (const findingId of archetype.exampleFindingIds) {
+    if (exemplars.length >= limit) {
+      break;
+    }
+    const finding = await db.get(findingId);
+    if (finding === null || seen.has(finding._id)) {
+      continue;
+    }
+    seen.add(finding._id);
+    exemplars.push(finding);
+  }
+
+  for (const finding of recentFindings) {
+    if (exemplars.length >= limit) {
+      break;
+    }
+    if (seen.has(finding._id)) {
+      continue;
+    }
+    seen.add(finding._id);
+    exemplars.push(finding);
+  }
+  return exemplars;
 }
 
 function warn(message: string, error: unknown): void {

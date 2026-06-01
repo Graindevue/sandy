@@ -39,6 +39,7 @@ interface InstallationToken {
 const GITHUB_API_BASE = 'https://api.github.com';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const PRODUCT_RULES_PATH = '.bot/product-rules.md';
 
 export class GitHubAppClient
   implements
@@ -224,9 +225,154 @@ export class GitHubAppClient
     return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repo.owner}/${repo.name}.git`;
   }
 
+  async openProductRulesPullRequest(input: {
+    repo: {
+      owner: string;
+      name: string;
+      defaultBranch: string;
+    };
+    suggestedRuleId: string;
+    ruleLine: string;
+  }): Promise<PullRequestFacts> {
+    const branchName = productRuleBranchName(input.suggestedRuleId);
+    const baseSha = await this.#getBranchHeadSha(input.repo, input.repo.defaultBranch);
+    await this.#createBranchIfMissing(input.repo, branchName, baseSha);
+
+    const existingFile = await this.#readTextFile(input.repo, PRODUCT_RULES_PATH, branchName);
+    const content = appendProductRuleLine(existingFile?.content ?? '', input.ruleLine);
+    const writeInput: {
+      path: string;
+      branchName: string;
+      content: string;
+      message: string;
+      sha?: string;
+    } = {
+      path: PRODUCT_RULES_PATH,
+      branchName,
+      content,
+      message: `Add product rule from SuggestedRule ${input.suggestedRuleId}`,
+    };
+    if (existingFile !== null) {
+      writeInput.sha = existingFile.sha;
+    }
+    const headSha = await this.#writeTextFile(input.repo, writeInput);
+
+    const existingPullRequest = await this.resolvePullRequestForPush(
+      { owner: input.repo.owner, name: input.repo.name },
+      branchName,
+      headSha,
+    );
+    if (existingPullRequest !== null) {
+      return existingPullRequest;
+    }
+
+    const raw = await this.#installationRequest<unknown>(
+      input.repo.owner,
+      input.repo.name,
+      `/repos/${input.repo.owner}/${input.repo.name}/pulls`,
+      {
+        method: 'POST',
+        body: {
+          title: `Add product rule from SuggestedRule ${input.suggestedRuleId}`,
+          head: branchName,
+          base: input.repo.defaultBranch,
+          body: productRulePullRequestBody(input.suggestedRuleId, input.ruleLine),
+          draft: false,
+        },
+      },
+    );
+    const pullRequest = parsePullRequestFacts(raw);
+    if (pullRequest === null) {
+      throw new Error('GitHub did not return a valid product-rules pull request');
+    }
+    return pullRequest;
+  }
+
   async #listReactions(repo: RepoRef, path: string): Promise<CommentReaction[]> {
     const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
     return raw.map(parseCommentReaction).filter(isDefined);
+  }
+
+  async #getBranchHeadSha(
+    repo: { owner: string; name: string },
+    branchName: string,
+  ): Promise<string> {
+    const raw = await this.#installationRequest<unknown>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/git/ref/heads/${branchName}`,
+    );
+    return parseGitRefSha(raw);
+  }
+
+  async #createBranchIfMissing(
+    repo: { owner: string; name: string },
+    branchName: string,
+    baseSha: string,
+  ): Promise<void> {
+    try {
+      await this.#installationRequest<unknown>(
+        repo.owner,
+        repo.name,
+        `/repos/${repo.owner}/${repo.name}/git/refs`,
+        {
+          method: 'POST',
+          body: { ref: `refs/heads/${branchName}`, sha: baseSha },
+        },
+      );
+    } catch (error) {
+      if (isGitHubStatus(error, 422)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async #readTextFile(
+    repo: { owner: string; name: string },
+    path: string,
+    branchName: string,
+  ): Promise<{ sha: string; content: string } | null> {
+    try {
+      const raw = await this.#installationRequest<unknown>(
+        repo.owner,
+        repo.name,
+        `/repos/${repo.owner}/${repo.name}/contents/${path}?ref=${encodeURIComponent(branchName)}`,
+      );
+      return parseRepositoryTextFile(raw);
+    } catch (error) {
+      if (isGitHubNotFound(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async #writeTextFile(
+    repo: { owner: string; name: string },
+    input: {
+      path: string;
+      branchName: string;
+      content: string;
+      message: string;
+      sha?: string;
+    },
+  ): Promise<string> {
+    const body: Record<string, unknown> = {
+      message: input.message,
+      content: Buffer.from(input.content, 'utf8').toString('base64'),
+      branch: input.branchName,
+    };
+    if (input.sha !== undefined) {
+      body.sha = input.sha;
+    }
+    const raw = await this.#installationRequest<unknown>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}/contents/${input.path}`,
+      { method: 'PUT', body },
+    );
+    return parseContentCommitSha(raw);
   }
 
   async #listReactionsByKind(
@@ -353,6 +499,10 @@ function isGitHubNotFound(error: unknown): boolean {
   return error instanceof GitHubApiError && error.status === 404;
 }
 
+function isGitHubStatus(error: unknown, status: number): boolean {
+  return error instanceof GitHubApiError && error.status === status;
+}
+
 function createGitHubAppJwt(options: {
   appId: string;
   privateKey: string;
@@ -435,6 +585,81 @@ function parseRepoRef(raw: unknown): RepoRef | null {
   return typeof object.owner?.login === 'string' && typeof object.name === 'string'
     ? { owner: object.owner.login, name: object.name }
     : null;
+}
+
+function parseGitRefSha(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub ref response was not an object');
+  }
+  const sha = (raw as { object?: { sha?: unknown } }).object?.sha;
+  if (typeof sha !== 'string' || sha.length === 0) {
+    throw new Error('GitHub ref response did not include object.sha');
+  }
+  return sha;
+}
+
+function parseRepositoryTextFile(raw: unknown): { sha: string; content: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('GitHub contents response was not a file object');
+  }
+  const file = raw as {
+    type?: unknown;
+    sha?: unknown;
+    encoding?: unknown;
+    content?: unknown;
+  };
+  if (
+    file.type !== 'file' ||
+    typeof file.sha !== 'string' ||
+    file.encoding !== 'base64' ||
+    typeof file.content !== 'string'
+  ) {
+    throw new Error('GitHub contents response did not include a base64 file');
+  }
+  return {
+    sha: file.sha,
+    content: Buffer.from(file.content.replaceAll(/\s/g, ''), 'base64').toString('utf8'),
+  };
+}
+
+function parseContentCommitSha(raw: unknown): string {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub contents update response was not an object');
+  }
+  const sha = (raw as { commit?: { sha?: unknown } }).commit?.sha;
+  if (typeof sha !== 'string' || sha.length === 0) {
+    throw new Error('GitHub contents update response did not include commit.sha');
+  }
+  return sha;
+}
+
+function productRuleBranchName(suggestedRuleId: string): string {
+  const slug = suggestedRuleId
+    .trim()
+    .replaceAll(/[^A-Za-z0-9._-]+/g, '-')
+    .replaceAll(/^-+|-+$/g, '');
+  return `sandy/suggested-rule-${slug.length === 0 ? 'rule' : slug}`;
+}
+
+function appendProductRuleLine(content: string, ruleLine: string): string {
+  const normalizedContent = content.replace(/\r\n/g, '\n').trimEnd();
+  const normalizedRule = ruleLine.trim();
+  if (normalizedContent.length === 0) {
+    return `${normalizedRule}\n`;
+  }
+  return `${normalizedContent}\n${normalizedRule}\n`;
+}
+
+function productRulePullRequestBody(suggestedRuleId: string, ruleLine: string): string {
+  return [
+    `Promotes SuggestedRule \`${suggestedRuleId}\` into \`${PRODUCT_RULES_PATH}\`.`,
+    '',
+    'Rule:',
+    '',
+    ruleLine,
+    '',
+    'Sandy opts this PR into review so the drafted rule is checked before merge.',
+  ].join('\n');
 }
 
 function commentReactionsPath(

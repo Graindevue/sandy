@@ -6,9 +6,11 @@ import {
   createIfEvidenceThresholdMet,
   draftSuggestedRuleDescription,
   inferSuggestedRulesFromReactions,
+  markPromoted,
   promoteSuppression,
   scoreReactionEvidence,
   subscribePending,
+  subscribePositivePromotions,
   subscribeSuppressionPromotions,
 } from '../convex/suggestedRules.js';
 
@@ -114,6 +116,57 @@ describe('SuggestedRule inference from reactions', () => {
     expect(pending.map((rule) => rule.status)).toEqual(['promoteToSuppression']);
   });
 
+  it('hydrates positive promotion work with exemplars and the most-affected Repo', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId, findingIds, productId } = await seedArchetypeWithFindings(ctx);
+    await ctx.db.patch(archetypeId, { exampleFindingIds: [findingIds[1]] });
+    await ctx.db.insert('repos', {
+      productId,
+      owner: 'acme',
+      name: 'desktop',
+      fullName: 'acme/desktop',
+      defaultBranch: 'main',
+    });
+    await ctx.db.insert('findings', {
+      reviewJobId: 'reviewJobs:1',
+      pullRequestId: 'pullRequests:1',
+      agentKey: 'logic',
+      severity: 'P2',
+      confidence: 3,
+      anchor: { repo: 'acme/desktop', path: 'src/view.ts', lineStart: 7, lineEnd: 7 },
+      summary: 'Desktop duplicate example.',
+      evidence: 'Desktop already handles this case.',
+      category: 'logic',
+      archetypeId,
+    });
+    const suggestedRuleId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'promoteToPositive'),
+    );
+
+    const pending = await invoke<Array<Record<string, unknown>>>(subscribePositivePromotions, ctx, {
+      exemplarLimit: 2,
+    });
+
+    expect(pending).toEqual([
+      expect.objectContaining({
+        _id: suggestedRuleId,
+        archetypeLabel: 'Duplicate test coverage finding',
+        targetRepo: expect.objectContaining({
+          _id: 'repos:1',
+          fullName: 'acme/widget',
+          defaultBranch: 'main',
+        }),
+        exemplars: expect.arrayContaining([
+          expect.objectContaining({
+            findingId: findingIds[1],
+            summary: 'Duplicate review comment on a branch already covered by tests.',
+          }),
+        ]),
+      }),
+    ]);
+  });
+
   it('promotes a suppression SuggestedRule atomically with its source Archetype', async () => {
     const ctx = fakeCtx();
     const { archetypeId } = await seedArchetypeWithFindings(ctx);
@@ -125,6 +178,34 @@ describe('SuggestedRule inference from reactions', () => {
     await expect(invoke(promoteSuppression, ctx, { suggestedRuleId })).resolves.toBe(true);
 
     expect(ctx.db.getDoc(archetypeId)).toEqual(expect.objectContaining({ suppressionWeight: 1 }));
+    expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'promoted' }));
+  });
+
+  it('marks a SuggestedRule promoted only when the expected operator decision still matches', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId } = await seedArchetypeWithFindings(ctx);
+    const suggestedRuleId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'rejected'),
+    );
+
+    await expect(
+      invoke(markPromoted, ctx, {
+        suggestedRuleId,
+        expectedStatus: 'promoteToPositive',
+      }),
+    ).resolves.toBe(false);
+
+    expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'rejected' }));
+
+    await ctx.db.patch(suggestedRuleId, { status: 'promoteToPositive' });
+    await expect(
+      invoke(markPromoted, ctx, {
+        suggestedRuleId,
+        expectedStatus: 'promoteToPositive',
+      }),
+    ).resolves.toBe(true);
+
     expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'promoted' }));
   });
 
@@ -363,6 +444,9 @@ async function seedArchetypeWithFindings(ctx: ReturnType<typeof fakeCtx>) {
   }
 
   return {
+    productId,
+    repoId,
+    pullRequestId,
     archetypeId,
     findingIds,
     reactionIds: ['reactions:1', 'reactions:2', 'reactions:3'],

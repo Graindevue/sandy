@@ -91,6 +91,100 @@ describe('GitHubAppClient', () => {
     );
   });
 
+  it('opens a product-rules pull request from a SuggestedRule', async () => {
+    const requests: Array<{ request: string; body: unknown }> = [];
+    const client = new GitHubAppClient({
+      appId: '123',
+      privateKey: 'unused',
+      createJwt: () => 'app-jwt',
+      fetch: async (url, init) => {
+        const request = `${init?.method ?? 'GET'} ${String(url)}`;
+        const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+        requests.push({ request, body });
+        if (String(url).endsWith('/repos/acme/widget/installation')) {
+          return jsonResponse({ id: 42 });
+        }
+        if (String(url).endsWith('/app/installations/42/access_tokens')) {
+          return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+        }
+        if (String(url).endsWith('/repos/acme/widget/git/ref/heads/main')) {
+          return jsonResponse({ object: { sha: 'base-sha' } });
+        }
+        if (String(url).endsWith('/repos/acme/widget/git/refs')) {
+          return jsonResponse({ ref: 'refs/heads/sandy/suggested-rule-suggestedRules-2' }, 201);
+        }
+        if (
+          String(url).endsWith(
+            '/repos/acme/widget/contents/.bot/product-rules.md?ref=sandy%2Fsuggested-rule-suggestedRules-2',
+          )
+        ) {
+          return jsonResponse({
+            type: 'file',
+            sha: 'rules-sha',
+            encoding: 'base64',
+            content: Buffer.from('- Existing product rule.\n').toString('base64'),
+          });
+        }
+        if (String(url).endsWith('/repos/acme/widget/contents/.bot/product-rules.md')) {
+          return jsonResponse({ commit: { sha: 'promotion-sha' } });
+        }
+        if (
+          String(url).endsWith(
+            '/repos/acme/widget/pulls?state=open&head=acme%3Asandy%2Fsuggested-rule-suggestedRules-2',
+          )
+        ) {
+          return jsonResponse([]);
+        }
+        if (String(url).endsWith('/repos/acme/widget/pulls')) {
+          return jsonResponse({
+            number: 45,
+            draft: false,
+            title: 'Add product rule from SuggestedRule suggestedRules:2',
+            html_url: 'https://github.com/acme/widget/pull/45',
+            state: 'open',
+            merged: false,
+            user: { login: 'sandy[bot]' },
+            head: {
+              sha: 'promotion-sha',
+              repo: { owner: { login: 'acme' }, name: 'widget' },
+            },
+            base: { ref: 'main' },
+          });
+        }
+        return jsonResponse({ message: `unexpected ${request}` }, 500);
+      },
+    });
+
+    await expect(
+      client.openProductRulesPullRequest({
+        repo: { owner: 'acme', name: 'widget', defaultBranch: 'main' },
+        suggestedRuleId: 'suggestedRules:2',
+        ruleLine: '- Cache keys must include tenant scope.',
+      }),
+    ).resolves.toMatchObject({
+      number: 45,
+      headSha: 'promotion-sha',
+      title: 'Add product rule from SuggestedRule suggestedRules:2',
+    });
+
+    expect(requests.map((entry) => entry.request)).toContain(
+      'POST https://api.github.com/repos/acme/widget/git/refs',
+    );
+    expect(requests.map((entry) => entry.request)).toContain(
+      'PUT https://api.github.com/repos/acme/widget/contents/.bot/product-rules.md',
+    );
+    const write = requests.find((entry) =>
+      entry.request.endsWith('/repos/acme/widget/contents/.bot/product-rules.md'),
+    );
+    expect(write?.body).toMatchObject({
+      branch: 'sandy/suggested-rule-suggestedRules-2',
+      sha: 'rules-sha',
+    });
+    expect(
+      Buffer.from(String((write?.body as { content?: unknown })?.content), 'base64').toString(),
+    ).toBe('- Existing product rule.\n- Cache keys must include tenant scope.\n');
+  });
+
   it('resolves pull request facts for issue_comment hydration', async () => {
     const requests: string[] = [];
     const client = new GitHubAppClient({
