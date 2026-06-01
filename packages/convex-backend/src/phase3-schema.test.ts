@@ -6,78 +6,60 @@ import {
   SUGGESTED_RULE_TYPES,
 } from '../../shared-types/src/learning.js';
 import schema, { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from '../convex/schema.js';
+import {
+  arrayType,
+  expectFields,
+  expectIndexes,
+  exportSchema,
+  type FieldExport,
+  getTable,
+  idType,
+  optional,
+  required,
+  type VectorIndexExport,
+} from './schemaExportTestUtils.js';
+
+const exportedSchema = exportSchema(schema);
 
 describe('Phase 3 Convex schema foundation', () => {
   it('defines learning-loop tables with their query indexes', () => {
-    expectIndexes('archetypes', [{ indexDescriptor: 'by_product', fields: ['productId'] }]);
-    expect(table('archetypes').vectorIndexes).toEqual([
-      {
-        indexDescriptor: 'by_exemplar_embedding_and_product',
-        vectorField: 'exemplarEmbedding',
-        dimensions: TEXT_EMBEDDING_3_SMALL_DIMENSIONS,
-        filterFields: ['productId'],
-      },
-    ]);
-    expectIndexes('reactions', [{ indexDescriptor: 'by_finding', fields: ['findingId'] }]);
-    expectIndexes('suggestedRules', [
+    expectIndexes(table('archetypes'), [{ indexDescriptor: 'by_product', fields: ['productId'] }]);
+    expect(table('archetypes').vectorIndexes).toEqual([archetypeVectorIndex]);
+    expectIndexes(table('reactions'), [{ indexDescriptor: 'by_finding', fields: ['findingId'] }]);
+    expectIndexes(table('suggestedRules'), [
       { indexDescriptor: 'by_status', fields: ['status'] },
       { indexDescriptor: 'by_source_archetype', fields: ['sourceArchetypeId'] },
     ]);
-    expectIndexes('findings', [{ indexDescriptor: 'by_archetype', fields: ['archetypeId'] }]);
+    expectIndexes(table('findings'), [
+      { indexDescriptor: 'by_archetype', fields: ['archetypeId'] },
+    ]);
   });
 
   it('defines learning-loop table fields and Finding extensions', () => {
-    for (const [tableName, fields] of Object.entries(expectedFields)) {
-      for (const [fieldName, field] of Object.entries(fields)) {
-        expectField(table(tableName), fieldName, field);
-      }
+    for (const tableName of learningLoopTables) {
+      expectFields(table(tableName), expectedLearningTableFields[tableName]);
     }
 
+    for (const [fieldName, field] of Object.entries(expectedFindingExtensions)) {
+      expect(table('findings').documentType.value[fieldName]).toEqual(field);
+    }
     for (const tableName of learningLoopTables) {
       expect(table(tableName).documentType.value).not.toHaveProperty('createdAt');
     }
   });
 });
 
-interface SchemaExport {
-  tables: TableExport[];
-}
-
-interface TableExport {
-  tableName: string;
-  indexes: IndexExport[];
-  vectorIndexes: Array<{
-    indexDescriptor: string;
-    vectorField: string;
-    dimensions: number;
-    filterFields: string[];
-  }>;
-  documentType: { value: Record<string, FieldExport> };
-}
-
-interface IndexExport {
-  indexDescriptor: string;
-  fields: string[];
-}
-
-interface FieldExport {
-  fieldType: ValidatorJSON;
-  optional: boolean;
-}
-
-interface ExportableSchema {
-  export(): string;
-}
-
-// Convex codegen uses this exporter, but the public .d.ts intentionally hides it.
-const exportedSchema = JSON.parse((schema as unknown as ExportableSchema).export()) as SchemaExport;
-
 const learningLoopTables = ['archetypes', 'reactions', 'suggestedRules'] as const;
+type LearningLoopTableName = (typeof learningLoopTables)[number];
 
-const required = (fieldType: ValidatorJSON): FieldExport => ({ fieldType, optional: false });
-const optional = (fieldType: ValidatorJSON): FieldExport => ({ fieldType, optional: true });
+const archetypeVectorIndex = {
+  indexDescriptor: 'by_exemplar_embedding_and_product',
+  vectorField: 'exemplarEmbedding',
+  dimensions: TEXT_EMBEDDING_3_SMALL_DIMENSIONS,
+  filterFields: ['productId'],
+} satisfies VectorIndexExport;
 
-const expectedFields = {
+const expectedLearningTableFields = {
   archetypes: {
     productId: required(idType('products')),
     label: required({ type: 'string' }),
@@ -99,39 +81,20 @@ const expectedFields = {
     sourceArchetypeId: required(idType('archetypes')),
     evidence: required({ type: 'string' }),
   },
-  findings: {
-    embedding: optional(arrayType({ type: 'number' })),
-    archetypeId: optional(idType('archetypes')),
-  },
-} satisfies Record<string, Record<string, FieldExport>>;
+} satisfies Record<LearningLoopTableName, Record<string, FieldExport>>;
 
-function table(name: string): TableExport {
-  const found = exportedSchema.tables.find((candidate) => candidate.tableName === name);
-  if (found === undefined) {
-    throw new Error(`Missing table ${name}`);
-  }
-  return found;
-}
-
-function expectIndexes(tableName: string, indexes: IndexExport[]) {
-  expect(table(tableName).indexes).toEqual(expect.arrayContaining(indexes));
-}
-
-function expectField(tableExport: TableExport, fieldName: string, field: FieldExport) {
-  expect(tableExport.documentType.value[fieldName]).toEqual(field);
-}
-
-function idType(tableName: string): ValidatorJSON {
-  return { type: 'id', tableName };
-}
-
-function arrayType(value: ValidatorJSON): ValidatorJSON {
-  return { type: 'array', value };
-}
+const expectedFindingExtensions = {
+  embedding: optional(arrayType({ type: 'number' })),
+  archetypeId: optional(idType('archetypes')),
+} satisfies Record<string, FieldExport>;
 
 function literalUnion(values: readonly JSONValue[]): ValidatorJSON {
   return {
     type: 'union',
     value: values.map((value) => ({ type: 'literal', value })),
   };
+}
+
+function table(name: string) {
+  return getTable(exportedSchema, name);
 }
