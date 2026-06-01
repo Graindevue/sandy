@@ -4,26 +4,15 @@ export type Severity = 'P0' | 'P1' | 'P2';
 /** Agent confidence in a Finding, 0 (lowest) to 5 (highest). */
 export type Confidence = 0 | 1 | 2 | 3 | 4 | 5;
 
+/** Stable identifier for a Finding (a Convex document id at runtime). */
+export type FindingId = string;
+
 /**
  * Finding category. Known values align with the default Agent personas in
  * `agents/` (`logic`, `security`, `convex`, `nextjs`, `i18n`, `style`,
  * `test-coverage`); custom Agents may introduce others, so any string is valid.
  */
 export type FindingCategory = string;
-
-/** Feedback signal attached to a posted Finding. */
-export type ReactionKind = '👍' | '👎' | 'mergedFixed' | 'mergedIgnored';
-
-/** The kind of Rule a SuggestedRule can promote into. */
-export type SuggestedRuleType = 'positive' | 'suppression';
-
-/** Manual operator workflow state for a SuggestedRule. */
-export type SuggestedRuleStatus =
-  | 'suggested'
-  | 'promoteToPositive'
-  | 'promoteToSuppression'
-  | 'rejected'
-  | 'promoted';
 
 /**
  * Where the inline PR review comment attaches. Must be in the reviewed PR's
