@@ -12,26 +12,25 @@ export interface ReactionTarget {
 export interface ReactionCaptureComment {
   id: number;
   body: string;
+  kind: ReactionCaptureCommentKind;
 }
 
 export interface CommentReaction {
   content: string;
 }
 
+export interface ListCommentReactionsInput {
+  repo: RepoRef;
+  commentId: number;
+  commentKind?: ReactionCaptureCommentKind;
+}
+
 export interface ReactionCaptureGitHub {
-  listPullRequestReviewComments(input: {
+  listReactionCaptureComments(input: {
     repo: RepoRef;
     pullNumber: number;
   }): Promise<ReactionCaptureComment[]>;
-  listIssueComments(input: {
-    repo: RepoRef;
-    issueNumber: number;
-  }): Promise<ReactionCaptureComment[]>;
-  listCommentReactions(input: {
-    repo: RepoRef;
-    commentId: number;
-    commentKind?: ReactionCaptureCommentKind;
-  }): Promise<CommentReaction[]>;
+  listCommentReactions(input: ListCommentReactionsInput): Promise<CommentReaction[]>;
 }
 
 export interface ReactionCaptureStore {
@@ -61,56 +60,22 @@ export async function capturePrCloseReactions(
     return { recorded: 0 };
   }
 
-  const knownFindingIds = new Set(targets.map((target) => target.findingId));
-  const targetsByCommentId = new Map<number, Set<string>>();
-  const kindByCommentId = new Map<number, ReactionCaptureCommentKind>();
-
-  for (const target of targets) {
-    if (target.githubCommentId !== undefined) {
-      addCommentTarget(targetsByCommentId, target.githubCommentId, target.findingId);
-    }
-  }
-
-  const [reviewComments, issueComments] = await Promise.all([
-    input.github.listPullRequestReviewComments({
-      repo: input.repo,
-      pullNumber: input.pullNumber,
-    }),
-    input.github.listIssueComments({
-      repo: input.repo,
-      issueNumber: input.pullNumber,
-    }),
-  ]);
-
-  addCommentFallbacks(
-    reviewComments,
-    'pull_request_review_comment',
-    knownFindingIds,
-    targetsByCommentId,
-    kindByCommentId,
-  );
-  addCommentFallbacks(
-    issueComments,
-    'issue_comment',
-    knownFindingIds,
-    targetsByCommentId,
-    kindByCommentId,
-  );
+  const comments = await input.github.listReactionCaptureComments({
+    repo: input.repo,
+    pullNumber: input.pullNumber,
+  });
 
   let recorded = 0;
-  for (const [commentId, findingIds] of targetsByCommentId.entries()) {
-    const commentKind = kindByCommentId.get(commentId);
+  for (const candidate of reactionCaptureCandidates(targets, comments)) {
     const reactions = await input.github.listCommentReactions(
-      commentKind === undefined
-        ? { repo: input.repo, commentId }
-        : { repo: input.repo, commentId, commentKind },
+      commentReactionsInput(input.repo, candidate),
     );
     for (const reaction of reactions) {
       const kind = reactionKindForGitHubContent(reaction.content);
       if (kind === undefined) {
         continue;
       }
-      for (const findingId of findingIds) {
+      for (const findingId of candidate.findingIds) {
         await input.store.recordReaction({ findingId, kind });
         recorded += 1;
       }
@@ -120,42 +85,75 @@ export async function capturePrCloseReactions(
   return { recorded };
 }
 
-function addCommentFallbacks(
+interface ReactionCaptureCandidate {
+  id: number;
+  kind?: ReactionCaptureCommentKind;
+  findingIds: Set<string>;
+}
+
+function reactionCaptureCandidates(
+  targets: readonly ReactionTarget[],
   comments: readonly ReactionCaptureComment[],
-  commentKind: ReactionCaptureCommentKind,
-  knownFindingIds: ReadonlySet<string>,
-  targetsByCommentId: Map<number, Set<string>>,
-  kindByCommentId: Map<number, ReactionCaptureCommentKind>,
-): void {
-  for (const comment of comments) {
-    if (targetsByCommentId.has(comment.id)) {
-      kindByCommentId.set(comment.id, commentKind);
+): ReactionCaptureCandidate[] {
+  const knownFindingIds = new Set(targets.map((target) => target.findingId));
+  const candidatesByCommentId = new Map<number, ReactionCaptureCandidate>();
+
+  for (const target of targets) {
+    if (target.githubCommentId !== undefined) {
+      candidateForComment(candidatesByCommentId, target.githubCommentId).findingIds.add(
+        target.findingId,
+      );
     }
-    for (const findingId of parseFindingIdsFromTrailer(comment.body)) {
+  }
+
+  for (const comment of comments) {
+    const storedCandidate = candidatesByCommentId.get(comment.id);
+    if (storedCandidate !== undefined) {
+      storedCandidate.kind = comment.kind;
+    }
+    for (const findingId of findingIdsFromTrailer(comment.body)) {
       if (!knownFindingIds.has(findingId)) {
         continue;
       }
-      addCommentTarget(targetsByCommentId, comment.id, findingId);
-      kindByCommentId.set(comment.id, commentKind);
+      const candidate = candidateForComment(candidatesByCommentId, comment.id);
+      candidate.kind = comment.kind;
+      candidate.findingIds.add(findingId);
+    }
+  }
+
+  return [...candidatesByCommentId.values()];
+}
+
+function candidateForComment(
+  candidatesByCommentId: Map<number, ReactionCaptureCandidate>,
+  commentId: number,
+): ReactionCaptureCandidate {
+  const existing = candidatesByCommentId.get(commentId);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const candidate = { id: commentId, findingIds: new Set<string>() };
+  candidatesByCommentId.set(commentId, candidate);
+  return candidate;
+}
+
+function* findingIdsFromTrailer(body: string): Iterable<string> {
+  for (const match of body.matchAll(FINDING_TRAILER_RE)) {
+    const findingId = match[1];
+    if (findingId !== undefined) {
+      yield findingId;
     }
   }
 }
 
-function addCommentTarget(
-  targetsByCommentId: Map<number, Set<string>>,
-  commentId: number,
-  findingId: string,
-): void {
-  const findingIds = targetsByCommentId.get(commentId);
-  if (findingIds !== undefined) {
-    findingIds.add(findingId);
-    return;
+function commentReactionsInput(
+  repo: RepoRef,
+  candidate: ReactionCaptureCandidate,
+): ListCommentReactionsInput {
+  if (candidate.kind === undefined) {
+    return { repo, commentId: candidate.id };
   }
-  targetsByCommentId.set(commentId, new Set([findingId]));
-}
-
-function parseFindingIdsFromTrailer(body: string): string[] {
-  return [...body.matchAll(FINDING_TRAILER_RE)].map((match) => match[1]).filter(isDefined);
+  return { repo, commentId: candidate.id, commentKind: candidate.kind };
 }
 
 function reactionKindForGitHubContent(content: string): CapturedReactionKind | undefined {
@@ -167,8 +165,4 @@ function reactionKindForGitHubContent(content: string): CapturedReactionKind | u
     default:
       return undefined;
   }
-}
-
-function isDefined<T>(value: T | undefined): value is T {
-  return value !== undefined;
 }

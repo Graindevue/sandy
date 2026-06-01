@@ -64,30 +64,24 @@ export class GitHubAppClient
     target: PullRequestTarget,
     ignorePatterns: readonly string[] = [],
   ): Promise<number> {
+    const files = await this.#listPaginated<unknown>(
+      target.owner,
+      target.repo,
+      `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files`,
+    );
     let total = 0;
-    let page = 1;
-    while (true) {
-      const files = await this.#installationRequest<unknown[]>(
-        target.owner,
-        target.repo,
-        `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files?per_page=100&page=${page}`,
-      );
-      for (const file of files) {
-        if (typeof file === 'object' && file !== null) {
-          const filename = (file as { filename?: unknown }).filename;
-          if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
-            continue;
-          }
-          const additions = Number((file as { additions?: unknown }).additions ?? 0);
-          const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
-          total += additions + deletions;
+    for (const file of files) {
+      if (typeof file === 'object' && file !== null) {
+        const filename = (file as { filename?: unknown }).filename;
+        if (typeof filename === 'string' && isIgnoredPath(filename, ignorePatterns)) {
+          continue;
         }
+        const additions = Number((file as { additions?: unknown }).additions ?? 0);
+        const deletions = Number((file as { deletions?: unknown }).deletions ?? 0);
+        total += additions + deletions;
       }
-      if (files.length < 100) {
-        return total;
-      }
-      page += 1;
     }
+    return total;
   }
 
   async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
@@ -149,28 +143,23 @@ export class GitHubAppClient
     return null;
   }
 
-  async listPullRequestReviewComments(input: {
+  async listReactionCaptureComments(input: {
     repo: RepoRef;
     pullNumber: number;
   }): Promise<ReactionCaptureComment[]> {
-    const raw = await this.#listPaginated<unknown>(
-      input.repo.owner,
-      input.repo.name,
-      `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/comments`,
-    );
-    return raw.map(parseReactionCaptureComment).filter(isDefined);
-  }
-
-  async listIssueComments(input: {
-    repo: RepoRef;
-    issueNumber: number;
-  }): Promise<ReactionCaptureComment[]> {
-    const raw = await this.#listPaginated<unknown>(
-      input.repo.owner,
-      input.repo.name,
-      `/repos/${input.repo.owner}/${input.repo.name}/issues/${input.issueNumber}/comments`,
-    );
-    return raw.map(parseReactionCaptureComment).filter(isDefined);
+    const [reviewComments, issueComments] = await Promise.all([
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/pulls/${input.pullNumber}/comments`,
+        'pull_request_review_comment',
+      ),
+      this.#listReactionCaptureComments(
+        input.repo,
+        `/repos/${input.repo.owner}/${input.repo.name}/issues/${input.pullNumber}/comments`,
+        'issue_comment',
+      ),
+    ]);
+    return [...reviewComments, ...issueComments];
   }
 
   async listCommentReactions(input: {
@@ -178,32 +167,21 @@ export class GitHubAppClient
     commentId: number;
     commentKind?: ReactionCaptureCommentKind;
   }): Promise<CommentReaction[]> {
-    if (input.commentKind === 'pull_request_review_comment') {
-      return await this.#listReactions(
-        input.repo,
-        reviewCommentReactionsPath(input.repo, input.commentId),
-      );
-    }
-    if (input.commentKind === 'issue_comment') {
-      return await this.#listReactions(
-        input.repo,
-        issueCommentReactionsPath(input.repo, input.commentId),
-      );
+    if (input.commentKind !== undefined) {
+      return await this.#listReactionsByKind(input.repo, input.commentId, input.commentKind);
     }
 
     try {
-      return await this.#listReactions(
+      return await this.#listReactionsByKind(
         input.repo,
-        reviewCommentReactionsPath(input.repo, input.commentId),
+        input.commentId,
+        'pull_request_review_comment',
       );
     } catch (error) {
       if (!isGitHubNotFound(error)) {
         throw error;
       }
-      return await this.#listReactions(
-        input.repo,
-        issueCommentReactionsPath(input.repo, input.commentId),
-      );
+      return await this.#listReactionsByKind(input.repo, input.commentId, 'issue_comment');
     }
   }
 
@@ -215,6 +193,25 @@ export class GitHubAppClient
   async #listReactions(repo: RepoRef, path: string): Promise<CommentReaction[]> {
     const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
     return raw.map(parseCommentReaction).filter(isDefined);
+  }
+
+  async #listReactionsByKind(
+    repo: RepoRef,
+    commentId: number,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<CommentReaction[]> {
+    return await this.#listReactions(repo, commentReactionsPath(repo, commentId, commentKind));
+  }
+
+  async #listReactionCaptureComments(
+    repo: RepoRef,
+    path: string,
+    commentKind: ReactionCaptureCommentKind,
+  ): Promise<ReactionCaptureComment[]> {
+    const raw = await this.#listPaginated<unknown>(repo.owner, repo.name, path);
+    return raw
+      .map((comment) => parseReactionCaptureComment(comment, commentKind))
+      .filter(isDefined);
   }
 
   async #listPaginated<T>(owner: string, repo: string, path: string): Promise<T[]> {
@@ -406,21 +403,29 @@ function parseRepoRef(raw: unknown): RepoRef | null {
     : null;
 }
 
-function reviewCommentReactionsPath(repo: RepoRef, commentId: number): string {
-  return `/repos/${repo.owner}/${repo.name}/pulls/comments/${commentId}/reactions`;
+function commentReactionsPath(
+  repo: RepoRef,
+  commentId: number,
+  commentKind: ReactionCaptureCommentKind,
+): string {
+  switch (commentKind) {
+    case 'pull_request_review_comment':
+      return `/repos/${repo.owner}/${repo.name}/pulls/comments/${commentId}/reactions`;
+    case 'issue_comment':
+      return `/repos/${repo.owner}/${repo.name}/issues/comments/${commentId}/reactions`;
+  }
 }
 
-function issueCommentReactionsPath(repo: RepoRef, commentId: number): string {
-  return `/repos/${repo.owner}/${repo.name}/issues/comments/${commentId}/reactions`;
-}
-
-function parseReactionCaptureComment(raw: unknown): ReactionCaptureComment | undefined {
+function parseReactionCaptureComment(
+  raw: unknown,
+  kind: ReactionCaptureCommentKind,
+): ReactionCaptureComment | undefined {
   if (typeof raw !== 'object' || raw === null) {
     return undefined;
   }
   const object = raw as { id?: unknown; body?: unknown };
   return typeof object.id === 'number' && typeof object.body === 'string'
-    ? { id: object.id, body: object.body }
+    ? { id: object.id, body: object.body, kind }
     : undefined;
 }
 

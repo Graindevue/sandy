@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type CommentReaction,
   capturePrCloseReactions,
+  type ListCommentReactionsInput,
   type ReactionCaptureComment,
   type ReactionCaptureGitHub,
   type ReactionCaptureStore,
@@ -12,7 +13,7 @@ describe('capturePrCloseReactions', () => {
   it('records a thumbs-down reaction through the stored GitHub comment id', async () => {
     const store = new FakeReactionStore([{ findingId: 'finding-1', githubCommentId: 101 }]);
     const github = new FakeReactionGitHub({
-      reviewComments: [{ id: 101, body: 'Sandy finding comment' }],
+      comments: [{ id: 101, body: 'Sandy finding comment', kind: 'pull_request_review_comment' }],
       reactionsByCommentId: new Map([[101, [{ content: '-1' }]]]),
     });
 
@@ -25,12 +26,19 @@ describe('capturePrCloseReactions', () => {
     });
 
     expect(store.recorded).toEqual([{ findingId: 'finding-1', kind: '👎' }]);
+    expect(github.reactionRequests).toEqual([
+      {
+        repo: { owner: 'acme', name: 'widget' },
+        commentId: 101,
+        commentKind: 'pull_request_review_comment',
+      },
+    ]);
   });
 
   it('records a thumbs-up reaction through the stored GitHub comment id', async () => {
     const store = new FakeReactionStore([{ findingId: 'finding-1', githubCommentId: 101 }]);
     const github = new FakeReactionGitHub({
-      reviewComments: [{ id: 101, body: 'Sandy finding comment' }],
+      comments: [{ id: 101, body: 'Sandy finding comment', kind: 'pull_request_review_comment' }],
       reactionsByCommentId: new Map([[101, [{ content: '+1' }]]]),
     });
 
@@ -48,7 +56,13 @@ describe('capturePrCloseReactions', () => {
   it('falls back to the finding trailer when the stored comment id is missing', async () => {
     const store = new FakeReactionStore([{ findingId: 'finding-1' }]);
     const github = new FakeReactionGitHub({
-      issueComments: [{ id: 202, body: 'Summary\n\n<!-- bot:finding=finding-1 -->' }],
+      comments: [
+        {
+          id: 202,
+          body: 'Summary\n\n<!-- bot:finding=finding-1 -->',
+          kind: 'issue_comment',
+        },
+      ],
       reactionsByCommentId: new Map([[202, [{ content: '-1' }]]]),
     });
 
@@ -61,12 +75,25 @@ describe('capturePrCloseReactions', () => {
     });
 
     expect(store.recorded).toEqual([{ findingId: 'finding-1', kind: '👎' }]);
+    expect(github.reactionRequests).toEqual([
+      {
+        repo: { owner: 'acme', name: 'widget' },
+        commentId: 202,
+        commentKind: 'issue_comment',
+      },
+    ]);
   });
 
   it('records nothing when Sandy comments have no thumbs reactions', async () => {
     const store = new FakeReactionStore([{ findingId: 'finding-1', githubCommentId: 101 }]);
     const github = new FakeReactionGitHub({
-      reviewComments: [{ id: 101, body: '<!-- bot:finding=finding-1 -->' }],
+      comments: [
+        {
+          id: 101,
+          body: '<!-- bot:finding=finding-1 -->',
+          kind: 'pull_request_review_comment',
+        },
+      ],
       reactionsByCommentId: new Map([[101, [{ content: 'laugh' }]]]),
     });
 
@@ -98,29 +125,24 @@ class FakeReactionStore implements ReactionCaptureStore {
 }
 
 class FakeReactionGitHub implements ReactionCaptureGitHub {
-  readonly reviewComments: ReactionCaptureComment[];
-  readonly issueComments: ReactionCaptureComment[];
+  readonly comments: ReactionCaptureComment[];
   readonly reactionsByCommentId: Map<number, CommentReaction[]>;
+  readonly reactionRequests: ListCommentReactionsInput[] = [];
 
   constructor(options: {
-    reviewComments?: ReactionCaptureComment[];
-    issueComments?: ReactionCaptureComment[];
+    comments?: ReactionCaptureComment[];
     reactionsByCommentId?: Map<number, CommentReaction[]>;
   }) {
-    this.reviewComments = options.reviewComments ?? [];
-    this.issueComments = options.issueComments ?? [];
+    this.comments = options.comments ?? [];
     this.reactionsByCommentId = options.reactionsByCommentId ?? new Map();
   }
 
-  async listPullRequestReviewComments(): Promise<ReactionCaptureComment[]> {
-    return this.reviewComments;
+  async listReactionCaptureComments(): Promise<ReactionCaptureComment[]> {
+    return this.comments;
   }
 
-  async listIssueComments(): Promise<ReactionCaptureComment[]> {
-    return this.issueComments;
-  }
-
-  async listCommentReactions(input: { commentId: number }): Promise<CommentReaction[]> {
+  async listCommentReactions(input: ListCommentReactionsInput): Promise<CommentReaction[]> {
+    this.reactionRequests.push(input);
     return this.reactionsByCommentId.get(input.commentId) ?? [];
   }
 }

@@ -201,7 +201,7 @@ describe('GitHubAppClient', () => {
     );
   });
 
-  it('lists PR review comments and their reactions for close-time capture', async () => {
+  it('lists close-time capture comments and PR review comment reactions', async () => {
     const requests: string[] = [];
     const client = new GitHubAppClient({
       appId: '123',
@@ -218,16 +218,26 @@ describe('GitHubAppClient', () => {
         if (String(url).endsWith('/repos/acme/widget/pulls/12/comments?per_page=100&page=1')) {
           return jsonResponse([{ id: 101, body: '<!-- bot:finding=finding-1 -->' }]);
         }
+        if (String(url).endsWith('/repos/acme/widget/issues/12/comments?per_page=100&page=1')) {
+          return jsonResponse([{ id: 202, body: '<!-- bot:finding=finding-2 -->' }]);
+        }
         return jsonResponse([{ content: '-1' }, { content: 'laugh' }]);
       },
     });
 
     await expect(
-      client.listPullRequestReviewComments({
+      client.listReactionCaptureComments({
         repo: { owner: 'acme', name: 'widget' },
         pullNumber: 12,
       }),
-    ).resolves.toEqual([{ id: 101, body: '<!-- bot:finding=finding-1 -->' }]);
+    ).resolves.toEqual([
+      {
+        id: 101,
+        body: '<!-- bot:finding=finding-1 -->',
+        kind: 'pull_request_review_comment',
+      },
+      { id: 202, body: '<!-- bot:finding=finding-2 -->', kind: 'issue_comment' },
+    ]);
     await expect(
       client.listCommentReactions({
         repo: { owner: 'acme', name: 'widget' },
@@ -235,6 +245,9 @@ describe('GitHubAppClient', () => {
         commentKind: 'pull_request_review_comment',
       }),
     ).resolves.toEqual([{ content: '-1' }, { content: 'laugh' }]);
+    expect(requests).toContain(
+      'GET https://api.github.com/repos/acme/widget/issues/12/comments?per_page=100&page=1',
+    );
     expect(requests).toContain(
       'GET https://api.github.com/repos/acme/widget/pulls/comments/101/reactions?per_page=100&page=1',
     );
