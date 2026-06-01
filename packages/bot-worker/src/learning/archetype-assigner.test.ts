@@ -28,7 +28,14 @@ describe('FindingArchetypeAssigner', () => {
 
     expect(embedder.summaries).toEqual(['The cache key ignores the tenant id.']);
     expect(store.assignments).toEqual([{ findingId: 'finding-1', embedding: [0.1, 0.2, 0.3] }]);
-    expect(stamped).toEqual([{ id: 'finding-1', archetypeId: 'archetype-1', finding }]);
+    expect(stamped).toEqual([
+      {
+        id: 'finding-1',
+        archetypeId: 'archetype-1',
+        archetypeSuppressionWeight: 0.25,
+        finding,
+      },
+    ]);
   });
 });
 
@@ -47,8 +54,8 @@ class FakeArchetypeStore {
   async assignArchetype(input: {
     findingId: string;
     embedding: number[];
-  }): Promise<{ archetypeId: string }> {
+  }): Promise<{ archetypeId: string; suppressionWeight: number }> {
     this.assignments.push(input);
-    return { archetypeId: `archetype-${this.assignments.length}` };
+    return { archetypeId: `archetype-${this.assignments.length}`, suppressionWeight: 0.25 };
   }
 }

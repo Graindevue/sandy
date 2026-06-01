@@ -11,7 +11,11 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
-import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
+import {
+  type AgentReviewOutput,
+  synthesizeAgentOutputs,
+  synthesizePostableReview,
+} from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
   isReviewSupersededError,
@@ -25,7 +29,11 @@ import type {
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
-import type { ArchetypeStampedFinding, PersistedFinding } from './review-findings.js';
+import type {
+  ArchetypeAssignedFinding,
+  ArchetypeStampedFinding,
+  PersistedFinding,
+} from './review-findings.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -174,7 +182,7 @@ export interface ReviewPoster {
 }
 
 export interface ReviewArchetypeAssigner {
-  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeStampedFinding[]>;
+  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeAssignedFinding[]>;
 }
 
 export interface ReviewManifestBuilder {
@@ -548,14 +556,20 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const archetypeStampedFindings =
+    const archetypeAssignedFindings =
       await this.#archetypeAssigner.assignArchetypes(persistedFindings);
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const postable = synthesizePostableReview({
+      archetypeAssignedFindings,
+      agentOutputs: input.agentOutputs,
+      changedLineCount: input.changedLineCount,
+      rawFindingCount: synthesized.rawFindingCount,
+    });
     await this.#postReviewResult(
       input.target,
-      archetypeStampedFindings,
+      postable.findings,
       input.siblingShas,
-      synthesized.summary,
+      postable.summary,
     );
   }
 

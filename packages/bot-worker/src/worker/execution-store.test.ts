@@ -118,7 +118,7 @@ describe('ConvexExecutionStore', () => {
       findingId: 'finding-1',
       embedding: [0.1, 0.2, 0.3],
     });
-    expect(assigned).toEqual({ archetypeId: 'archetype-1' });
+    expect(assigned).toEqual({ archetypeId: 'archetype-1', suppressionWeight: 0.25 });
   });
 
   it('records an Agent run with Cross-Repo Search rationale', async () => {
@@ -184,6 +184,6 @@ class FakeConvexClient implements ConvexExecutionClient {
     args: Record<string, unknown>,
   ) {
     this.actions.push({ args });
-    return { archetypeId: 'archetype-1' };
+    return { archetypeId: 'archetype-1', suppressionWeight: 0.25 };
   }
 }

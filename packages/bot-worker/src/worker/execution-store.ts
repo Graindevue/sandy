@@ -100,9 +100,10 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
   async assignArchetype(input: {
     findingId: string;
     embedding: number[];
-  }): Promise<{ archetypeId: string }> {
+  }): Promise<{ archetypeId: string; suppressionWeight: number }> {
     return (await this.#client.action(refs.archetypes.assignOrCreateArchetype, input)) as {
       archetypeId: string;
+      suppressionWeight: number;
     };
   }
 
