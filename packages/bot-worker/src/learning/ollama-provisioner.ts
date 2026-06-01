@@ -185,6 +185,7 @@ function defaultRunOllamaVersion(binary: string): Promise<void> {
 function defaultStartOllama(input: { binary: string; host: string }): ChildProcess {
   return spawn(input.binary, ['serve'], {
     detached: true,
+    env: { ...process.env, OLLAMA_HOST: input.host },
     stdio: 'ignore',
   });
 }
