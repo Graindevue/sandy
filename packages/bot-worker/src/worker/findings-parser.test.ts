@@ -106,6 +106,43 @@ describe('parseFindingsPayload', () => {
     });
   });
 
+  it('coerces a near-miss confidence to a valid 0-5 score', () => {
+    const withConfidence = (confidence: string) => `<findings>{
+      "crossRepoSearch": { "status": "skipped", "trigger": "none", "rationale": "n/a" },
+      "findings": [{
+        "severity": "P1",
+        "confidence": ${confidence},
+        "agentKey": "test-coverage",
+        "anchor": { "repo": "acme/widget", "path": "src/a.ts", "lineStart": 1, "lineEnd": 1 },
+        "summary": "x",
+        "evidence": "y",
+        "category": "test-coverage"
+      }]
+    }</findings>`;
+
+    expect(parseFindingsPayload(withConfidence('3.7')).findings[0]?.confidence).toBe(4);
+    expect(parseFindingsPayload(withConfidence('7')).findings[0]?.confidence).toBe(5);
+    expect(parseFindingsPayload(withConfidence('-2')).findings[0]?.confidence).toBe(0);
+    expect(parseFindingsPayload(withConfidence('"4"')).findings[0]?.confidence).toBe(4);
+  });
+
+  it('rejects a non-numeric confidence', () => {
+    expect(() =>
+      parseFindingsPayload(`<findings>{
+        "crossRepoSearch": { "status": "skipped", "trigger": "none", "rationale": "n/a" },
+        "findings": [{
+          "severity": "P1",
+          "confidence": "high",
+          "agentKey": "logic",
+          "anchor": { "repo": "acme/widget", "path": "src/a.ts", "lineStart": 1, "lineEnd": 1 },
+          "summary": "x",
+          "evidence": "y",
+          "category": "logic"
+        }]
+      }</findings>`),
+    ).toThrow(/confidence must be a number/);
+  });
+
   it('rejects malformed output with an actionable error', () => {
     expect(() =>
       parseFindingsPayload(`<findings>{

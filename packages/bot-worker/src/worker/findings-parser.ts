@@ -11,7 +11,6 @@ import type {
 
 const FINDINGS_BLOCK = /<findings>\s*([\s\S]*?)\s*<\/findings>/gi;
 const SEVERITIES = new Set<Severity>(['P0', 'P1', 'P2']);
-const CONFIDENCES = new Set<Confidence>([0, 1, 2, 3, 4, 5]);
 const CROSS_REPO_SEARCH_STATUSES = new Set<CrossRepoSearchStatus>(['searched', 'skipped']);
 const CROSS_REPO_SEARCH_TRIGGERS = new Set<CrossRepoSearchTrigger>([
   'manifest',
@@ -204,10 +203,16 @@ function requireSeverity(value: unknown, where: string): Severity {
 }
 
 function requireConfidence(value: unknown, where: string): Confidence {
-  if (!CONFIDENCES.has(value as Confidence)) {
-    throw new Error(`${where} must be an integer from 0 to 5`);
+  // Confidence is a soft 0-5 score, not a structural field. Coerce a model's
+  // near-miss — a float, a numeric string, or an out-of-range number — to the
+  // nearest valid value rather than discarding the whole findings payload over
+  // it (anchor / severity stay strict). Truly non-numeric input still throws.
+  const numeric =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`${where} must be a number from 0 to 5`);
   }
-  return value as Confidence;
+  return Math.min(5, Math.max(0, Math.round(numeric))) as Confidence;
 }
 
 function requireCrossRepoSearchStatus(value: unknown, where: string): CrossRepoSearchStatus {
