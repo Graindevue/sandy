@@ -246,9 +246,23 @@ You are running inside the checked-out PR worktree. Review the diff and emit exa
     "rationale": "Why you searched sibling Repos, or why no cross-repo contract risk was detected.",
     "searchedRepos": ["owner/name"]
   },
-  "findings": []
+  "findings": [
+    {
+      "severity": "P0" | "P1" | "P2",
+      "confidence": 0,
+      "agentKey": "<your agent key>",
+      "anchor": { "repo": "owner/name", "path": "relative/path/from/repo/root.ts", "lineStart": 42, "lineEnd": 45 },
+      "crossRepoReferences": [{ "repo": "owner/sibling-repo", "path": "relative/path.ts", "line": 31 }],
+      "summary": "One sentence describing the issue",
+      "evidence": "Why this is an issue, with code quotes or rg results",
+      "suggestedFix": "Optional: how to fix",
+      "category": "<your category>"
+    }
+  ]
 }
 </findings>
+
+The finding above is an illustrative shape, not a real finding. "anchor" is REQUIRED on every finding and must be an object with repo/path/lineStart/lineEnd on an in-diff line. Omit "crossRepoReferences" unless you confirmed affected sibling-Repo consumers. Emit "findings": [] when you find nothing.
 `;
 }
 
