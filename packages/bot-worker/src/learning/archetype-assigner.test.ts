@@ -19,14 +19,14 @@ const finding: Finding = {
 };
 
 describe('FindingArchetypeAssigner', () => {
-  it('embeds persisted Finding summaries and returns archetype-stamped Findings', async () => {
+  it('embeds persisted Finding evidence and returns archetype-stamped Findings', async () => {
     const embedder = new FakeEmbedder();
     const store = new FakeArchetypeStore();
     const assigner = new FindingArchetypeAssigner(embedder, store);
 
     const stamped = await assigner.assignArchetypes([{ id: 'finding-1', finding }]);
 
-    expect(embedder.summaries).toEqual(['The cache key ignores the tenant id.']);
+    expect(embedder.texts).toEqual(['The lookup only uses userId.']);
     expect(store.assignments).toEqual([{ findingId: 'finding-1', embedding: [0.1, 0.2, 0.3] }]);
     expect(stamped).toEqual([
       {
@@ -67,16 +67,16 @@ describe('FindingArchetypeAssigner', () => {
 });
 
 class FakeEmbedder {
-  summaries: string[] = [];
+  texts: string[] = [];
 
-  async embedFindingSummary(summary: string): Promise<number[]> {
-    this.summaries.push(summary);
+  async embedFindingText(text: string): Promise<number[]> {
+    this.texts.push(text);
     return [0.1, 0.2, 0.3];
   }
 }
 
 class ThrowingEmbedder {
-  async embedFindingSummary(): Promise<number[]> {
+  async embedFindingText(): Promise<number[]> {
     throw new Error('Ollama embedding request failed: connect ECONNREFUSED 127.0.0.1:11434');
   }
 }

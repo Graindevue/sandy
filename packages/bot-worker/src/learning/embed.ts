@@ -28,8 +28,8 @@ export class OllamaFindingEmbedder {
     this.#dimensions = options.dimensions ?? FINDING_EMBEDDING_DIMENSIONS;
   }
 
-  async embedFindingSummary(summary: string): Promise<number[]> {
-    const response = await this.#requestEmbedding(summary);
+  async embedFindingText(text: string): Promise<number[]> {
+    const response = await this.#requestEmbedding(text);
 
     if (!response.ok) {
       throw new Error(
@@ -51,7 +51,7 @@ export class OllamaFindingEmbedder {
     return embedding;
   }
 
-  async #requestEmbedding(summary: string): Promise<Response> {
+  async #requestEmbedding(text: string): Promise<Response> {
     try {
       return await this.#fetch(this.#endpoint, {
         method: 'POST',
@@ -60,7 +60,7 @@ export class OllamaFindingEmbedder {
         },
         body: JSON.stringify({
           model: this.#model,
-          prompt: summary,
+          prompt: text,
         }),
       });
     } catch (error) {

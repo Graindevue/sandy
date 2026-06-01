@@ -14,7 +14,7 @@ describe('OllamaFindingEmbedder', () => {
       fetch: fakeFetch,
     });
 
-    const embedding = await embedder.embedFindingSummary('The cache key ignores the tenant id.');
+    const embedding = await embedder.embedFindingText('The cache key ignores the tenant id.');
 
     expect(embedding).toEqual(vector);
     expect(embedding).toHaveLength(FINDING_EMBEDDING_DIMENSIONS);
@@ -37,7 +37,7 @@ describe('OllamaFindingEmbedder', () => {
       dimensions: 3,
     });
 
-    await expect(embedder.embedFindingSummary('summary')).resolves.toEqual([0.1, 0.2, 0.3]);
+    await expect(embedder.embedFindingText('summary')).resolves.toEqual([0.1, 0.2, 0.3]);
   });
 
   it('uses a configured Ollama host', async () => {
@@ -53,7 +53,7 @@ describe('OllamaFindingEmbedder', () => {
       dimensions: 3,
     });
 
-    await embedder.embedFindingSummary('The cache key ignores the tenant id.');
+    await embedder.embedFindingText('The cache key ignores the tenant id.');
 
     expect(calls[0]?.input).toBe('http://ollama.internal:11434/api/embeddings');
   });
@@ -63,7 +63,7 @@ describe('OllamaFindingEmbedder', () => {
       fetch: async () => new Response('model not found', { status: 404 }),
     });
 
-    await expect(embedder.embedFindingSummary('summary')).rejects.toThrow(
+    await expect(embedder.embedFindingText('summary')).rejects.toThrow(
       /Ollama embedding request failed with 404: model not found/,
     );
   });
@@ -75,7 +75,7 @@ describe('OllamaFindingEmbedder', () => {
       },
     });
 
-    await expect(embedder.embedFindingSummary('summary')).rejects.toThrow(
+    await expect(embedder.embedFindingText('summary')).rejects.toThrow(
       /Ollama embedding request failed: connect ECONNREFUSED 127\.0\.0\.1:11434/,
     );
   });

@@ -1,7 +1,21 @@
 import type { ArchetypeAssignedFinding, PersistedFinding } from '../worker/review-findings.js';
 
-export interface FindingSummaryEmbedder {
-  embedFindingSummary(summary: string): Promise<number[]>;
+export interface FindingTextEmbedder {
+  embedFindingText(text: string): Promise<number[]>;
+}
+
+/**
+ * Text fed to the embedder for archetype clustering. We embed the finding's
+ * `evidence`, not its `summary`: summaries vary by surface detail (e.g. the
+ * specific route name) which scatters semantically-identical findings below the
+ * similarity threshold, whereas the evidence describes the underlying mechanism
+ * in shared vocabulary. Validated on real findings during the Phase 3.1
+ * acceptance test (issue #41): embedding evidence gives a clean in-bucket
+ * separation margin where summary (and even summary+evidence) do not. Falls
+ * back to the summary if evidence is empty.
+ */
+export function archetypeEmbeddingInput(finding: { summary: string; evidence: string }): string {
+  return finding.evidence.trim().length > 0 ? finding.evidence : finding.summary;
 }
 
 export interface ArchetypeAssignmentStore {
@@ -18,12 +32,12 @@ export interface FindingArchetypeAssignerLogger {
 const defaultLogger: FindingArchetypeAssignerLogger = console;
 
 export class FindingArchetypeAssigner {
-  readonly #embedder: FindingSummaryEmbedder;
+  readonly #embedder: FindingTextEmbedder;
   readonly #store: ArchetypeAssignmentStore;
   readonly #logger: FindingArchetypeAssignerLogger;
 
   constructor(
-    embedder: FindingSummaryEmbedder,
+    embedder: FindingTextEmbedder,
     store: ArchetypeAssignmentStore,
     options: { logger?: FindingArchetypeAssignerLogger } = {},
   ) {
@@ -52,7 +66,9 @@ export class FindingArchetypeAssigner {
     const stamped: ArchetypeAssignedFinding[] = [];
 
     for (const persisted of findings) {
-      const embedding = await this.#embedder.embedFindingSummary(persisted.finding.summary);
+      const embedding = await this.#embedder.embedFindingText(
+        archetypeEmbeddingInput(persisted.finding),
+      );
       const { archetypeId, suppressionWeight } = await this.#store.assignArchetype({
         findingId: persisted.id,
         embedding,
