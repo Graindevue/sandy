@@ -1,4 +1,3 @@
-import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { internal } from './_generated/api.js';
 import type { Id } from './_generated/dataModel.js';
@@ -12,6 +11,7 @@ import {
   query,
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
+import { embedFindingSummary } from './openaiEmbeddings.js';
 import { TEXT_EMBEDDING_3_SMALL_DIMENSIONS } from './schema.js';
 
 const ARCHETYPE_SIMILARITY_THRESHOLD = 0.85;
@@ -19,8 +19,6 @@ const MAX_EXAMPLE_FINDING_IDS = 5;
 const DEFAULT_ARCHETYPE_QUERY_LIMIT = 50;
 const DEFAULT_CLUSTER_BATCH_SIZE = 20;
 const MAX_CLUSTER_BATCH_SIZE = 50;
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
-const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
 
 type AssignmentContext = {
   productId: Id<'products'>;
@@ -34,37 +32,6 @@ type UnclusteredFinding = {
 
 type AssignmentResult = {
   archetypeId: Id<'archetypes'>;
-};
-
-type AssignmentContextReference = FunctionReference<
-  'query',
-  'internal',
-  { findingId: Id<'findings'> },
-  AssignmentContext | null
->;
-type PersistAssignmentReference = FunctionReference<
-  'mutation',
-  'internal',
-  {
-    findingId: Id<'findings'>;
-    embedding: number[];
-    matchedArchetypeId?: Id<'archetypes'>;
-  },
-  AssignmentResult
->;
-type UnclusteredFindingsReference = FunctionReference<
-  'query',
-  'internal',
-  { limit?: number },
-  UnclusteredFinding[]
->;
-
-const internalRefs = internal as unknown as {
-  archetypes: {
-    assignmentContext: AssignmentContextReference;
-    persistAssignment: PersistAssignmentReference;
-    unclusteredFindings: UnclusteredFindingsReference;
-  };
 };
 
 const assignmentResult = v.object({ archetypeId: v.id('archetypes') });
@@ -119,7 +86,7 @@ export const clusterRecentFindings = internalAction({
   }),
   handler: async (ctx, { limit }) => {
     const findings: UnclusteredFinding[] = await ctx.runQuery(
-      internalRefs.archetypes.unclusteredFindings,
+      internal.archetypes.unclusteredFindings,
       limit === undefined ? {} : { limit },
     );
     let clustered = 0;
@@ -242,14 +209,14 @@ async function assignEmbeddingToArchetype(
 ): Promise<AssignmentResult> {
   ensureEmbeddingDimensions(args.embedding);
   const context: AssignmentContext | null = await ctx.runQuery(
-    internalRefs.archetypes.assignmentContext,
+    internal.archetypes.assignmentContext,
     { findingId: args.findingId },
   );
   if (context === null) {
     throw new Error(`Finding ${args.findingId} does not exist or is missing Product context`);
   }
   if (context.currentArchetypeId !== undefined) {
-    return await ctx.runMutation(internalRefs.archetypes.persistAssignment, {
+    return await ctx.runMutation(internal.archetypes.persistAssignment, {
       findingId: args.findingId,
       embedding: args.embedding,
       matchedArchetypeId: context.currentArchetypeId,
@@ -265,7 +232,7 @@ async function assignEmbeddingToArchetype(
   const matchedArchetypeId =
     match !== undefined && match._score >= ARCHETYPE_SIMILARITY_THRESHOLD ? match._id : undefined;
 
-  return await ctx.runMutation(internalRefs.archetypes.persistAssignment, {
+  return await ctx.runMutation(internal.archetypes.persistAssignment, {
     findingId: args.findingId,
     embedding: args.embedding,
     ...(matchedArchetypeId === undefined ? {} : { matchedArchetypeId }),
@@ -315,60 +282,6 @@ function clampLimit(value: number | undefined, fallback: number, max: number): n
     return fallback;
   }
   return Math.max(1, Math.min(Math.floor(value), max));
-}
-
-async function embedFindingSummary(summary: string): Promise<number[]> {
-  const response = await fetchLike(OPENAI_EMBEDDINGS_URL, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${openAiApiKeyFromEnv()}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: OPENAI_EMBEDDING_MODEL,
-      input: summary,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `OpenAI embedding request failed with ${response.status}: ${await response.text()}`,
-    );
-  }
-
-  const body = (await response.json()) as {
-    data?: Array<{ embedding?: unknown }>;
-  };
-  const embedding = body.data?.[0]?.embedding;
-  if (!Array.isArray(embedding) || !embedding.every((item) => typeof item === 'number')) {
-    throw new Error('OpenAI embedding response did not include a numeric embedding');
-  }
-  return embedding;
-}
-
-function openAiApiKeyFromEnv(): string {
-  const apiKey = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env?.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is required to embed Finding summaries');
-  }
-  return apiKey;
-}
-
-function fetchLike(
-  input: string,
-  init: {
-    method: string;
-    headers: Record<string, string>;
-    body: string;
-  },
-): Promise<{
-  ok: boolean;
-  status: number;
-  json(): Promise<unknown>;
-  text(): Promise<string>;
-}> {
-  return (globalThis as unknown as { fetch: typeof fetchLike }).fetch(input, init);
 }
 
 function warn(message: string, error: unknown): void {

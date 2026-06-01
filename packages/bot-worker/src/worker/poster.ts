@@ -1,4 +1,5 @@
 import type { CrossRepoReference, Finding, SiblingShas } from '@sandy/shared-types';
+import type { ArchetypeStampedFinding } from './review-findings.js';
 
 export interface PullRequestTarget {
   owner: string;
@@ -6,15 +7,6 @@ export interface PullRequestTarget {
   pullNumber: number;
   /** The PR head SHA GitHub requires when creating inline review comments. */
   headSha: string;
-}
-
-export interface PersistedFinding {
-  id: string;
-  finding: Finding;
-}
-
-export interface ArchetypeStampedFinding extends PersistedFinding {
-  archetypeId: string;
 }
 
 export interface PostedFinding {

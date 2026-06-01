@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   GitHubReviewPoster,
   IssueCommentInput,
-  PersistedFinding,
   PullRequestTarget,
   ReviewCommentInput,
 } from './poster.js';
 import { formatFindingBody, PullRequestPoster } from './poster.js';
+import type { ArchetypeStampedFinding } from './review-findings.js';
 
 const baseFinding: Finding = {
   severity: 'P1',
@@ -267,7 +267,10 @@ describe('PullRequestPoster', () => {
   });
 });
 
-function persistedFinding(overrides: Partial<Finding> = {}, id = 'finding-1'): PersistedFinding {
+function persistedFinding(
+  overrides: Partial<Finding> = {},
+  id = 'finding-1',
+): ArchetypeStampedFinding {
   return { id, archetypeId: 'archetype-1', finding: { ...baseFinding, ...overrides } };
 }
 

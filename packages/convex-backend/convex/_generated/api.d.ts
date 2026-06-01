@@ -14,6 +14,7 @@ import type * as archetypeLabels from "../archetypeLabels.js";
 import type * as archetypes from "../archetypes.js";
 import type * as crons from "../crons.js";
 import type * as findings from "../findings.js";
+import type * as openaiEmbeddings from "../openaiEmbeddings.js";
 import type * as products from "../products.js";
 import type * as pullRequests from "../pullRequests.js";
 import type * as reviewJobReaper from "../reviewJobReaper.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   archetypes: typeof archetypes;
   crons: typeof crons;
   findings: typeof findings;
+  openaiEmbeddings: typeof openaiEmbeddings;
   products: typeof products;
   pullRequests: typeof pullRequests;
   reviewJobReaper: typeof reviewJobReaper;

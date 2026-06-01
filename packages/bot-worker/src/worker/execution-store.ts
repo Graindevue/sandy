@@ -1,12 +1,13 @@
+import { api } from '@sandy/convex-backend/api';
 import type { Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
-import { type FunctionReference, makeFunctionReference } from 'convex/server';
-import type { PersistedFinding } from './poster.js';
+import type { FunctionReference } from 'convex/server';
 import type {
   RecordAgentRunInput,
   RecordSynthesizedReviewInput,
   ReviewExecutionStore,
   ReviewJobContext,
 } from './review-executor.js';
+import type { PersistedFinding } from './review-findings.js';
 
 type QueryRef = FunctionReference<'query'>;
 type MutationRef = FunctionReference<'mutation'>;
@@ -26,25 +27,25 @@ interface RecordFindingInput {
 
 const refs = {
   reviewJobs: {
-    getForWorker: makeFunctionReference<'query'>('reviewJobs:getForWorker'),
-    getStatus: makeFunctionReference<'query'>('reviewJobs:getStatus'),
-    setSiblingShas: makeFunctionReference<'mutation'>('reviewJobs:setSiblingShas'),
-    markCompleted: makeFunctionReference<'mutation'>('reviewJobs:markCompleted'),
-    markFailed: makeFunctionReference<'mutation'>('reviewJobs:markFailed'),
+    getForWorker: api.reviewJobs.getForWorker,
+    getStatus: api.reviewJobs.getStatus,
+    setSiblingShas: api.reviewJobs.setSiblingShas,
+    markCompleted: api.reviewJobs.markCompleted,
+    markFailed: api.reviewJobs.markFailed,
   },
   findings: {
-    recordFinding: makeFunctionReference<'mutation'>('findings:recordFinding'),
-    recordSynthesizedReview: makeFunctionReference<'mutation'>('findings:recordSynthesizedReview'),
-    markPosted: makeFunctionReference<'mutation'>('findings:markPosted'),
+    recordFinding: api.findings.recordFinding,
+    recordSynthesizedReview: api.findings.recordSynthesizedReview,
+    markPosted: api.findings.markPosted,
   },
   archetypes: {
-    assignOrCreateArchetype: makeFunctionReference<'action'>('archetypes:assignOrCreateArchetype'),
+    assignOrCreateArchetype: api.archetypes.assignOrCreateArchetype,
   },
   agentRuns: {
-    record: makeFunctionReference<'mutation'>('agentRuns:record'),
+    record: api.agentRuns.record,
   },
   apiSurfaceManifests: {
-    record: makeFunctionReference<'mutation'>('apiSurfaceManifests:record'),
+    record: api.apiSurfaceManifests.record,
   },
 };
 

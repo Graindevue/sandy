@@ -20,13 +20,12 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
-  ArchetypeStampedFinding,
-  PersistedFinding,
   PostedFinding,
   PostReviewResultInput,
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
+import type { ArchetypeStampedFinding, PersistedFinding } from './review-findings.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,

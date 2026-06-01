@@ -1,4 +1,4 @@
-import type { ArchetypeStampedFinding, PersistedFinding } from '../worker/poster.js';
+import type { ArchetypeStampedFinding, PersistedFinding } from '../worker/review-findings.js';
 
 export interface FindingSummaryEmbedder {
   embedFindingSummary(summary: string): Promise<number[]>;

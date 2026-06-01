@@ -1,7 +1,6 @@
 import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
-import type { ArchetypeStampedFinding, PersistedFinding } from './poster.js';
 import {
   type RecordAgentRunInput,
   type RecordSynthesizedReviewInput,
@@ -13,6 +12,7 @@ import {
   type ReviewJobContext,
   type ReviewPoster,
 } from './review-executor.js';
+import type { ArchetypeStampedFinding, PersistedFinding } from './review-findings.js';
 
 interface RecordedFinding {
   reviewJobId: string;
