@@ -145,8 +145,8 @@ const MAX_ITERATIONS = 10;
 // existence: a file-existence check passed even when platform-native bindings
 // were missing, which led to agents committing code without running tests.
 // Sandy builds with `pnpm -r` (no turbo), so we probe vitest directly.
-// The second step configures a login-free anonymous Convex deployment and warms
-// the convex-local-backend binary (ADR 0013) so `pnpm --filter
+// The convex step then configures a login-free anonymous Convex deployment and
+// warms the convex-local-backend binary (ADR 0013) so `pnpm --filter
 // @sandy/convex-backend build` (convex codegen) works for the agents and the
 // merge gate. `--typecheck disable` keeps sandbox setup decoupled from
 // TypeScript — the agents run `pnpm type-check` themselves. CONVEX_AGENT_MODE is
@@ -161,17 +161,20 @@ const MAX_ITERATIONS = 10;
 // the host's gitignored packages/convex-backend/.env.local is visible inside the
 // sandbox. dotenv won't override an already-set env var and convex treats an
 // empty CONVEX_DEPLOYMENT as unset, so this pins the anonymous path everywhere.
+//
+// Both steps are ONE hook chained with `&&`, not two array entries: Sandcastle
+// runs onSandboxReady hooks concurrently (Effect.all, unbounded). As separate
+// hooks, `pnpm --filter @sandy/convex-backend exec convex` races the still-
+// running `pnpm install` and resolves the convex bin from a half-linked
+// node_modules — failing with `Command "convex" not found` (exit 254). Chaining
+// forces install → codegen, and skips convex if the install itself fails.
 const hooks = {
   sandbox: {
     onSandboxReady: [
       {
         command:
-          'pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile',
-        timeoutMs: 600_000,
-      },
-      {
-        command:
-          'CONVEX_DEPLOYMENT= pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
+          '( pnpm exec vitest --version >/dev/null 2>&1 || CI=true pnpm install --frozen-lockfile )' +
+          ' && CONVEX_DEPLOYMENT= pnpm --filter @sandy/convex-backend exec convex dev --once --typecheck disable',
         timeoutMs: 600_000,
       },
     ],
