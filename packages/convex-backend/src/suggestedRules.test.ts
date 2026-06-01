@@ -39,11 +39,11 @@ describe('SuggestedRule inference from reactions', () => {
       sourceArchetypeId: archetypeId,
       description: 'A second draft should not be created.',
     });
-    const pending = await invoke(subscribePending, ctx, {});
+    const created = ctx.db.getDoc(createdId);
 
     expect(createdId).toBe('suggestedRules:1');
     expect(duplicateId).toBeNull();
-    expect(pending).toEqual([
+    expect(created).toEqual(
       expect.objectContaining({
         _id: createdId,
         status: 'suggested',
@@ -51,11 +51,11 @@ describe('SuggestedRule inference from reactions', () => {
         sourceArchetypeId: archetypeId,
         description: 'Suppress duplicate test-coverage findings for already-covered branches.',
       }),
-    ]);
+    );
     expect(ctx.db.getDoc(archetypeId)).toEqual(expect.objectContaining({ suppressionWeight: 1 }));
     expect(ctx.db.tables.get('suggestedRules')).toHaveLength(1);
 
-    const evidence = JSON.parse(String(pending[0].evidence));
+    const evidence = JSON.parse(String(created?.evidence));
     expect(evidence).toEqual(
       expect.objectContaining({
         sourceArchetypeId: archetypeId,
@@ -83,6 +83,30 @@ describe('SuggestedRule inference from reactions', () => {
         }),
       ]),
     );
+  });
+
+  it('subscribes only to SuggestedRules awaiting promotion work', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId } = await seedArchetypeWithFindings(ctx);
+    await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'suggested'));
+    const suppressionId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'promoteToSuppression'),
+    );
+    const positiveId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'promoteToPositive'),
+    );
+    await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'rejected'));
+    await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'promoted'));
+
+    const pending = await invoke(subscribePending, ctx, {});
+
+    expect(pending.map((rule) => rule._id)).toEqual([positiveId, suppressionId]);
+    expect(pending.map((rule) => rule.status)).toEqual([
+      'promoteToPositive',
+      'promoteToSuppression',
+    ]);
   });
 
   it('daily inference action drafts from reactions and creates the SuggestedRule', async () => {
@@ -320,6 +344,17 @@ function reaction(reactionId: string, findingId: string, kind: string, replyText
     ...(replyText === undefined ? {} : { replyText }),
     findingSummary: `Summary for ${findingId}`,
     createdAt: 1,
+  };
+}
+
+function suggestedRule(sourceArchetypeId: string, status: string): Record<string, unknown> {
+  return {
+    productId: 'products:1',
+    type: status === 'promoteToPositive' ? 'positive' : 'suppression',
+    status,
+    description: `Rule with status ${status}`,
+    sourceArchetypeId,
+    evidence: '{}',
   };
 }
 

@@ -22,6 +22,7 @@ import {
   inferPrMergeStateSignals,
   startMergeStateSignalCron,
 } from './learning/merge-state-inferrer.js';
+import { PromotionWorker } from './learning/promotion-worker.js';
 import { capturePrCloseReactions as captureCloseReactions } from './learning/reaction-capture.js';
 import { captureCommentReply as captureReplyFeedback } from './learning/reply-handler.js';
 import { startWebhookServer } from './webhook/server.js';
@@ -214,6 +215,7 @@ export async function main(): Promise<void> {
     maxConcurrentJobs: config.maxConcurrentJobs,
   });
   claimant.start();
+  new PromotionWorker({ client: reactiveClient }).start();
 
   await startWebhookServer(config.port, {
     webhookSecret: config.webhookSecret,
