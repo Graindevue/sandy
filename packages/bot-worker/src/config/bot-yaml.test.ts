@@ -7,8 +7,9 @@ import { parseBotConfig } from './bot-yaml.js';
 /**
  * Validates the `.config/bot.yaml` parser against the documented schema
  * (`docs/setup/bot-yaml.md`): Products, the Repos they contain, and an optional
- * per-Product Agent selection. A valid document parses into a normalized shape;
- * every invalid one throws a message that names what is wrong.
+ * per-Product Agent selection and runtime overrides. A valid document parses
+ * into a normalized shape; every invalid one throws a message that names what is
+ * wrong.
  */
 
 const MINIMAL = `
@@ -56,11 +57,13 @@ describe('parseBotConfig', () => {
     expect(product?.repos[0]?.defaultBranch).toBe('main');
     // `fullName` is derived, not authored.
     expect(product?.repos[0]?.fullName).toBe('tony-co/acme-backend');
-    // No `agents:` => empty list (caller applies default selection).
+    // No `agents:` => default/auto selection and no runtime overrides.
     expect(product?.agents).toEqual([]);
+    expect(product?.agentSelectionMode).toBe('default');
+    expect(product?.agentOverrides).toEqual({});
   });
 
-  it('parses a full multi-Product config and preserves the Agent selection', () => {
+  it('parses a full multi-Product config and preserves list-form exact Agent selection', () => {
     const config = parseBotConfig(FULL);
 
     expect(config.products).toHaveLength(2);
@@ -70,8 +73,102 @@ describe('parseBotConfig', () => {
       'tony-co/acme-desktop',
     ]);
     expect(acme?.agents).toEqual(['logic']);
+    expect(acme?.agentSelectionMode).toBe('explicit');
+    expect(acme?.agentOverrides).toEqual({});
     const sandy = config.products.find((p) => p.slug === 'sandy');
     expect(sandy?.repos).toHaveLength(1);
+    expect(sandy?.agentSelectionMode).toBe('default');
+  });
+
+  it('parses object-form exact selection and runtime overrides', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      enable: [logic, security]
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+        security:
+          vendor: claude
+          model: opus
+`;
+
+    const product = parseBotConfig(yaml).products[0];
+
+    expect(product?.agents).toEqual(['logic', 'security']);
+    expect(product?.agentSelectionMode).toBe('explicit');
+    expect(product?.agentOverrides).toEqual({
+      logic: { vendor: 'codex', model: 'gpt-5.6' },
+      security: { vendor: 'claude', model: 'opus' },
+    });
+  });
+
+  it('allows object-form runtime overrides without exact selection', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+`;
+
+    const product = parseBotConfig(yaml).products[0];
+
+    expect(product?.agents).toEqual([]);
+    expect(product?.agentSelectionMode).toBe('default');
+    expect(product?.agentOverrides).toEqual({ logic: { vendor: 'codex', model: 'gpt-5.6' } });
+  });
+
+  it('treats an empty object-form agents mapping as default selection', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents: {}
+`;
+
+    const product = parseBotConfig(yaml).products[0];
+
+    expect(product?.agents).toEqual([]);
+    expect(product?.agentSelectionMode).toBe('default');
+    expect(product?.agentOverrides).toEqual({});
+  });
+
+  it('allows empty runtime overrides as a no-op', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides: {}
+`;
+
+    const product = parseBotConfig(yaml).products[0];
+
+    expect(product?.agentSelectionMode).toBe('default');
+    expect(product?.agentOverrides).toEqual({});
   });
 
   it('throws on YAML that is not a mapping', () => {
@@ -204,7 +301,7 @@ products:
     expect(repo?.fullName).toBe('tony-co/acme-backend');
   });
 
-  it('throws when `agents` is not a list of strings', () => {
+  it('throws when list-form `agents` is not a list of strings', () => {
     const yaml = `
 products:
   - slug: acme
@@ -217,6 +314,71 @@ products:
       - 123
 `;
     expect(() => parseBotConfig(yaml)).toThrow(/agents/);
+  });
+
+  it('throws when object-form `agents.enable` is not a list of strings', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      enable: [logic, 123]
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(/agents\.enable/);
+  });
+
+  it('throws when a runtime override omits vendor or model', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides:
+        logic:
+          model: gpt-5.6
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(/vendor/);
+  });
+
+  it('throws when a runtime override uses an unsupported vendor', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides:
+        logic:
+          vendor: palm
+          model: unknown
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(/vendor/);
+  });
+
+  it('throws when object-form `agents` contains unsupported keys', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      disable: [style]
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(/disable/);
   });
 
   it('throws on an empty document', () => {

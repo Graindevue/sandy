@@ -69,7 +69,7 @@ async function readBotConfig(path: string): Promise<BotConfig> {
  */
 function assertAgentKeysExist(config: BotConfig, agents: Map<string, AgentDefinition>): void {
   for (const product of config.products) {
-    for (const key of product.agents) {
+    for (const key of [...product.agents, ...Object.keys(product.agentOverrides)]) {
       if (!agents.has(key)) {
         const known = [...agents.keys()].sort().join(', ');
         throw new Error(
@@ -90,17 +90,19 @@ function resolveAgents(
   product: ProductConfig,
   agents: Map<string, AgentDefinition>,
 ): AgentDefinition[] {
-  if (product.agents.length > 0) {
+  if (product.agentSelectionMode === 'explicit') {
     return product.agents.map((key) => {
       const agent = agents.get(key);
       if (agent === undefined) {
         // Unreachable: loadConfig cross-validates keys. Guarded for type safety.
         throw new Error(`unknown Agent key ${JSON.stringify(key)}`);
       }
-      return agent;
+      return applyProductRuntimeOverride(product, { ...agent, defaultEnabled: true });
     });
   }
-  return [...agents.values()].filter((agent) => agent.defaultEnabled !== false);
+  return [...agents.values()]
+    .filter((agent) => agent.defaultEnabled !== false)
+    .map((agent) => applyProductRuntimeOverride(product, agent));
 }
 
 /**
@@ -192,4 +194,15 @@ function buildIndex(config: LoadedConfig): Map<string, ResolvedRepo> {
 
 function repoKey(owner: string, name: string): string {
   return `${owner.toLowerCase()}/${name.toLowerCase()}`;
+}
+
+export function applyProductRuntimeOverride(
+  product: ProductConfig,
+  agent: AgentDefinition,
+): AgentDefinition {
+  const override = product.agentOverrides[agent.key];
+  if (override === undefined) {
+    return agent;
+  }
+  return { ...agent, vendor: override.vendor, model: override.model };
 }

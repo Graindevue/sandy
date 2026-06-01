@@ -24,13 +24,26 @@ products:
         name: acme-desktop
         defaultBranch: main
     # Optional: choose which Agents run for this Product, by Agent key (the file
-    # name without .md in agents/ or .config/agents/). Omit `agents` to use the
-    # default selection (every shipped Agent whose `defaultEnabled` is not false).
+    # name without .md in agents/ or .config/agents/). List form is an exact
+    # Product Agent set. Omit `agents` to use the default selection (every
+    # shipped Agent whose `defaultEnabled` is not false).
     #
     # Phase 1 runs only `logic` regardless of what you list here; listing more
     # does no harm but won't fan out until a later phase.
     agents:
       - logic
+
+    # Object form supports the same exact Product selection plus instance-owned
+    # runtime overrides. Override entries must include both `vendor` and `model`.
+    # Repo-local `.bot/agents.yaml` can enable/disable Agents, but it cannot
+    # override runtime choices.
+    #
+    # agents:
+    #   enable: [logic, security]
+    #   overrides:
+    #     logic:
+    #       vendor: codex
+    #       model: gpt-5.6
 
   # A second, unrelated Product. This one omits `agents`, so the default
   # selection applies.

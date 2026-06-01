@@ -7,7 +7,7 @@ import type { AgentDefinition } from '@sandy/shared-types';
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { BotConfigReader } from './config/bot-config-reader.js';
 import type { ProductConfig, RepoConfig } from './config/bot-yaml.js';
-import { ConfigLoader } from './config/loader.js';
+import { applyProductRuntimeOverride, ConfigLoader } from './config/loader.js';
 import {
   defaultCloneBaseDir,
   defaultConfigLoaderOptions,
@@ -400,16 +400,18 @@ export function resolveConfiguredAgents(
   if (resolved === null) {
     return [];
   }
-  if (resolved.product.agents.length > 0) {
+  if (resolved.product.agentSelectionMode === 'explicit') {
     return resolved.product.agents.map((agentKey) => {
       const agent = loader.config.agents.get(agentKey);
       if (agent === undefined) {
         throw new Error(`configured Agent ${JSON.stringify(agentKey)} is not loaded`);
       }
-      return { ...agent, defaultEnabled: true };
+      return applyProductRuntimeOverride(resolved.product, { ...agent, defaultEnabled: true });
     });
   }
-  return [...loader.config.agents.values()];
+  return [...loader.config.agents.values()].map((agent) =>
+    applyProductRuntimeOverride(resolved.product, agent),
+  );
 }
 
 export async function resolveReviewBotConfig(

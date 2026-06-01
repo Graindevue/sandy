@@ -28,6 +28,11 @@ A single reviewer persona — a system prompt + a vendor/model selection + a too
 
 Agents are NOT software components — they are configuration data. Adding a new Agent does not require code changes to Sandy.
 
+## Agent Runtime Override
+
+A configuration choice that changes an existing Agent's vendor/model selection without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime.
+_Avoid_: Agent override, custom Agent
+
 ## Finding
 
 A single issue raised by an Agent during a Review. Carries:

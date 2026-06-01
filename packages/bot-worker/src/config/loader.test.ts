@@ -128,6 +128,28 @@ describe('loadConfig', () => {
 
     await expect(loadConfig(options())).rejects.toThrow(/nonesuch/);
   });
+
+  it('rejects a bot.yaml runtime override for an unknown Agent key', async () => {
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides:
+        nonesuch:
+          vendor: codex
+          model: gpt-5.6
+`,
+    );
+
+    await expect(loadConfig(options())).rejects.toThrow(/nonesuch/);
+  });
 });
 
 describe('ConfigLoader.resolveForRepo', () => {
@@ -162,6 +184,86 @@ describe('ConfigLoader.resolveForRepo', () => {
     const resolved = loader.resolveForRepo('tony-co', 'sandy');
 
     expect(resolved?.product.slug).toBe('sandy');
+    expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
+  });
+
+  it('applies Product runtime overrides after .config/agents overrides', async () => {
+    await mkdir(layout.overridesDir, { recursive: true });
+    await writeFile(
+      join(layout.overridesDir, 'logic.md'),
+      agentMd('logic').replace('model: opus', 'model: haiku'),
+    );
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      enable: [logic]
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+`,
+    );
+
+    const loader = await ConfigLoader.create(options());
+
+    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    expect(resolved?.agents).toHaveLength(1);
+    expect(resolved?.agents[0]?.vendor).toBe('codex');
+    expect(resolved?.agents[0]?.model).toBe('gpt-5.6');
+  });
+
+  it('uses default selection when object-form agents omits enable', async () => {
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+`,
+    );
+
+    const loader = await ConfigLoader.create(options());
+
+    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
+    expect(resolved?.agents.find((a) => a.key === 'logic')?.model).toBe('gpt-5.6');
+  });
+
+  it('treats an empty object-form agents mapping as default selection', async () => {
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents: {}
+`,
+    );
+
+    const loader = await ConfigLoader.create(options());
+
+    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
     expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
   });
 

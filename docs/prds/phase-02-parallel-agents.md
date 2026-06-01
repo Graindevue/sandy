@@ -34,7 +34,7 @@ Cross-repo awareness is the headline feature, and it is **physical, not summary-
 - `src/worker/agent-selector.ts` — decides which Agents to run for this Review based on:
   - `defaultEnabled` field in Agent definition (`true` / `false` / `auto`)
   - Auto-detection: `auto` means "enable if the Repo's package.json declares the framework dependency"
-  - Per-Repo `.bot/agents.yaml` overrides
+  - Per-Repo `.bot/agents.yaml` enable / disable selection overrides
 - `src/synthesizer/` (new directory)
   - `dedup.ts` — clusters Findings within and across Agents by `(path, line proximity, summary cosine similarity)`. Drops duplicates, prefers higher-severity / higher-confidence version.
   - `score.ts` — computes the PR-level confidence score (0-5) from `(count × severity × confidence)` of open Findings + change blast radius.
@@ -67,7 +67,7 @@ products:
       - tcosentino/repo-b
     agents:
       enable: [logic, security, convex, nextjs]
-      vendors:
+      overrides:
         logic: { vendor: codex, model: gpt-5.5 }
         security: { vendor: claude, model: opus }
 ```
@@ -75,7 +75,7 @@ products:
 Per-Repo `.bot/` reading enabled:
 - `.bot/rules.md` — Repo-local Rules
 - `.bot/product-rules.md` — Product-shared Rules (merged from all Repos)
-- `.bot/agents.yaml` — per-Repo Agent enable / disable / config overrides
+- `.bot/agents.yaml` — per-Repo Agent enable / disable selection overrides
 - `.bot/ignore.gitignore` — files Sandy ignores when reading the diff
 
 ## Out of scope

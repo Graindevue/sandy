@@ -63,9 +63,14 @@ products:
       - owner: tony-co
         name: acme-desktop
         defaultBranch: main
-    # Optional: choose which Agents run for this Product. See "Agent selection".
+    # Optional: choose which Agents run for this Product and override their
+    # runtime vendor/model. See "Agent selection".
     agents:
-      - logic
+      enable: [logic, security]
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
 
   # A second, unrelated Product.
   - slug: sandy
@@ -85,7 +90,7 @@ products:
 | `slug` | string | yes | Stable identifier used in config, logs, and Convex. Lowercase, e.g. `acme`. Must be unique across the file. |
 | `name` | string | yes | Human-readable display name. |
 | `repos` | list | yes | One or more Repos (below). Must be non-empty. |
-| `agents` | list of strings | no | Agent keys to run for this Product. Omit to use the default selection (see below). |
+| `agents` | list of strings or mapping | no | Product-level Agent selection and runtime overrides. Omit to use the default selection with no overrides (see below). |
 
 These map to Sandy's `Product` type (`slug`, `name`).
 
@@ -116,20 +121,92 @@ Agent keys are the file names (without `.md`) in `agents/` and
 | `test-coverage` | Missing or over-mocked tests | claude / haiku |
 | `style` | Maintainability Biome can't catch (verbose strictness only) | codex / gpt-5.5 |
 
-When a Product omits `agents`, Sandy starts from each Agent's `defaultEnabled`
-frontmatter: `true` runs by default, `false` stays off, and `auto` runs only
-when a Product Repo declares the relevant framework dependency in `package.json`.
-The reviewed Repo can then override that selection with `.bot/agents.yaml`:
+### Selection forms
+
+Omit `agents` to use default/auto Agent selection:
+
+```yaml
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+```
+
+Use list form for an exact Product Agent set. This preserves the original
+schema:
+
+```yaml
+agents: [logic, security]
+```
+
+Use object form when you need runtime overrides:
+
+```yaml
+agents:
+  enable: [logic, security]
+  overrides:
+    logic:
+      vendor: codex
+      model: gpt-5.6
+```
+
+`agents.enable` is an exact Product Agent set, equivalent to the list form. When
+`agents.enable` is omitted, default/auto selection still applies:
+
+```yaml
+agents:
+  overrides:
+    logic:
+      vendor: codex
+      model: gpt-5.6
+```
+
+`agents: {}` and `agents.overrides: {}` are valid no-ops.
+
+When a Product omits `agents` or uses object form without `enable`, Sandy starts
+from each Agent's `defaultEnabled` frontmatter: `true` runs by default, `false`
+stays off, and `auto` runs only when a Product Repo declares the relevant
+framework dependency in `package.json`. The reviewed Repo can then enable or
+disable Agents with `.bot/agents.yaml`:
 
 ```yaml
 enable: [style]
 disable: [security]
 ```
 
+Repo-local `.bot/agents.yaml` cannot override vendor/model and cannot add Agents
+outside a Product's exact `agents` / `agents.enable` set. Runtime selection is
+operator-owned instance policy in `.config/bot.yaml`, not repo-owned policy.
+
+### Runtime overrides
+
+An Agent runtime override changes only an existing Agent's `vendor` and `model`.
+It does not change the Agent's prompt, tools, completion signal, category, or
+default-enabled behavior. To change those, replace the Agent definition with a
+matching file in `.config/agents/`.
+
+Each override entry must specify both `vendor` and `model`:
+
+```yaml
+agents:
+  overrides:
+    security:
+      vendor: claude
+      model: opus
+```
+
+Overrides apply after `.config/agents/<key>.md` is loaded. They may target any
+known Agent key and are inert unless that Agent is selected for a Review. Unknown
+Agent keys fail config load.
+
 To add a custom Agent, drop a markdown file in `.config/agents/` and reference
-its key in a Product's `agents` list. A file there with the same name as a
-shipped Agent overrides the default. The Agent definition format (frontmatter +
-system-prompt body) is documented by the shipped examples in `agents/`.
+its key in a Product's list-form `agents` value or object-form `agents.enable`.
+A file there with the same name as a shipped Agent overrides the default. The
+Agent definition format (frontmatter + system-prompt body) is documented by the
+shipped examples in `agents/`.
 
 ## Authoring tips
 

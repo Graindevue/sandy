@@ -44,7 +44,7 @@ Follow these in order. Each builds on the previous one.
 | 2 | [`convex.md`](./convex.md) | Create a Convex deployment and deploy the Phase 1 schema. |
 | 3 | [`github-app.md`](./github-app.md) | Register the "Sandy" GitHub App, install it on repos, capture credentials into `.config/.env`. |
 | 4 | [`tailscale.md`](./tailscale.md) | Expose the webhook server (host port **3007**) to GitHub via Tailscale Funnel. |
-| 5 | [`bot-yaml.md`](./bot-yaml.md) | Author `.config/bot.yaml` — declare your Products, their Repos, and Agent selection. |
+| 5 | [`bot-yaml.md`](./bot-yaml.md) | Author `.config/bot.yaml` — declare your Products, their Repos, Agent selection, and runtime overrides. |
 | 6 | [`launchd.md`](./launchd.md) | Install a launchd service that supervises the worker and runs it on boot. |
 
 After the launchd service is running and the Funnel URL is registered as the
