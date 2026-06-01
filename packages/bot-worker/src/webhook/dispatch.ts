@@ -34,18 +34,18 @@ export interface ForkDeclineCommenter {
   postForkDeclined(input: { repo: RepoRef; pullNumber: number; body: string }): Promise<void>;
 }
 
-export interface PrCloseReactionCapturer {
-  capturePrCloseReactions(input: {
+export interface PrCloseSignalCapturer {
+  capturePrCloseSignals(input: {
     repo: RepoRef;
     pullNumber: number;
     pullRequestId: string;
-    merged: boolean;
+    state: PullRequestFacts['state'];
   }): Promise<{ recorded: number } | undefined>;
 }
 
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
-  reactionCapturer?: PrCloseReactionCapturer;
+  closeSignalCapturer?: PrCloseSignalCapturer;
   reviewCanceller?: ReviewCanceller;
 }
 
@@ -103,15 +103,15 @@ export async function dispatchEvent(
   const pullRequestId = await upsertPr(sink, repoId, event, pr);
 
   if (decision.clearReviewActive) {
-    const captureResult = await options.reactionCapturer?.capturePrCloseReactions({
+    const captureResult = await options.closeSignalCapturer?.capturePrCloseSignals({
       repo,
       pullNumber: pr.number,
       pullRequestId,
-      merged: pr.state === 'merged',
+      state: pr.state,
     });
     if (captureResult !== undefined) {
       logger.info(
-        `captured ${captureResult.recorded} reaction(s) on closed PR ${fullName(repo)}#${pr.number}`,
+        `captured ${captureResult.recorded} close-time signal(s) on closed PR ${fullName(repo)}#${pr.number}`,
       );
     }
     await sink.clearOnClose(pullRequestId);

@@ -133,7 +133,7 @@ export const setReviewActive = mutation({
   },
 });
 
-/** Mark a PR closed and clear its `reviewActive` flag. */
+/** Clear the Sticky Opt-In `reviewActive` flag after a PR closes. */
 export const clearOnClose = mutation({
   args: { pullRequestId: v.id('pullRequests') },
   returns: v.null(),

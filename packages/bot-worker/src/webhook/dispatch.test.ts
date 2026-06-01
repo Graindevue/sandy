@@ -194,12 +194,12 @@ describe('dispatchEvent', () => {
       repo: RepoRef;
       pullNumber: number;
       pullRequestId: string;
-      merged: boolean;
+      state: PullRequestFacts['state'];
     }> = [];
 
     const outcome = await dispatchEvent(pr('closed'), sink, silentLogger, {
-      reactionCapturer: {
-        async capturePrCloseReactions(input) {
+      closeSignalCapturer: {
+        async capturePrCloseSignals(input) {
           captured.push(input);
           return { recorded: 1 };
         },
@@ -212,26 +212,26 @@ describe('dispatchEvent', () => {
         repo: BASE_REPO,
         pullNumber: 7,
         pullRequestId: 'pr:repo:tony-co/sandy#7',
-        merged: false,
+        state: 'closed',
       },
     ]);
     expect(sink.clearCalls).toEqual(['pr:repo:tony-co/sandy#7']);
   });
 
-  it('tells the close-time capture pass when the PR was merged', async () => {
+  it('passes the PR lifecycle state to the close-time signal pass', async () => {
     const sink = new FakeSink(true);
-    const captured: Array<{ merged: boolean }> = [];
+    const captured: Array<{ state: PullRequestFacts['state'] }> = [];
 
     await dispatchEvent(pr('closed', { state: 'merged' }), sink, silentLogger, {
-      reactionCapturer: {
-        async capturePrCloseReactions(input) {
-          captured.push({ merged: input.merged });
+      closeSignalCapturer: {
+        async capturePrCloseSignals(input) {
+          captured.push({ state: input.state });
           return { recorded: 0 };
         },
       },
     });
 
-    expect(captured).toEqual([{ merged: true }]);
+    expect(captured).toEqual([{ state: 'merged' }]);
     expect(sink.upserts[0]?.state).toBe('merged');
   });
 

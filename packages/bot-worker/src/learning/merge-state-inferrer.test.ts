@@ -5,8 +5,10 @@ import {
   type MergeStateCommit,
   type MergeStateCommitFile,
   type MergeStateGitHub,
+  type MergeStateReactionKind,
   type MergeStateStore,
   type MergeStateTarget,
+  patchTouchesRange,
   rollupMergeStateSignals,
 } from './merge-state-inferrer.js';
 
@@ -91,6 +93,56 @@ describe('inferPrMergeStateSignals', () => {
     expect(result).toEqual({ recorded: 1 });
     expect(store.recorded).toEqual([{ findingId: 'finding-1', kind: 'mergedIgnored' }]);
   });
+
+  it('uses the Comment Trailer when the stored GitHub comment id is missing', async () => {
+    const target = {
+      findingId: TARGET.findingId,
+      anchor: TARGET.anchor,
+    } satisfies MergeStateTarget;
+    const store = new FakeMergeStateStore({ targetsByPr: new Map([['pr-1', [target]]]) });
+    const github = new FakeMergeStateGitHub({
+      comments: [
+        {
+          id: 202,
+          body: 'Summary\n\n<!-- bot:finding=finding-1 archetype=archetype-1 -->',
+          kind: 'issue_comment',
+          createdAt: 1000,
+        },
+      ],
+      commits: [{ sha: 'after-comment', committedAt: 2000 }],
+      filesByCommit: new Map([
+        [
+          'after-comment',
+          [
+            {
+              filename: 'src/cache.ts',
+              patch: '@@ -19,5 +19,5 @@\n context\n-old cache key\n+new cache key\n context',
+            },
+          ],
+        ],
+      ]),
+    });
+
+    const result = await inferPrMergeStateSignals({
+      repo: REPO,
+      pullNumber: 12,
+      pullRequestId: 'pr-1',
+      store,
+      github,
+    });
+
+    expect(result).toEqual({ recorded: 1 });
+    expect(store.recorded).toEqual([{ findingId: 'finding-1', kind: 'mergedFixed' }]);
+  });
+});
+
+describe('patchTouchesRange', () => {
+  it('matches added and removed hunk lines against the inclusive anchor range', () => {
+    expect(
+      patchTouchesRange('@@ -19,3 +19,3 @@\n context\n-old cache key\n+new cache key', 20, 20),
+    ).toBe(true);
+    expect(patchTouchesRange('@@ -40,2 +40,2 @@\n-old helper\n+new helper', 20, 20)).toBe(false);
+  });
 });
 
 describe('rollupMergeStateSignals', () => {
@@ -136,7 +188,7 @@ class FakeMergeStateStore implements MergeStateStore {
     repo: RepoRef;
     pullNumber: number;
   }>;
-  readonly recorded: Array<{ findingId: string; kind: 'mergedFixed' | 'mergedIgnored' }> = [];
+  readonly recorded: Array<{ findingId: string; kind: MergeStateReactionKind }> = [];
   readonly rolledUp: Array<{ pullRequestId: string; rolledUpAt: number }> = [];
   readonly targetsByPr: Map<string, MergeStateTarget[]>;
 
@@ -154,7 +206,7 @@ class FakeMergeStateStore implements MergeStateStore {
 
   async recordMergeStateReaction(input: {
     findingId: string;
-    kind: 'mergedFixed' | 'mergedIgnored';
+    kind: MergeStateReactionKind;
   }): Promise<boolean> {
     this.recorded.push(input);
     return true;

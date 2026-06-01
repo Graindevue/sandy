@@ -28,7 +28,7 @@ export interface ReviewSink {
   upsertPullRequest(input: UpsertPullRequestInput): Promise<string>;
   /** Flip the Sticky Opt-In flag. */
   setReviewActive(pullRequestId: string, active: boolean): Promise<void>;
-  /** Mark the PR closed and clear its Sticky Opt-In flag. */
+  /** Clear the Sticky Opt-In flag after a PR closes. */
   clearOnClose(pullRequestId: string): Promise<void>;
   /** Enqueue a pending ReviewJob and return its id. */
   enqueueReviewJob(input: EnqueueInput): Promise<string>;
@@ -147,11 +147,7 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
     const findings = await this.#client.query(api.findings.listForPr, {
       pullRequestId: pullRequestId as never,
     });
-    return findings.map((finding) =>
-      finding.githubCommentId === undefined
-        ? { findingId: finding._id }
-        : { findingId: finding._id, githubCommentId: finding.githubCommentId },
-    );
+    return findings.map(findingCommentTarget);
   }
 
   async recordReaction(input: { findingId: string; kind: CapturedReactionKind }): Promise<void> {
@@ -165,15 +161,10 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
     const findings = await this.#client.query(api.findings.listForPr, {
       pullRequestId: pullRequestId as never,
     });
-    return findings.map((finding) =>
-      finding.githubCommentId === undefined
-        ? { findingId: finding._id, anchor: finding.anchor }
-        : {
-            findingId: finding._id,
-            githubCommentId: finding.githubCommentId,
-            anchor: finding.anchor,
-          },
-    );
+    return findings.map((finding) => ({
+      ...findingCommentTarget(finding),
+      anchor: finding.anchor,
+    }));
   }
 
   async recordMergeStateReaction(input: {
@@ -201,4 +192,10 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
       rolledUpAt: input.rolledUpAt,
     });
   }
+}
+
+function findingCommentTarget(finding: { _id: string; githubCommentId?: number }): ReactionTarget {
+  return finding.githubCommentId === undefined
+    ? { findingId: finding._id }
+    : { findingId: finding._id, githubCommentId: finding.githubCommentId };
 }

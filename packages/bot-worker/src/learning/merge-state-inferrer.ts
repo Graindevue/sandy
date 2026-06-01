@@ -1,5 +1,6 @@
 import type { FindingAnchor, ReactionKind } from '@sandy/shared-types';
 import type { RepoRef } from '../webhook/events.js';
+import { findingIdsFromCommentTrailer } from './comment-trailer.js';
 import type { ReactionCaptureComment, ReactionCaptureGitHub } from './reaction-capture.js';
 
 export type MergeStateReactionKind = Extract<ReactionKind, 'mergedFixed' | 'mergedIgnored'>;
@@ -78,7 +79,6 @@ export interface MergeStateSignalCronLogger {
 
 const DEFAULT_BACKFILL_LIMIT = 25;
 const DEFAULT_CRON_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const FINDING_TRAILER_RE = /<!--\s*bot:finding=([^\s>]+)(?:\s+archetype=[^\s>]+)?\s*-->/g;
 const HUNK_HEADER_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
 export async function inferPrMergeStateSignals(
@@ -218,7 +218,7 @@ function mergeStateCandidates(
     if (comment.createdAt === undefined) {
       continue;
     }
-    for (const findingId of findingIdsFromTrailer(comment.body)) {
+    for (const findingId of findingIdsFromCommentTrailer(comment.body)) {
       const target = targetsByFindingId.get(findingId);
       if (target === undefined) {
         continue;
@@ -317,13 +317,4 @@ export function patchTouchesRange(patch: string, lineStart: number, lineEnd: num
 
 function lineOverlapsRange(line: number, lineStart: number, lineEnd: number): boolean {
   return line >= lineStart && line <= lineEnd;
-}
-
-function* findingIdsFromTrailer(body: string): Iterable<string> {
-  for (const match of body.matchAll(FINDING_TRAILER_RE)) {
-    const findingId = match[1];
-    if (findingId !== undefined) {
-      yield findingId;
-    }
-  }
 }

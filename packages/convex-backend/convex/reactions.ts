@@ -1,8 +1,12 @@
+import type { ReactionKind } from '@sandy/shared-types';
 import { v } from 'convex/values';
 import { mutation } from './_generated/server.js';
 import { reactionKind } from './validators.js';
 
-const mergeStateReactionKind = v.union(v.literal('mergedFixed'), v.literal('mergedIgnored'));
+const mergeStateReactionKind = v.union(
+  v.literal('mergedFixed' satisfies ReactionKind),
+  v.literal('mergedIgnored' satisfies ReactionKind),
+);
 
 /** Record feedback captured from a Sandy bot comment. */
 export const recordReaction = mutation({

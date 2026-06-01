@@ -1,5 +1,6 @@
 import type { ReactionKind } from '@sandy/shared-types';
 import type { RepoRef } from '../webhook/events.js';
+import { findingIdsFromCommentTrailer } from './comment-trailer.js';
 
 export type CapturedReactionKind = Extract<ReactionKind, '👍' | '👎'>;
 export type ReactionCaptureCommentKind = 'pull_request_review_comment' | 'issue_comment';
@@ -50,8 +51,6 @@ export interface CapturePrCloseReactionsInput {
 export interface CapturePrCloseReactionsResult {
   recorded: number;
 }
-
-const FINDING_TRAILER_RE = /<!--\s*bot:finding=([^\s>]+)(?:\s+archetype=[^\s>]+)?\s*-->/g;
 
 export async function capturePrCloseReactions(
   input: CapturePrCloseReactionsInput,
@@ -112,7 +111,7 @@ function reactionCaptureCandidates(
     if (storedCandidate !== undefined) {
       storedCandidate.kind = comment.kind;
     }
-    for (const findingId of findingIdsFromTrailer(comment.body)) {
+    for (const findingId of findingIdsFromCommentTrailer(comment.body)) {
       if (!knownFindingIds.has(findingId)) {
         continue;
       }
@@ -136,15 +135,6 @@ function candidateForComment(
   const candidate = { id: commentId, findingIds: new Set<string>() };
   candidatesByCommentId.set(commentId, candidate);
   return candidate;
-}
-
-function* findingIdsFromTrailer(body: string): Iterable<string> {
-  for (const match of body.matchAll(FINDING_TRAILER_RE)) {
-    const findingId = match[1];
-    if (findingId !== undefined) {
-      yield findingId;
-    }
-  }
 }
 
 function commentReactionsInput(

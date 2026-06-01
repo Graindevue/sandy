@@ -229,8 +229,8 @@ export async function main(): Promise<void> {
         });
       },
     },
-    reactionCapturer: {
-      async capturePrCloseReactions({ repo, pullNumber, pullRequestId, merged }) {
+    closeSignalCapturer: {
+      async capturePrCloseSignals({ repo, pullNumber, pullRequestId, state }) {
         const closeReactions = await captureCloseReactions({
           repo,
           pullNumber,
@@ -238,7 +238,7 @@ export async function main(): Promise<void> {
           store: sink,
           github,
         });
-        if (!merged) {
+        if (state !== 'merged') {
           return closeReactions;
         }
 
