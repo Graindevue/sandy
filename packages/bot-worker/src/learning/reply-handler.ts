@@ -1,5 +1,9 @@
 import type { RepoRef } from '../webhook/events.js';
-import { findingIdsFromTrailer } from './comment-trailer.js';
+import {
+  findingIdsForStoredCommentId,
+  findingIdsFromTrailerMatching,
+  knownFindingIdsForTargets,
+} from './comment-findings.js';
 import type {
   ReactionCaptureGitHub,
   ReactionCaptureStore,
@@ -80,25 +84,5 @@ async function findingIdsForParentComment(input: {
     return new Set();
   }
 
-  const knownFindingIds = new Set(input.targets.map((target) => target.findingId));
-  const fromTrailer = new Set<string>();
-  for (const findingId of findingIdsFromTrailer(parent.body)) {
-    if (knownFindingIds.has(findingId)) {
-      fromTrailer.add(findingId);
-    }
-  }
-  return fromTrailer;
-}
-
-function findingIdsForStoredCommentId(
-  targets: readonly ReactionTarget[],
-  parentCommentId: number,
-): Set<string> {
-  const findingIds = new Set<string>();
-  for (const target of targets) {
-    if (target.githubCommentId === parentCommentId) {
-      findingIds.add(target.findingId);
-    }
-  }
-  return findingIds;
+  return findingIdsFromTrailerMatching(parent.body, knownFindingIdsForTargets(input.targets));
 }

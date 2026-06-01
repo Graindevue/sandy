@@ -150,12 +150,15 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore {
   }
 
   async recordReaction(input: RecordedReactionInput): Promise<void> {
-    const args =
-      input.replyText === undefined
-        ? { findingId: input.findingId as never, kind: input.kind }
-        : { findingId: input.findingId as never, kind: input.kind, replyText: input.replyText };
-    await this.#client.mutation(api.reactions.recordReaction, {
-      ...args,
-    });
+    const findingId = input.findingId as never;
+    if (input.kind === 'reply') {
+      await this.#client.mutation(api.reactions.recordReaction, {
+        findingId,
+        kind: input.kind,
+        replyText: input.replyText,
+      });
+      return;
+    }
+    await this.#client.mutation(api.reactions.recordReaction, { findingId, kind: input.kind });
   }
 }

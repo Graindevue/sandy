@@ -105,7 +105,13 @@ class FakeForkDeclineCommenter {
 }
 
 function comment(body: string, prOverrides: Partial<PullRequestFacts> = {}): CommentEvent {
-  return { kind: 'comment', repo: BASE_REPO, body, pr: prFacts(prOverrides) };
+  return {
+    kind: 'comment',
+    repo: BASE_REPO,
+    commentKind: 'issue_comment',
+    body,
+    pr: prFacts(prOverrides),
+  };
 }
 
 function pr(

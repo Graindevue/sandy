@@ -14,6 +14,8 @@ export type SupportedEventName =
   | 'pull_request_review_comment'
   | 'push';
 
+export type GitHubCommentKind = 'pull_request_review_comment' | 'issue_comment';
+
 /** Identity of the GitHub repository an event targets. */
 export interface RepoRef {
   /** Owner or org login, e.g. `"tony-co"`. */
@@ -65,7 +67,7 @@ export interface CommentEvent {
   kind: 'comment';
   repo: RepoRef;
   /** GitHub source for the comment delivery. */
-  commentKind?: 'pull_request_review_comment' | 'issue_comment';
+  commentKind: GitHubCommentKind;
   /** GitHub comment id for the created comment, when present in the delivery. */
   githubCommentId?: number;
   /** Parent GitHub review-comment id when this comment is a threaded reply. */
