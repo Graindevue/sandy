@@ -42,5 +42,11 @@ crons.interval(
   internal.archetypes.clusterRecentFindings,
   {},
 );
+crons.daily(
+  'infer SuggestedRules from reactions',
+  { hourUTC: 3, minuteUTC: 0 },
+  internal.suggestedRules.inferSuggestedRulesFromReactions,
+  {},
+);
 
 export default crons;
