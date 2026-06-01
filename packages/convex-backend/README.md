@@ -5,9 +5,10 @@ Convex Cloud (ADR 0004).
 
 ## Tables
 
-`products`, `repos`, `pullRequests`, `reviewJobs`, `findings`, `agentRuns` — see
-[`convex/schema.ts`](./convex/schema.ts). Archetype / reaction / suggestedRules
-tables arrive in Phase 3. Convex adds `_id` and `_creationTime` to every row.
+`products`, `repos`, `pullRequests`, `reviewJobs`, `findings`, `archetypes`,
+`reactions`, `suggestedRules`, `agentRuns`, `apiSurfaceManifests` — see
+[`convex/schema.ts`](./convex/schema.ts). Convex adds `_id` and `_creationTime`
+to every row.
 
 ## Functions
 
@@ -19,6 +20,8 @@ tables arrive in Phase 3. Convex adds `_id` and `_creationTime` to every row.
   subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
 - **findings** — `recordFinding`, `recordSynthesizedReview`, `listForPr`.
+- **learning loop** — Phase 3 schema tables are present; their mutations,
+  queries, and crons ship in later Phase 3 slices.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
   ReviewJobs claimed more than 30 minutes ago as `failed`.

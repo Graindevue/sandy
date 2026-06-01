@@ -11,6 +11,20 @@ export type Confidence = 0 | 1 | 2 | 3 | 4 | 5;
  */
 export type FindingCategory = string;
 
+/** Feedback signal attached to a posted Finding. */
+export type ReactionKind = '👍' | '👎' | 'mergedFixed' | 'mergedIgnored';
+
+/** The kind of Rule a SuggestedRule can promote into. */
+export type SuggestedRuleType = 'positive' | 'suppression';
+
+/** Manual operator workflow state for a SuggestedRule. */
+export type SuggestedRuleStatus =
+  | 'suggested'
+  | 'promoteToPositive'
+  | 'promoteToSuppression'
+  | 'rejected'
+  | 'promoted';
+
 /**
  * Where the inline PR review comment attaches. Must be in the reviewed PR's
  * diff; cross-repo consumer locations belong in `crossRepoReferences`.
