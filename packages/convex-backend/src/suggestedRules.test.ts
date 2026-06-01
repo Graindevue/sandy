@@ -1,3 +1,4 @@
+import type { SuggestedRuleStatus } from '@sandy/shared-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { recentByArchetype } from '../convex/reactions.js';
 import {
@@ -5,8 +6,10 @@ import {
   createIfEvidenceThresholdMet,
   draftSuggestedRuleDescription,
   inferSuggestedRulesFromReactions,
+  promoteSuppression,
   scoreReactionEvidence,
   subscribePending,
+  subscribeSuppressionPromotions,
 } from '../convex/suggestedRules.js';
 
 const originalFetch = globalThis.fetch;
@@ -39,11 +42,11 @@ describe('SuggestedRule inference from reactions', () => {
       sourceArchetypeId: archetypeId,
       description: 'A second draft should not be created.',
     });
-    const created = ctx.db.getDoc(createdId);
+    const pending = await invoke<Array<Record<string, unknown>>>(subscribePending, ctx, {});
 
     expect(createdId).toBe('suggestedRules:1');
     expect(duplicateId).toBeNull();
-    expect(created).toEqual(
+    expect(pending).toEqual([
       expect.objectContaining({
         _id: createdId,
         status: 'suggested',
@@ -51,11 +54,11 @@ describe('SuggestedRule inference from reactions', () => {
         sourceArchetypeId: archetypeId,
         description: 'Suppress duplicate test-coverage findings for already-covered branches.',
       }),
-    );
+    ]);
     expect(ctx.db.getDoc(archetypeId)).toEqual(expect.objectContaining({ suppressionWeight: 1 }));
     expect(ctx.db.tables.get('suggestedRules')).toHaveLength(1);
 
-    const evidence = JSON.parse(String(created?.evidence));
+    const evidence = JSON.parse(String(pending[0]?.evidence));
     expect(evidence).toEqual(
       expect.objectContaining({
         sourceArchetypeId: archetypeId,
@@ -85,7 +88,7 @@ describe('SuggestedRule inference from reactions', () => {
     );
   });
 
-  it('subscribes only to SuggestedRules awaiting promotion work', async () => {
+  it('subscribes only to suppression SuggestedRules awaiting promotion work', async () => {
     const ctx = fakeCtx();
     const { archetypeId } = await seedArchetypeWithFindings(ctx);
     await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'suggested'));
@@ -100,13 +103,43 @@ describe('SuggestedRule inference from reactions', () => {
     await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'rejected'));
     await ctx.db.insert('suggestedRules', suggestedRule(archetypeId, 'promoted'));
 
-    const pending = await invoke(subscribePending, ctx, {});
+    const pending = await invoke<Array<Record<string, unknown>>>(
+      subscribeSuppressionPromotions,
+      ctx,
+      {},
+    );
 
-    expect(pending.map((rule) => rule._id)).toEqual([positiveId, suppressionId]);
-    expect(pending.map((rule) => rule.status)).toEqual([
-      'promoteToPositive',
-      'promoteToSuppression',
-    ]);
+    expect(positiveId).toBe('suggestedRules:3');
+    expect(pending.map((rule) => rule._id)).toEqual([suppressionId]);
+    expect(pending.map((rule) => rule.status)).toEqual(['promoteToSuppression']);
+  });
+
+  it('promotes a suppression SuggestedRule atomically with its source Archetype', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId } = await seedArchetypeWithFindings(ctx);
+    const suggestedRuleId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'promoteToSuppression'),
+    );
+
+    await expect(invoke(promoteSuppression, ctx, { suggestedRuleId })).resolves.toBe(true);
+
+    expect(ctx.db.getDoc(archetypeId)).toEqual(expect.objectContaining({ suppressionWeight: 1 }));
+    expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'promoted' }));
+  });
+
+  it('does not promote a SuggestedRule whose operator decision changed', async () => {
+    const ctx = fakeCtx();
+    const { archetypeId } = await seedArchetypeWithFindings(ctx);
+    const suggestedRuleId = await ctx.db.insert(
+      'suggestedRules',
+      suggestedRule(archetypeId, 'rejected'),
+    );
+
+    await expect(invoke(promoteSuppression, ctx, { suggestedRuleId })).resolves.toBe(false);
+
+    expect(ctx.db.getDoc(archetypeId)).toEqual(expect.objectContaining({ suppressionWeight: 0 }));
+    expect(ctx.db.getDoc(suggestedRuleId)).toEqual(expect.objectContaining({ status: 'rejected' }));
   });
 
   it('daily inference action drafts from reactions and creates the SuggestedRule', async () => {
@@ -347,7 +380,10 @@ function reaction(reactionId: string, findingId: string, kind: string, replyText
   };
 }
 
-function suggestedRule(sourceArchetypeId: string, status: string): Record<string, unknown> {
+function suggestedRule(
+  sourceArchetypeId: string,
+  status: SuggestedRuleStatus,
+): Record<string, unknown> {
   return {
     productId: 'products:1',
     type: status === 'promoteToPositive' ? 'positive' : 'suppression',

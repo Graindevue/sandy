@@ -1,15 +1,11 @@
 import { api } from '@sandy/convex-backend/api';
-import type { SuggestedRuleStatus, SuggestedRuleType } from '@sandy/shared-types';
+import type { FunctionReference } from 'convex/server';
 
-export interface PendingSuggestedRule {
+type QueryRef = FunctionReference<'query'>;
+type MutationRef = FunctionReference<'mutation'>;
+
+export interface PendingSuppressionPromotion {
   _id: string;
-  _creationTime: number;
-  productId: string;
-  type: SuggestedRuleType;
-  status: SuggestedRuleStatus;
-  description: string;
-  sourceArchetypeId: string;
-  evidence: string;
 }
 
 export interface PromotionWorkerLogger {
@@ -20,12 +16,12 @@ export interface PromotionWorkerLogger {
 
 export interface PromotionWorkerConvexClient {
   onUpdate(
-    query: unknown,
+    query: QueryRef,
     args: Record<string, never>,
-    callback: (rules: PendingSuggestedRule[]) => void,
+    callback: (rules: PendingSuppressionPromotion[]) => void,
     onError?: (error: Error) => void,
   ): { unsubscribe: () => void } | (() => void);
-  mutation(mutation: unknown, args: Record<string, unknown>): Promise<unknown>;
+  mutation(mutation: MutationRef, args: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface PromotionWorkerOptions {
@@ -47,7 +43,7 @@ export class PromotionWorker {
 
   start(): () => void {
     const subscription = this.#client.onUpdate(
-      api.suggestedRules.subscribePending,
+      api.suggestedRules.subscribeSuppressionPromotions,
       {},
       (rules) => {
         for (const rule of rules) {
@@ -55,7 +51,7 @@ export class PromotionWorker {
         }
       },
       (error) => {
-        this.#logger.error('suggestedRules.subscribePending failed', error);
+        this.#logger.error('suggestedRules.subscribeSuppressionPromotions failed', error);
       },
     );
 
@@ -68,24 +64,19 @@ export class PromotionWorker {
     };
   }
 
-  async #promote(rule: PendingSuggestedRule): Promise<void> {
+  async #promote(rule: PendingSuppressionPromotion): Promise<void> {
     if (this.#inFlight.has(rule._id)) {
-      return;
-    }
-    if (rule.status !== 'promoteToSuppression') {
       return;
     }
 
     this.#inFlight.add(rule._id);
     try {
-      await this.#client.mutation(api.archetypes.updateSuppressionWeight, {
-        archetypeId: rule.sourceArchetypeId,
-        suppressionWeight: 1,
-      });
-      await this.#client.mutation(api.suggestedRules.markPromoted, {
+      const promoted = await this.#client.mutation(api.suggestedRules.promoteSuppression, {
         suggestedRuleId: rule._id,
       });
-      this.#logger.info(`Promoted SuggestedRule ${rule._id} to suppression`);
+      if (promoted === true) {
+        this.#logger.info(`Promoted SuggestedRule ${rule._id} to suppression`);
+      }
     } catch (error) {
       this.#logger.error(`Failed to promote SuggestedRule ${rule._id}`, error);
     } finally {

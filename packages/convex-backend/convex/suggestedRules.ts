@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { api, internal } from './_generated/api.js';
-import type { Doc, Id } from './_generated/dataModel.js';
+import type { Id } from './_generated/dataModel.js';
 import { internalAction, internalQuery, mutation, query } from './_generated/server.js';
 import { clampLimit } from './limits.js';
 import { type RecentArchetypeReaction, recentArchetypeReactions } from './reactionEvidence.js';
@@ -23,34 +23,38 @@ const DEFAULT_CANDIDATE_LIMIT = 100;
 const MAX_CANDIDATE_LIMIT = 500;
 const DEFAULT_RECENT_REACTION_LIMIT = 100;
 const MAX_RECENT_REACTION_LIMIT = 200;
-const PENDING_PROMOTION_STATUSES = ['promoteToSuppression', 'promoteToPositive'] as const;
 
 type CandidateArchetype = {
   archetypeId: Id<'archetypes'>;
   label: string;
 };
 
-/** SuggestedRules where an operator decision is waiting for worker promotion. */
+/** SuggestedRules waiting for an operator decision. */
 export const subscribePending = query({
   args: {
     limit: v.optional(v.number()),
   },
   handler: async (ctx, { limit }) => {
     const boundedLimit = clampLimit(limit, DEFAULT_PENDING_LIMIT, MAX_PENDING_LIMIT);
-    const rows: Doc<'suggestedRules'>[] = [];
-    for (const status of PENDING_PROMOTION_STATUSES) {
-      rows.push(
-        ...(await ctx.db
-          .query('suggestedRules')
-          .withIndex('by_status', (q) => q.eq('status', status))
-          .order('desc')
-          .take(boundedLimit)),
-      );
-    }
+    return await ctx.db
+      .query('suggestedRules')
+      .withIndex('by_status', (q) => q.eq('status', 'suggested'))
+      .order('desc')
+      .take(boundedLimit);
+  },
+});
 
-    return rows
-      .sort((left, right) => right._creationTime - left._creationTime)
-      .slice(0, boundedLimit);
+/** Suppression SuggestedRules where an operator decision is waiting for worker promotion. */
+export const subscribeSuppressionPromotions = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { limit }) => {
+    return await ctx.db
+      .query('suggestedRules')
+      .withIndex('by_status', (q) => q.eq('status', 'promoteToSuppression'))
+      .order('desc')
+      .take(clampLimit(limit, DEFAULT_PENDING_LIMIT, MAX_PENDING_LIMIT));
   },
 });
 
@@ -97,7 +101,28 @@ export const createIfEvidenceThresholdMet = mutation({
   },
 });
 
-/** Mark a SuggestedRule promoted after a worker applies the operator decision. */
+/** Apply a suppression promotion in one transaction and mark the SuggestedRule promoted. */
+export const promoteSuppression = mutation({
+  args: {
+    suggestedRuleId: v.id('suggestedRules'),
+  },
+  returns: v.boolean(),
+  handler: async (ctx, { suggestedRuleId }) => {
+    const suggestedRule = await ctx.db.get(suggestedRuleId);
+    if (suggestedRule === null) {
+      throw new Error(`SuggestedRule ${suggestedRuleId} does not exist`);
+    }
+    if (suggestedRule.status !== 'promoteToSuppression') {
+      return false;
+    }
+
+    await ctx.db.patch(suggestedRule.sourceArchetypeId, { suppressionWeight: 1 });
+    await ctx.db.patch(suggestedRuleId, { status: 'promoted' });
+    return true;
+  },
+});
+
+/** Mark a SuggestedRule promoted after an external promotion action succeeds. */
 export const markPromoted = mutation({
   args: {
     suggestedRuleId: v.id('suggestedRules'),

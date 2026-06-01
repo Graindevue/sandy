@@ -1,6 +1,6 @@
 import { api } from '@sandy/convex-backend/api';
 import { describe, expect, it } from 'vitest';
-import { type PendingSuggestedRule, PromotionWorker } from './promotion-worker.js';
+import { type PendingSuppressionPromotion, PromotionWorker } from './promotion-worker.js';
 
 describe('PromotionWorker', () => {
   it('promotes suppression SuggestedRules by suppressing the source Archetype', async () => {
@@ -8,28 +8,17 @@ describe('PromotionWorker', () => {
     const worker = new PromotionWorker({ client, logger: silentLogger });
 
     const stop = worker.start();
-    client.emit([
-      suggestedRule({
-        _id: 'suggestedRules:1',
-        status: 'promoteToSuppression',
-        sourceArchetypeId: 'archetypes:1',
-      }),
-    ]);
+    client.emit([{ _id: 'suggestedRules:1' }]);
 
-    await tick();
     await tick();
 
     expect(client.subscription).toEqual({
-      query: api.suggestedRules.subscribePending,
+      query: api.suggestedRules.subscribeSuppressionPromotions,
       args: {},
     });
     expect(client.mutations).toEqual([
       {
-        mutation: api.archetypes.updateSuppressionWeight,
-        args: { archetypeId: 'archetypes:1', suppressionWeight: 1 },
-      },
-      {
-        mutation: api.suggestedRules.markPromoted,
+        mutation: api.suggestedRules.promoteSuppression,
         args: { suggestedRuleId: 'suggestedRules:1' },
       },
     ]);
@@ -38,22 +27,22 @@ describe('PromotionWorker', () => {
     expect(client.unsubscribed).toBe(true);
   });
 
-  it('leaves rejected SuggestedRules untouched as history', async () => {
-    const client = new FakePromotionConvexClient();
+  it('does not promote the same SuggestedRule twice while promotion is in flight', async () => {
+    const client = new FakePromotionConvexClient({ resolveMutations: false });
     const worker = new PromotionWorker({ client, logger: silentLogger });
 
     worker.start();
-    client.emit([
-      suggestedRule({
-        _id: 'suggestedRules:1',
-        status: 'rejected',
-        sourceArchetypeId: 'archetypes:1',
-      }),
-    ]);
+    client.emit([{ _id: 'suggestedRules:1' }]);
+    client.emit([{ _id: 'suggestedRules:1' }]);
 
     await tick();
 
-    expect(client.mutations).toEqual([]);
+    expect(client.mutations).toEqual([
+      {
+        mutation: api.suggestedRules.promoteSuppression,
+        args: { suggestedRuleId: 'suggestedRules:1' },
+      },
+    ]);
   });
 });
 
@@ -67,30 +56,21 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function suggestedRule(overrides: Partial<PendingSuggestedRule> = {}): PendingSuggestedRule {
-  return {
-    _id: 'suggestedRules:1',
-    productId: 'products:1',
-    type: 'suppression',
-    status: 'promoteToSuppression',
-    description: 'Suppress duplicate test-coverage findings.',
-    sourceArchetypeId: 'archetypes:1',
-    evidence: '{}',
-    _creationTime: 1234,
-    ...overrides,
-  };
-}
-
 class FakePromotionConvexClient {
   mutations: { mutation: unknown; args: Record<string, unknown> }[] = [];
   subscription: { query: unknown; args: Record<string, never> } | null = null;
   unsubscribed = false;
-  #callback: ((rules: PendingSuggestedRule[]) => void) | null = null;
+  #callback: ((rules: PendingSuppressionPromotion[]) => void) | null = null;
+  readonly #resolveMutations: boolean;
+
+  constructor({ resolveMutations = true }: { resolveMutations?: boolean } = {}) {
+    this.#resolveMutations = resolveMutations;
+  }
 
   onUpdate(
     query: unknown,
     args: Record<string, never>,
-    callback: (rules: PendingSuggestedRule[]) => void,
+    callback: (rules: PendingSuppressionPromotion[]) => void,
   ): { unsubscribe: () => void } {
     this.subscription = { query, args };
     this.#callback = callback;
@@ -101,12 +81,15 @@ class FakePromotionConvexClient {
     };
   }
 
-  async mutation(mutation: unknown, args: Record<string, unknown>): Promise<null> {
+  async mutation(mutation: unknown, args: Record<string, unknown>): Promise<boolean> {
     this.mutations.push({ mutation, args });
-    return null;
+    if (!this.#resolveMutations) {
+      await new Promise<never>(() => undefined);
+    }
+    return true;
   }
 
-  emit(rules: PendingSuggestedRule[]): void {
+  emit(rules: PendingSuppressionPromotion[]): void {
     this.#callback?.(rules);
   }
 }
