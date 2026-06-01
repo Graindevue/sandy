@@ -1,4 +1,4 @@
-import type { ArchetypeStampedFinding, PersistedFinding } from '../worker/review-findings.js';
+import type { ArchetypeAssignedFinding, PersistedFinding } from '../worker/review-findings.js';
 
 export interface FindingSummaryEmbedder {
   embedFindingSummary(summary: string): Promise<number[]>;
@@ -8,7 +8,7 @@ export interface ArchetypeAssignmentStore {
   assignArchetype(input: {
     findingId: string;
     embedding: number[];
-  }): Promise<{ archetypeId: string }>;
+  }): Promise<{ archetypeId: string; suppressionWeight: number }>;
 }
 
 export class FindingArchetypeAssigner {
@@ -22,16 +22,16 @@ export class FindingArchetypeAssigner {
 
   async assignArchetypes(
     findings: readonly PersistedFinding[],
-  ): Promise<ArchetypeStampedFinding[]> {
-    const stamped: ArchetypeStampedFinding[] = [];
+  ): Promise<ArchetypeAssignedFinding[]> {
+    const stamped: ArchetypeAssignedFinding[] = [];
 
     for (const persisted of findings) {
       const embedding = await this.#embedder.embedFindingSummary(persisted.finding.summary);
-      const { archetypeId } = await this.#store.assignArchetype({
+      const { archetypeId, suppressionWeight } = await this.#store.assignArchetype({
         findingId: persisted.id,
         embedding,
       });
-      stamped.push({ ...persisted, archetypeId });
+      stamped.push({ ...persisted, archetypeId, archetypeSuppressionWeight: suppressionWeight });
     }
 
     return stamped;

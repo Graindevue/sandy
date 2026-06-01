@@ -11,6 +11,12 @@ import type {
   SiblingShas,
 } from '@sandy/shared-types';
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from '../config/review-bot-context.js';
+import { computeConfidenceScore } from '../synthesizer/score.js';
+import { buildReviewSummary } from '../synthesizer/summary.js';
+import {
+  filterSuppressedFindings,
+  stripSuppressionWeights,
+} from '../synthesizer/suppression-filter.js';
 import { type AgentReviewOutput, synthesizeAgentOutputs } from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
 import {
@@ -25,7 +31,11 @@ import type {
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
-import type { ArchetypeStampedFinding, PersistedFinding } from './review-findings.js';
+import type {
+  ArchetypeAssignedFinding,
+  ArchetypeStampedFinding,
+  PersistedFinding,
+} from './review-findings.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -174,7 +184,7 @@ export interface ReviewPoster {
 }
 
 export interface ReviewArchetypeAssigner {
-  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeStampedFinding[]>;
+  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeAssignedFinding[]>;
 }
 
 export interface ReviewManifestBuilder {
@@ -548,14 +558,23 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-    const archetypeStampedFindings =
+    const archetypeAssignedFindings =
       await this.#archetypeAssigner.assignArchetypes(persistedFindings);
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const postableFindings = stripSuppressionWeights(
+      filterSuppressedFindings(archetypeAssignedFindings),
+    );
+    const postableSummary = buildPostableSummary({
+      agentOutputs: input.agentOutputs,
+      changedLineCount: input.changedLineCount,
+      rawFindingCount: synthesized.rawFindingCount,
+      findings: postableFindings,
+    });
     await this.#postReviewResult(
       input.target,
-      archetypeStampedFindings,
+      postableFindings,
       input.siblingShas,
-      synthesized.summary,
+      postableSummary,
     );
   }
 
@@ -579,6 +598,30 @@ export class ReviewExecutor {
       throw new ReviewSupersededError(jobId);
     }
   }
+}
+
+function buildPostableSummary(input: {
+  agentOutputs: readonly AgentReviewOutput[];
+  changedLineCount: number;
+  rawFindingCount: number;
+  findings: readonly ArchetypeStampedFinding[];
+}): string {
+  const findings = input.findings.map(({ finding }) => finding);
+  return buildReviewSummary({
+    findings,
+    rawFindingCount: input.rawFindingCount,
+    confidenceScore: computeConfidenceScore({
+      findings,
+      changedLineCount: input.changedLineCount,
+    }),
+    agentSummaries: input.agentOutputs.flatMap(({ payload }) =>
+      payload.summary === undefined ? [] : [payload.summary],
+    ),
+    crossRepoSearches: input.agentOutputs.map(({ agentKey, payload }) => ({
+      agentKey,
+      crossRepoSearch: payload.crossRepoSearch,
+    })),
+  });
 }
 
 function repoForWorktree(context: ReviewJobContext): RepoForWorktree {

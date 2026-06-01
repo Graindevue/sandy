@@ -32,9 +32,13 @@ type UnclusteredFinding = {
 
 type AssignmentResult = {
   archetypeId: Id<'archetypes'>;
+  suppressionWeight: number;
 };
 
-const assignmentResult = v.object({ archetypeId: v.id('archetypes') });
+const assignmentResult = v.object({
+  archetypeId: v.id('archetypes'),
+  suppressionWeight: v.number(),
+});
 
 export const assignOrCreateArchetype = action({
   args: {
@@ -165,8 +169,15 @@ export const persistAssignment = internalMutation({
       throw new Error(`Finding ${findingId} does not exist`);
     }
     if (finding.archetypeId !== undefined) {
+      const archetype = await ctx.db.get(finding.archetypeId);
+      if (archetype === null) {
+        throw new Error(`Finding ${findingId} references missing Archetype ${finding.archetypeId}`);
+      }
       await ctx.db.patch(findingId, { embedding });
-      return { archetypeId: finding.archetypeId };
+      return {
+        archetypeId: finding.archetypeId,
+        suppressionWeight: archetype.suppressionWeight,
+      };
     }
 
     const productId = await productIdForFinding(ctx, finding.pullRequestId);
@@ -183,7 +194,7 @@ export const persistAssignment = internalMutation({
           count: matched.count + 1,
           exampleFindingIds,
         });
-        return { archetypeId: matchedArchetypeId };
+        return { archetypeId: matchedArchetypeId, suppressionWeight: matched.suppressionWeight };
       }
     }
 
@@ -196,7 +207,7 @@ export const persistAssignment = internalMutation({
       suppressionWeight: 0,
     });
     await ctx.db.patch(findingId, { embedding, archetypeId });
-    return { archetypeId };
+    return { archetypeId, suppressionWeight: 0 };
   },
 });
 

@@ -8,3 +8,7 @@ export interface PersistedFinding {
 export interface ArchetypeStampedFinding extends PersistedFinding {
   archetypeId: string;
 }
+
+export interface ArchetypeAssignedFinding extends ArchetypeStampedFinding {
+  archetypeSuppressionWeight: number;
+}

@@ -12,7 +12,7 @@ import {
   type ReviewJobContext,
   type ReviewPoster,
 } from './review-executor.js';
-import type { ArchetypeStampedFinding, PersistedFinding } from './review-findings.js';
+import type { ArchetypeAssignedFinding, PersistedFinding } from './review-findings.js';
 
 interface RecordedFinding {
   reviewJobId: string;
@@ -247,6 +247,44 @@ describe('ReviewExecutor', () => {
     expect(poster.results[0]?.summary).toContain(
       'Synthesized 2 raw findings into 1 posted finding.',
     );
+  });
+
+  it('persists suppressed Archetype Findings but filters them before posting', async () => {
+    const unsuppressedFinding: Finding = {
+      ...finding,
+      anchor: { ...finding.anchor, lineStart: 13, lineEnd: 13 },
+      summary: 'The endpoint accepts an untrusted redirect target.',
+      category: 'security',
+    };
+    const store = new FakeExecutionStore(makeContext());
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner([0.7, 0.69]),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async () => findingsOutput([finding, unsuppressedFinding]),
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(store.recordedFindings).toEqual([
+      expect.objectContaining({ finding }),
+      expect.objectContaining({ finding: unsuppressedFinding }),
+    ]);
+    expect(poster.results).toHaveLength(1);
+    expect(poster.results[0]?.findings).toEqual([
+      { id: 'finding-2', archetypeId: 'archetype-2', finding: unsuppressedFinding },
+    ]);
+    expect(poster.results[0]?.summary).toContain('Sandy review posted 1 finding.');
+    expect(poster.results[0]?.summary).toContain(unsuppressedFinding.summary);
+    expect(poster.results[0]?.summary).not.toContain(finding.summary);
+    expect(store.postedFindings).toEqual([{ findingId: 'finding-2', githubCommentId: 900 }]);
   });
 
   it('records a failed Agent run without blocking other Agents from posting findings', async () => {
@@ -829,12 +867,15 @@ class FakeExecutionStore implements ReviewExecutionStore {
 }
 
 class FakeArchetypeAssigner implements ReviewArchetypeAssigner {
+  constructor(private readonly suppressionWeights: readonly number[] = []) {}
+
   async assignArchetypes(
     findings: readonly PersistedFinding[],
-  ): Promise<ArchetypeStampedFinding[]> {
+  ): Promise<ArchetypeAssignedFinding[]> {
     return findings.map((finding, index) => ({
       ...finding,
       archetypeId: `archetype-${index + 1}`,
+      archetypeSuppressionWeight: this.suppressionWeights[index] ?? 0,
     }));
   }
 }
