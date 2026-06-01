@@ -9,6 +9,12 @@ import {
 } from './reviewJobReaper.js';
 
 type ReapStuckJobsReference = FunctionReference<'mutation', 'internal', { now?: number }, number>;
+type ClusterRecentFindingsReference = FunctionReference<
+  'action',
+  'internal',
+  { limit?: number },
+  { attempted: number; clustered: number; failed: number }
+>;
 
 export const reapStuckJobs = internalMutation({
   args: { now: v.optional(v.number()) },
@@ -38,11 +44,20 @@ export const reapStuckJobs = internalMutation({
 const crons = cronJobs();
 
 const internalRefs = internal as unknown as {
+  archetypes: {
+    clusterRecentFindings: ClusterRecentFindingsReference;
+  };
   crons: {
     reapStuckJobs: ReapStuckJobsReference;
   };
 };
 
 crons.interval('reap stuck ReviewJobs', { minutes: 5 }, internalRefs.crons.reapStuckJobs, {});
+crons.interval(
+  'cluster recent Findings',
+  { minutes: 10 },
+  internalRefs.archetypes.clusterRecentFindings,
+  {},
+);
 
 export default crons;

@@ -20,6 +20,7 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
+  ArchetypeStampedFinding,
   PersistedFinding,
   PostedFinding,
   PostReviewResultInput,
@@ -173,6 +174,10 @@ export interface ReviewPoster {
   postScopeDeclined(input: PostScopeDeclinedInput): Promise<void>;
 }
 
+export interface ReviewArchetypeAssigner {
+  assignArchetypes(findings: readonly PersistedFinding[]): Promise<ArchetypeStampedFinding[]>;
+}
+
 export interface ReviewManifestBuilder {
   buildManifest(
     productId: string,
@@ -192,6 +197,7 @@ export interface ReviewExecutorOptions {
   diffInspector: ReviewDiffInspector;
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
+  archetypeAssigner: ReviewArchetypeAssigner;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
   manifestBuilder?: ReviewManifestBuilder;
@@ -211,6 +217,7 @@ export class ReviewExecutor {
   readonly #diffInspector: ReviewDiffInspector;
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
+  readonly #archetypeAssigner: ReviewArchetypeAssigner;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
   readonly #manifestBuilder: ReviewManifestBuilder | null;
@@ -228,6 +235,7 @@ export class ReviewExecutor {
     this.#diffInspector = options.diffInspector;
     this.#runner = options.runner;
     this.#poster = options.poster;
+    this.#archetypeAssigner = options.archetypeAssigner;
     this.#resolveAgent = options.resolveAgent;
     this.#resolveAgents = options.resolveAgents ?? null;
     this.#manifestBuilder = options.manifestBuilder ?? null;
@@ -541,9 +549,12 @@ export class ReviewExecutor {
       findings: synthesized.findings,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+    const archetypeStampedFindings =
+      await this.#archetypeAssigner.assignArchetypes(persistedFindings);
+    await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
     await this.#postReviewResult(
       input.target,
-      persistedFindings,
+      archetypeStampedFindings,
       input.siblingShas,
       synthesized.summary,
     );
@@ -551,7 +562,7 @@ export class ReviewExecutor {
 
   async #postReviewResult(
     target: PullRequestTarget,
-    findings: PersistedFinding[],
+    findings: ArchetypeStampedFinding[],
     siblingShas: SiblingShas,
     summary: string,
   ): Promise<void> {

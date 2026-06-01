@@ -16,6 +16,8 @@ import {
 import { EMPTY_REVIEW_BOT_CONTEXT, type ReviewBotContext } from './config/review-bot-context.js';
 import { CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
+import { FindingArchetypeAssigner } from './learning/archetype-assigner.js';
+import { OpenAIFindingEmbedder } from './learning/embed.js';
 import { startWebhookServer } from './webhook/server.js';
 import { ConvexSink } from './webhook/sink.js';
 import { ReviewCancellationCoordinator } from './worker/cancellation.js';
@@ -31,6 +33,7 @@ export interface WorkerConfig {
   convexUrl: string;
   githubAppId: string;
   githubPrivateKeyPath: string;
+  openAiApiKey: string;
   port: number;
   agentImage: string;
   maxChangedLines: number;
@@ -63,6 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   const convexUrl = requireEnv(env, 'CONVEX_URL');
   const githubAppId = requireEnv(env, 'GITHUB_APP_ID');
   const githubPrivateKeyPath = requireEnv(env, 'GITHUB_APP_PRIVATE_KEY_PATH');
+  const openAiApiKey = requireEnv(env, 'OPENAI_API_KEY');
   const port = env.PORT === undefined ? DEFAULT_PORT : parsePort(env.PORT);
   const maxChangedLines =
     env.SANDY_REVIEW_MAX_CHANGED_LINES === undefined
@@ -78,6 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     convexUrl,
     githubAppId,
     githubPrivateKeyPath,
+    openAiApiKey,
     port,
     agentImage: parseAgentImage(env.SANDY_AGENT_IMAGE),
     maxChangedLines,
@@ -170,12 +175,17 @@ export async function main(): Promise<void> {
   });
   const cancellations = new ReviewCancellationCoordinator();
   const poster = new PullRequestPoster(github);
+  const executionStore = new ConvexExecutionStore(reactiveClient);
   const executor = new ReviewExecutor({
-    store: new ConvexExecutionStore(reactiveClient),
+    store: executionStore,
     cloneManager,
     diffInspector: github,
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
+    archetypeAssigner: new FindingArchetypeAssigner(
+      new OpenAIFindingEmbedder({ apiKey: config.openAiApiKey }),
+      executionStore,
+    ),
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,
     manifestBuilder: {

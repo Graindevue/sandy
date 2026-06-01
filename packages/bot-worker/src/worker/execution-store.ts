@@ -10,10 +10,12 @@ import type {
 
 type QueryRef = FunctionReference<'query'>;
 type MutationRef = FunctionReference<'mutation'>;
+type ActionRef = FunctionReference<'action'>;
 
 export interface ConvexExecutionClient {
   query(query: QueryRef, args: Record<string, unknown>): Promise<unknown>;
   mutation(mutation: MutationRef, args: Record<string, unknown>): Promise<unknown>;
+  action(action: ActionRef, args: Record<string, unknown>): Promise<unknown>;
 }
 
 interface RecordFindingInput {
@@ -34,6 +36,9 @@ const refs = {
     recordFinding: makeFunctionReference<'mutation'>('findings:recordFinding'),
     recordSynthesizedReview: makeFunctionReference<'mutation'>('findings:recordSynthesizedReview'),
     markPosted: makeFunctionReference<'mutation'>('findings:markPosted'),
+  },
+  archetypes: {
+    assignOrCreateArchetype: makeFunctionReference<'action'>('archetypes:assignOrCreateArchetype'),
   },
   agentRuns: {
     record: makeFunctionReference<'mutation'>('agentRuns:record'),
@@ -89,6 +94,15 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
 
   async markFindingPosted(findingId: string, githubCommentId: number): Promise<void> {
     await this.#client.mutation(refs.findings.markPosted, { findingId, githubCommentId });
+  }
+
+  async assignArchetype(input: {
+    findingId: string;
+    embedding: number[];
+  }): Promise<{ archetypeId: string }> {
+    return (await this.#client.action(refs.archetypes.assignOrCreateArchetype, input)) as {
+      archetypeId: string;
+    };
   }
 
   async recordAgentRun(input: RecordAgentRunInput): Promise<void> {

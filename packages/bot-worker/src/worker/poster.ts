@@ -13,6 +13,10 @@ export interface PersistedFinding {
   finding: Finding;
 }
 
+export interface ArchetypeStampedFinding extends PersistedFinding {
+  archetypeId: string;
+}
+
 export interface PostedFinding {
   findingId: string;
   commentId: number;
@@ -52,7 +56,7 @@ export interface PosterLogger {
 
 export interface PostReviewResultInput {
   target: PullRequestTarget;
-  findings: readonly PersistedFinding[];
+  findings: readonly ArchetypeStampedFinding[];
   /** Sibling Repo SHAs pinned when the ReviewJob started. */
   siblingShas: SiblingShas;
   summary: string;
@@ -78,7 +82,7 @@ export class PullRequestPoster {
 
   async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
     const inlinePosted: PostedFinding[] = [];
-    const summaryOnly: PersistedFinding[] = [];
+    const summaryOnly: ArchetypeStampedFinding[] = [];
 
     for (const persisted of input.findings) {
       if (!isReviewedRepoAnchor(input.target, persisted.finding.anchor.repo)) {
@@ -128,7 +132,7 @@ export class PullRequestPoster {
 
 function buildReviewCommentInput(
   target: PullRequestTarget,
-  persisted: PersistedFinding,
+  persisted: ArchetypeStampedFinding,
   siblingShas: SiblingShas,
 ): ReviewCommentInput {
   const { finding } = persisted;
@@ -165,7 +169,7 @@ function isReviewedRepoAnchor(target: PullRequestTarget, anchorRepo: string): bo
 
 function appendSummaryOnlyFindings(
   summary: string,
-  findings: readonly PersistedFinding[],
+  findings: readonly ArchetypeStampedFinding[],
   siblingShas: SiblingShas,
 ): string {
   if (findings.length === 0) {
@@ -181,7 +185,7 @@ function appendSummaryOnlyFindings(
 }
 
 function formatSummaryOnlyFinding(
-  { id, finding }: PersistedFinding,
+  { id, archetypeId, finding }: ArchetypeStampedFinding,
   siblingShas: SiblingShas,
 ): string {
   const parts = [
@@ -189,7 +193,7 @@ function formatSummaryOnlyFinding(
     `Anchor: ${formatAnchor(finding.anchor)}`,
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, finding, siblingShas),
+    ...formatFindingDetailSections(id, archetypeId, finding, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -204,14 +208,14 @@ function formatAnchor(anchor: Finding['anchor']): string {
 }
 
 export function formatFindingBody(
-  { id, finding }: PersistedFinding,
+  { id, archetypeId, finding }: ArchetypeStampedFinding,
   siblingShas: SiblingShas,
 ): string {
   const parts = [
     formatFindingHeading(finding),
     finding.summary,
     `Evidence:\n${finding.evidence}`,
-    ...formatFindingDetailSections(id, finding, siblingShas),
+    ...formatFindingDetailSections(id, archetypeId, finding, siblingShas),
   ];
 
   return parts.join('\n\n');
@@ -223,6 +227,7 @@ function formatFindingHeading(finding: Finding): string {
 
 function formatFindingDetailSections(
   id: string,
+  archetypeId: string,
   finding: Finding,
   siblingShas: SiblingShas,
 ): string[] {
@@ -234,7 +239,7 @@ function formatFindingDetailSections(
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));
   }
-  parts.push(`<!-- bot:finding=${id} -->`);
+  parts.push(`<!-- bot:finding=${id} archetype=${archetypeId} -->`);
 
   return parts;
 }

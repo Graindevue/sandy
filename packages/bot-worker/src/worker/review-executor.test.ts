@@ -1,11 +1,12 @@
 import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
-import type { PersistedFinding } from './poster.js';
+import type { ArchetypeStampedFinding, PersistedFinding } from './poster.js';
 import {
   type RecordAgentRunInput,
   type RecordSynthesizedReviewInput,
   type ReviewAgentRunner,
+  type ReviewArchetypeAssigner,
   type ReviewDiffInspector,
   type ReviewExecutionStore,
   ReviewExecutor,
@@ -87,6 +88,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector,
       runner,
       resolveAgent: () => logicAgent,
@@ -110,7 +112,9 @@ describe('ReviewExecutor', () => {
     ]);
     expect(diffInspector.calls[0]?.ignorePatterns).toEqual(['generated/**']);
     expect(runner.calls[0]?.botConfig).toEqual(botConfig);
-    expect(poster.results[0]?.findings).toEqual([{ id: 'finding-1', finding }]);
+    expect(poster.results[0]?.findings).toEqual([
+      { id: 'finding-1', archetypeId: 'archetype-1', finding },
+    ]);
     expect(poster.results[0]?.siblingShas).toEqual({});
     expect(poster.results[0]?.summary).toContain('Confidence score: 2/5');
     expect(poster.results[0]?.summary).toContain(
@@ -144,6 +148,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ agent }) => {
@@ -186,8 +191,8 @@ describe('ReviewExecutor', () => {
     );
     expect(poster.results).toHaveLength(1);
     expect(poster.results[0]?.findings).toEqual([
-      { id: 'finding-1', finding },
-      { id: 'finding-2', finding: securityFinding },
+      { id: 'finding-1', archetypeId: 'archetype-1', finding },
+      { id: 'finding-2', archetypeId: 'archetype-2', finding: securityFinding },
     ]);
     expect(poster.results[0]?.summary).toContain('Sandy review posted 2 findings.');
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
@@ -210,6 +215,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager: new FakeCloneManager(),
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ agent }) => {
@@ -236,7 +242,7 @@ describe('ReviewExecutor', () => {
     expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 5 }]);
     expect(poster.results).toHaveLength(1);
     expect(poster.results[0]?.findings).toEqual([
-      { id: 'finding-1', finding: duplicateSecurityFinding },
+      { id: 'finding-1', archetypeId: 'archetype-1', finding: duplicateSecurityFinding },
     ]);
     expect(poster.results[0]?.summary).toContain(
       'Synthesized 2 raw findings into 1 posted finding.',
@@ -249,6 +255,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager: new FakeCloneManager(),
       poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ agent }) => {
@@ -291,6 +298,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager: new FakeCloneManager(),
       poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ agent }) => {
@@ -351,6 +359,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async (input) => {
@@ -445,6 +454,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: { runAgent: async () => '<findings>[]</findings>' },
       resolveAgent: () => logicAgent,
@@ -481,6 +491,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => findingsOutput([finding], 'One issue.'),
@@ -518,6 +529,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 5001 },
       runner: {
         runAgent: async () => {
@@ -548,6 +560,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
@@ -583,6 +596,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => {
@@ -620,6 +634,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
@@ -654,6 +669,7 @@ describe('ReviewExecutor', () => {
       store,
       cloneManager,
       poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
@@ -809,6 +825,17 @@ class FakeExecutionStore implements ReviewExecutionStore {
 
   async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
     this.failed.push({ jobId, finishedAt, error });
+  }
+}
+
+class FakeArchetypeAssigner implements ReviewArchetypeAssigner {
+  async assignArchetypes(
+    findings: readonly PersistedFinding[],
+  ): Promise<ArchetypeStampedFinding[]> {
+    return findings.map((finding, index) => ({
+      ...finding,
+      archetypeId: `archetype-${index + 1}`,
+    }));
   }
 }
 

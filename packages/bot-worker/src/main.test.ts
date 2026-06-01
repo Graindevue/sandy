@@ -19,6 +19,7 @@ describe('loadConfig PORT validation', () => {
     CONVEX_URL: 'https://example.convex.cloud',
     GITHUB_APP_ID: '123',
     GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+    OPENAI_API_KEY: 'sk-openai',
   };
 
   it.each([
@@ -60,6 +61,7 @@ describe('loadConfig webhook secret', () => {
       CONVEX_URL: 'https://example.convex.cloud',
       GITHUB_APP_ID: '123',
       GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+      OPENAI_API_KEY: 'sk-openai',
     });
     expect(config.webhookSecret).toBe('shh');
   });
@@ -70,6 +72,7 @@ describe('loadConfig webhook secret', () => {
         CONVEX_URL: 'https://example.convex.cloud',
         GITHUB_APP_ID: '123',
         GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+        OPENAI_API_KEY: 'sk-openai',
       }),
     ).toThrow(/GITHUB_WEBHOOK_SECRET/);
   });
@@ -81,6 +84,7 @@ describe('loadConfig GitHub App credentials', () => {
     CONVEX_URL: 'https://example.convex.cloud',
     GITHUB_APP_ID: '123',
     GITHUB_APP_PRIVATE_KEY_PATH: '.config/key.pem',
+    OPENAI_API_KEY: 'sk-openai',
   };
 
   it('requires GitHub App credentials for posting reviews and cloning private repos', () => {
@@ -88,6 +92,10 @@ describe('loadConfig GitHub App credentials', () => {
     expect(() => loadConfig({ ...baseEnv, GITHUB_APP_PRIVATE_KEY_PATH: undefined })).toThrow(
       /GITHUB_APP_PRIVATE_KEY_PATH/,
     );
+  });
+
+  it('requires an OpenAI API key for Finding embeddings', () => {
+    expect(() => loadConfig({ ...baseEnv, OPENAI_API_KEY: undefined })).toThrow(/OPENAI_API_KEY/);
   });
 
   it('parses review execution options', () => {
@@ -102,7 +110,10 @@ describe('loadConfig GitHub App credentials', () => {
     expect(config.agentImage).toBe('custom-agent');
     expect(config.maxChangedLines).toBe(123);
     expect(config.maxConcurrentJobs).toBe(2);
-    expect(config.agentEnv).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+    expect(config.agentEnv).toEqual({
+      ANTHROPIC_API_KEY: 'sk-test',
+      OPENAI_API_KEY: 'sk-openai',
+    });
   });
 });
 

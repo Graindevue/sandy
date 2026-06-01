@@ -57,9 +57,10 @@ codex --version
 If a Review later fails with a Codex auth error after a long idle period, run any
 `codex` command on the host to refresh the token.
 
-> **Prefer an API key, or want Claude instead?** Set `OPENAI_API_KEY` in
-> `.config/.env` for Codex API-key auth (no `codex login` needed), or switch the
-> `logic` Agent to `vendor: claude` and set `ANTHROPIC_API_KEY` (see
+> **Prefer Agent API-key auth, or want Claude instead?** `OPENAI_API_KEY` is
+> already required in `.config/.env` for Finding embeddings; Codex can also use
+> it for API-key auth (no `codex login` needed). Or switch the `logic` Agent to
+> `vendor: claude` and set `ANTHROPIC_API_KEY` (see
 > [`github-app.md`](./github-app.md) and [`bot-yaml.md`](./bot-yaml.md)).
 
 ## 2. Confirm Apple Container is installed

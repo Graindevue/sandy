@@ -19,12 +19,14 @@ to every row.
   `markSuperseded`, `getStatus`, and the `subscribePending` query the worker
   subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
-- **findings** — `recordFinding`, `recordSynthesizedReview`, `listForPr`.
-- **learning loop** — Phase 3 schema tables are present; their mutations,
-  queries, and crons ship in later Phase 3 slices.
+- **findings** — `recordFinding`, `recordSynthesizedReview`, `markPosted`,
+  `listForPr`.
+- **learning loop** — `archetypes:assignOrCreateArchetype`, `byProduct`,
+  `updateSuppressionWeight`, and the internal backstop clustering functions.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
-  ReviewJobs claimed more than 30 minutes ago as `failed`.
+  ReviewJobs claimed more than 30 minutes ago as `failed`; `clusterRecentFindings`
+  runs every 10 minutes and assigns missing Archetypes.
 
 ## Local setup
 
