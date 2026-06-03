@@ -76,7 +76,7 @@ function validateCrossRepoSearch(value: unknown, where: string): CrossRepoSearch
   const base: { rationale: string; searchedRepos?: string[] } = {
     rationale: requireString(object.rationale, `${where}.rationale`),
   };
-  const decision = validateCrossRepoSearchDecision(status, trigger, where);
+  const decision = normalizeCrossRepoSearchDecision(status, trigger);
   if (object.searchedRepos !== undefined) {
     if (!Array.isArray(object.searchedRepos)) {
       throw new Error(`${where}.searchedRepos must be an array when provided`);
@@ -89,22 +89,21 @@ function validateCrossRepoSearch(value: unknown, where: string): CrossRepoSearch
   return { ...base, ...decision };
 }
 
-function validateCrossRepoSearchDecision(
+function normalizeCrossRepoSearchDecision(
   status: CrossRepoSearchStatus,
   trigger: CrossRepoSearchTrigger,
-  where: string,
 ): CrossRepoSearchDecision {
+  // The status/trigger pair is telemetry for the summary line, not a structural
+  // contract — normalize a model's mismatched pair instead of discarding the
+  // whole findings payload over it (the same leniency as requireConfidence; the
+  // individual enum values stay strict upstream). The prompt states the pairing
+  // rule; this is the safety net for when a model still slips.
   if (status === 'skipped') {
-    if (trigger !== 'none') {
-      throw new Error(`${where}.trigger must be "none" when status is "skipped"`);
-    }
-    return { status, trigger };
+    // A skip is unambiguous about intent; the trigger label is irrelevant.
+    return { status, trigger: 'none' };
   }
-
-  if (trigger === 'none') {
-    throw new Error(`${where}.trigger must be "manifest" or "diff-judgment" when searched`);
-  }
-  return { status, trigger };
+  // Searched: keep a real run trigger; treat an ambiguous 'none' as diff-judgment.
+  return { status, trigger: trigger === 'none' ? 'diff-judgment' : trigger };
 }
 
 function validateFinding(value: unknown, index: number): Finding {
