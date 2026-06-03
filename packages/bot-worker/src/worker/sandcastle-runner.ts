@@ -236,6 +236,7 @@ Cross-Repo Search contract:
 - Search siblings with rg/read_file against the mounted code, not from the Manifest alone. Confirm each hit is a real usage: resolved import, actual call site, or key lookup. Use tree_sitter_query for structural confirmation when a symbol is too generic to grep safely. Never report coincidental string matches.
 - Emit one Finding per changed contract item and put all confirmed sibling consumers in crossRepoReferences; do not emit one Finding per reference. Let severity reflect the true confirmed consumer count even if the rendered reference list is later capped. Frame these as cross-repo contract drift judged against sibling main/default branch. This rule is symmetric: producer-side removals/renames and consumer-side use of symbols absent from sibling main can both be Findings.
 - Always fill crossRepoSearch in the JSON output: say why you searched siblings, or say that no cross-repo contract risk was detected.
+- \`status\` and \`trigger\` are a matched pair, not independent fields: a skip is exactly \`{"status":"skipped","trigger":"none"}\`; a search is \`"status":"searched"\` with \`"trigger":"manifest"\` or \`"diff-judgment"\` (never \`"none"\`).
 
 You are running inside the checked-out PR worktree. Review the diff and emit exactly one JSON object inside <findings>...</findings>. Each finding must use an in-diff "anchor"; use "crossRepoReferences" only for confirmed affected sibling-Repo consumers:
 

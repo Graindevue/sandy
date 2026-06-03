@@ -169,17 +169,63 @@ describe('parseFindingsPayload', () => {
     ).toThrow(/severity/i);
   });
 
-  it('rejects inconsistent Cross-Repo Search status and trigger pairs', () => {
+  // A skip mislabelled with a real trigger is telemetry noise, not a structural
+  // fault — normalize it and keep the findings rather than discarding the run
+  // (the failure mode that lost a Codex security run's output in practice).
+  it('normalizes a skipped Cross-Repo Search with a stray trigger, keeping findings', () => {
+    const payload = parseFindingsPayload(`<findings>{
+      "crossRepoSearch": {
+        "status": "skipped",
+        "trigger": "diff-judgment",
+        "rationale": "Local-only change."
+      },
+      "findings": [{
+        "severity": "P2",
+        "confidence": 3,
+        "agentKey": "security",
+        "anchor": { "repo": "acme/widget", "path": "src/a.ts", "lineStart": 1, "lineEnd": 1 },
+        "summary": "x",
+        "evidence": "y",
+        "category": "security"
+      }]
+    }</findings>`);
+
+    expect(payload.crossRepoSearch).toEqual({
+      status: 'skipped',
+      trigger: 'none',
+      rationale: 'Local-only change.',
+    });
+    expect(payload.findings).toHaveLength(1);
+  });
+
+  it('normalizes a searched Cross-Repo Search labelled trigger:none to diff-judgment', () => {
+    const payload = parseFindingsPayload(`<findings>{
+      "crossRepoSearch": {
+        "status": "searched",
+        "trigger": "none",
+        "rationale": "Checked siblings for the renamed query."
+      },
+      "findings": []
+    }</findings>`);
+
+    expect(payload.crossRepoSearch).toMatchObject({
+      status: 'searched',
+      trigger: 'diff-judgment',
+    });
+  });
+
+  // The pairing is lenient; an unknown trigger value is still a real malformation.
+  it('still rejects an unknown Cross-Repo Search trigger value', () => {
     expect(() =>
       parseFindingsPayload(`<findings>{
         "crossRepoSearch": {
           "status": "searched",
-          "trigger": "none",
-          "rationale": "No cross-repo contract risk was detected."
+          "trigger": "magic",
+          "rationale": "n/a"
         },
         "findings": []
       }</findings>`),
-    ).toThrow(/trigger must be "manifest" or "diff-judgment"/);
+    ).toThrow(/trigger must be one of/);
   });
 
   it('uses the final findings block when earlier narration contains an example', () => {
