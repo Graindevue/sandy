@@ -252,6 +252,11 @@ export async function main(): Promise<void> {
     sink,
     pullRequestResolver: github,
     reviewCanceller: cancellations,
+    // Enqueue each Review with the Repo's configured candidate Agents (bot.yaml),
+    // not a hardcoded Agent. Unregistered Repos resolve to none. The worker refines
+    // this set at worktree time via selectAgentsForReview.
+    resolveAgentKeys: (repo) =>
+      configLoader.resolveForRepo(repo.owner, repo.name)?.agents.map((agent) => agent.key) ?? [],
     forkDeclineCommenter: {
       async postForkDeclined({ repo, pullNumber, body }) {
         await github.createIssueComment({

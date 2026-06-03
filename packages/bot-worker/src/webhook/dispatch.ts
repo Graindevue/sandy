@@ -56,11 +56,21 @@ export interface CommentReplyCapturer {
   }): Promise<{ recorded: number } | undefined>;
 }
 
+/**
+ * Resolves which Agent keys a Review should enqueue for a Repo, from instance
+ * config (`bot.yaml`'s per-Product `agents` list). Injected so {@link dispatchEvent}
+ * stays decoupled from the ConfigLoader. Returns the Product's configured candidate
+ * Agents — the worker refines them at worktree time (framework auto-detect +
+ * `.bot/agents.yaml` overrides) via `selectAgentsForReview`.
+ */
+export type AgentKeysResolver = (repo: RepoRef) => string[];
+
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
   closeSignalCapturer?: PrCloseSignalCapturer;
   replyCapturer?: CommentReplyCapturer;
   reviewCanceller?: ReviewCanceller;
+  resolveAgentKeys?: AgentKeysResolver;
 }
 
 function fullName(repo: RepoRef): string {
@@ -151,8 +161,11 @@ export async function dispatchEvent(
     repoId,
     headSha: pr.headSha,
     trigger,
-    // Phase 1 runs only the logic Agent (PRD).
-    agentKeys: ['logic'],
+    // The Product's configured candidate Agents, from bot.yaml. An empty result
+    // (Repo not in config) is preserved as-is — the worker would resolve no
+    // Agents for it either. The `['logic']` fallback only applies when no resolver
+    // is injected (e.g. unit tests that construct DispatchOptions directly).
+    agentKeys: options.resolveAgentKeys?.(repo) ?? ['logic'],
   };
 
   const enqueueResult = await enqueueReviewForTrigger(sink, enqueueInput, options.reviewCanceller);

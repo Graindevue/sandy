@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import {
+  type AgentKeysResolver,
   type CommentReplyCapturer,
   type DispatchLogger,
   type DispatchOptions,
@@ -44,6 +45,8 @@ export interface WebhookServerOptions {
   replyCapturer?: CommentReplyCapturer;
   /** Optional local cancellation registry for jobs superseded by push deliveries. */
   reviewCanceller?: ReviewCanceller;
+  /** Optional resolver for the configured candidate Agent keys of an enqueued Review. */
+  resolveAgentKeys?: AgentKeysResolver;
   /** Logger; defaults to `console`. */
   logger?: DispatchLogger;
   /** Path the server accepts deliveries on. Defaults to `/`. */
@@ -181,7 +184,8 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
     options.forkDeclineCommenter === undefined &&
     options.closeSignalCapturer === undefined &&
     options.replyCapturer === undefined &&
-    options.reviewCanceller === undefined
+    options.reviewCanceller === undefined &&
+    options.resolveAgentKeys === undefined
   ) {
     return undefined;
   }
@@ -197,6 +201,9 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
   }
   if (options.reviewCanceller !== undefined) {
     dispatch.reviewCanceller = options.reviewCanceller;
+  }
+  if (options.resolveAgentKeys !== undefined) {
+    dispatch.resolveAgentKeys = options.resolveAgentKeys;
   }
   return dispatch;
 }

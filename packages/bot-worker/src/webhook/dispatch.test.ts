@@ -164,6 +164,40 @@ describe('dispatchEvent', () => {
     ]);
   });
 
+  // The enqueued ReviewJob carries the Repo's configured candidate Agents, not a
+  // hardcoded Agent, so the persisted record matches what the worker will fan out.
+  it('enqueues the configured candidate Agents from the injected resolver', async () => {
+    const sink = new FakeSink(false);
+    const resolveAgentKeys = vi.fn(() => ['logic', 'convex', 'security']);
+    const outcome = await dispatchEvent(comment('@bot review'), sink, silentLogger, {
+      resolveAgentKeys,
+    });
+    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
+    expect(resolveAgentKeys).toHaveBeenCalledWith(BASE_REPO);
+    expect(sink.enqueued[0]?.agentKeys).toEqual(['logic', 'convex', 'security']);
+  });
+
+  // The same resolver drives the push path's superseding enqueue.
+  it('threads the resolver result through the superseding push enqueue', async () => {
+    const sink = new FakeSink(true);
+    const outcome = await dispatchEvent(pr('synchronize'), sink, silentLogger, {
+      resolveAgentKeys: () => ['logic', 'nextjs'],
+    });
+    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
+    expect(sink.supersedingEnqueues[0]?.agentKeys).toEqual(['logic', 'nextjs']);
+  });
+
+  // An unregistered Repo resolves to no Agents; preserve that rather than masking
+  // it with a logic fallback (the worker would resolve no Agents for it too).
+  it('preserves an empty resolver result instead of falling back to logic', async () => {
+    const sink = new FakeSink(false);
+    const outcome = await dispatchEvent(comment('@bot review'), sink, silentLogger, {
+      resolveAgentKeys: () => [],
+    });
+    expect(outcome).toMatchObject({ action: 'enqueued' });
+    expect(sink.enqueued[0]?.agentKeys).toEqual([]);
+  });
+
   // AC: subsequent push to a reviewActive PR enqueues without a new mention.
   it('synchronize on an opted-in PR enqueues a push job without re-flipping', async () => {
     const sink = new FakeSink(true);
