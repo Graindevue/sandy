@@ -19,13 +19,12 @@ import type {
   PullRequestTarget,
   ReviewCommentInput,
 } from '../worker/poster.js';
+import type { RepoForWorktree, ReviewDiffInspector } from '../worker/review-executor.js';
 import type {
   CompleteReviewStatusCheckInput,
   CreateReviewStatusCheckInput,
-  RepoForWorktree,
-  ReviewDiffInspector,
   ReviewStatusCheckReporter,
-} from '../worker/review-executor.js';
+} from '../worker/review-status-check.js';
 
 type Fetch = typeof fetch;
 

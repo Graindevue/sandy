@@ -36,6 +36,15 @@ import type {
   PostableFinding,
 } from './review-findings.js';
 import {
+  type CompleteReviewStatusCheckRunInput,
+  completedReviewStatusCheckOutcome,
+  REVIEW_STATUS_CHECK_OUTCOMES,
+  type ReviewStatusCheckLogger,
+  type ReviewStatusCheckReporter,
+  type ReviewStatusCheckRun,
+  startReviewStatusCheck,
+} from './review-status-check.js';
+import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
   type RepoForWorktree,
@@ -174,19 +183,6 @@ interface SelectedAgentReviewResults {
   selectedAgentCount: number;
 }
 
-interface CompletedReviewCheckOutcome {
-  conclusion: ReviewStatusCheckConclusion;
-  verdict: string;
-}
-
-interface CompleteStatusCheckInput {
-  context: ReviewJobContext;
-  target: PullRequestTarget;
-  checkRunId: number | null;
-  outcome: CompletedReviewCheckOutcome;
-  summaryComment?: PostedSummaryComment;
-}
-
 interface AgentWorkspace {
   prWorktree: ReviewWorktree;
   siblingWorktrees: readonly RunnerSiblingWorktree[];
@@ -205,36 +201,6 @@ interface AgentExecutionInput {
 export interface ReviewPoster {
   postReviewResult(input: PostReviewResultInput): Promise<PostedReviewResult>;
   postScopeDeclined(input: PostScopeDeclinedInput): Promise<PostedSummaryComment>;
-}
-
-export type ReviewStatusCheckConclusion = 'success' | 'neutral' | 'failure';
-
-export interface CreateReviewStatusCheckInput {
-  owner: string;
-  repo: string;
-  headSha: string;
-  pullRequestUrl: string;
-  startedAt: number;
-}
-
-export interface CompleteReviewStatusCheckInput {
-  owner: string;
-  repo: string;
-  checkRunId: number;
-  conclusion: ReviewStatusCheckConclusion;
-  detailsUrl: string;
-  summaryCommentUrl?: string;
-  verdict: string;
-  completedAt: number;
-}
-
-export interface ReviewStatusCheckReporter {
-  createInProgress(input: CreateReviewStatusCheckInput): Promise<{ id: number }>;
-  complete(input: CompleteReviewStatusCheckInput): Promise<void>;
-}
-
-export interface ReviewExecutorLogger {
-  warn(message: string, ...args: unknown[]): void;
 }
 
 export interface ReviewArchetypeAssigner {
@@ -270,7 +236,7 @@ export interface ReviewExecutorOptions {
   maxChangedLines?: number;
   agentTimeoutMs?: number;
   now?: () => number;
-  logger?: ReviewExecutorLogger;
+  logger?: ReviewStatusCheckLogger;
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
@@ -294,7 +260,7 @@ export class ReviewExecutor {
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
   readonly #now: () => number;
-  readonly #logger: ReviewExecutorLogger;
+  readonly #logger: ReviewStatusCheckLogger;
 
   constructor(options: ReviewExecutorOptions) {
     this.#store = options.store;
@@ -317,8 +283,7 @@ export class ReviewExecutor {
 
   async executeClaimedJob(jobId: string): Promise<void> {
     let context: ReviewJobContext | null = null;
-    let target: PullRequestTarget | null = null;
-    let checkRunId: number | null = null;
+    let statusCheck: ReviewStatusCheckRun | null = null;
     const worktrees: ReviewWorktree[] = [];
     const cancellation = this.#cancellationRegistry?.register(jobId);
     const cancellationSignal = cancellation?.signal;
@@ -327,8 +292,14 @@ export class ReviewExecutor {
       cancellationSignal?.throwIfAborted();
       context = await this.#requiredContext(jobId);
       const repo = repoForWorktree(context);
-      target = pullRequestTarget(context);
-      checkRunId = context.job.checkRunId ?? (await this.#createStatusCheck(context));
+      const target = pullRequestTarget(context);
+      statusCheck = await startReviewStatusCheck({
+        context,
+        reporter: this.#statusChecks,
+        store: this.#store,
+        now: this.#now,
+        logger: this.#logger,
+      });
       const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
       const changedLines = await this.#diffInspector.changedLineCount(
         target,
@@ -339,14 +310,8 @@ export class ReviewExecutor {
       if (changedLines > this.#maxChangedLines) {
         await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
         const summaryComment = await this.#completeScopeDecline(jobId, target, changedLines);
-        await this.#completeStatusCheck({
-          context,
-          target,
-          checkRunId,
-          outcome: {
-            conclusion: 'neutral',
-            verdict: 'Sandy skipped this review',
-          },
+        await statusCheck.complete({
+          outcome: REVIEW_STATUS_CHECK_OUTCOMES.scopeDeclined,
           summaryComment,
         });
         return;
@@ -393,99 +358,29 @@ export class ReviewExecutor {
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#store.markCompleted(jobId, this.#now());
-      const statusCheckInput: CompleteStatusCheckInput = {
-        context,
-        target,
-        checkRunId,
-        outcome: completedReviewCheckOutcome({
+      const statusCheckCompletion: CompleteReviewStatusCheckRunInput = {
+        outcome: completedReviewStatusCheckOutcome({
           selectedAgentCount: agentResults.selectedAgentCount,
           failedAgentCount: agentResults.failedAgentCount,
           postedFindingCount: postedReview?.postedFindings.length ?? 0,
         }),
       };
       if (postedReview !== null) {
-        statusCheckInput.summaryComment = postedReview.summaryComment;
+        statusCheckCompletion.summaryComment = postedReview.summaryComment;
       }
-      await this.#completeStatusCheck(statusCheckInput);
+      await statusCheck.complete(statusCheckCompletion);
     } catch (error) {
       if (isReviewSupersededError(error)) {
         return;
       }
       const message = describeError(error);
       await this.#store.markFailed(jobId, this.#now(), message);
-      if (context !== null && target !== null) {
-        await this.#completeStatusCheck({
-          context,
-          target,
-          checkRunId,
-          outcome: {
-            conclusion: 'failure',
-            verdict: 'Sandy failed to run',
-          },
-        });
-      }
+      await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed });
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
       cancellation?.dispose();
-    }
-  }
-
-  async #createStatusCheck(context: ReviewJobContext): Promise<number | null> {
-    if (this.#statusChecks === null) {
-      return null;
-    }
-
-    let checkRunId: number;
-    try {
-      const check = await this.#statusChecks.createInProgress({
-        owner: context.repo.owner,
-        repo: context.repo.name,
-        headSha: context.job.headSha,
-        pullRequestUrl: context.pullRequest.url,
-        startedAt: this.#now(),
-      });
-      checkRunId = check.id;
-    } catch (error) {
-      this.#logger.warn(`failed to create Sandy Check Run for ReviewJob ${context.job.id}`, error);
-      return null;
-    }
-
-    try {
-      await this.#store.setReviewCheckRunId(context.job.id, checkRunId);
-    } catch (error) {
-      this.#logger.warn(
-        `failed to persist Sandy Check Run ${checkRunId} for ReviewJob ${context.job.id}`,
-        error,
-      );
-    }
-    return checkRunId;
-  }
-
-  async #completeStatusCheck(input: CompleteStatusCheckInput): Promise<void> {
-    if (this.#statusChecks === null || input.checkRunId === null) {
-      return;
-    }
-
-    try {
-      await this.#statusChecks.complete({
-        owner: input.target.owner,
-        repo: input.target.repo,
-        checkRunId: input.checkRunId,
-        conclusion: input.outcome.conclusion,
-        detailsUrl: input.summaryComment?.url ?? input.context.pullRequest.url,
-        ...(input.summaryComment === undefined
-          ? {}
-          : { summaryCommentUrl: input.summaryComment.url }),
-        verdict: input.outcome.verdict,
-        completedAt: this.#now(),
-      });
-    } catch (error) {
-      this.#logger.warn(
-        `failed to update Sandy Check Run ${input.checkRunId} for ReviewJob ${input.context.job.id}`,
-        error,
-      );
     }
   }
 
@@ -805,50 +700,6 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
     runInput.siblingWorktrees = input.workspace.siblingWorktrees;
   }
   return runInput;
-}
-
-function completedReviewCheckOutcome(input: {
-  selectedAgentCount: number;
-  failedAgentCount: number;
-  postedFindingCount: number;
-}): CompletedReviewCheckOutcome {
-  const successfulAgentCount = input.selectedAgentCount - input.failedAgentCount;
-  if (input.selectedAgentCount > 0 && successfulAgentCount === 0) {
-    return {
-      conclusion: 'failure',
-      verdict: 'Sandy failed to produce review results',
-    };
-  }
-
-  if (input.failedAgentCount > 0) {
-    return {
-      conclusion: 'neutral',
-      verdict: 'Sandy completed with partial agent failures',
-    };
-  }
-
-  if (input.postedFindingCount > 0) {
-    return {
-      conclusion: 'neutral',
-      verdict: `Sandy posted ${formatCountWithNoun(input.postedFindingCount, 'finding')}`,
-    };
-  }
-
-  if (input.selectedAgentCount === 0) {
-    return {
-      conclusion: 'neutral',
-      verdict: 'Sandy completed without running agents',
-    };
-  }
-
-  return {
-    conclusion: 'success',
-    verdict: 'Sandy ran cleanly',
-  };
-}
-
-function formatCountWithNoun(count: number, noun: string): string {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
 function describeError(error: unknown): string {
