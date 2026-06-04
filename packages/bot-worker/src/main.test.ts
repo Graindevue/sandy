@@ -286,6 +286,7 @@ describe('resolveReviewBotConfig', () => {
       name: 'widget',
       fullName: 'acme/widget',
       defaultBranch: 'main',
+      excludeBranches: [],
     };
     const product = {
       slug: 'acme',
@@ -407,6 +408,7 @@ function product(options: {
         name: 'widget',
         fullName: 'acme/widget',
         defaultBranch: 'main',
+        excludeBranches: [],
       },
     ],
     agents: options.agents ?? [],

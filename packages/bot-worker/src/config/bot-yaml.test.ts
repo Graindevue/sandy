@@ -55,12 +55,32 @@ describe('parseBotConfig', () => {
     expect(product?.repos[0]?.owner).toBe('tony-co');
     expect(product?.repos[0]?.name).toBe('acme-backend');
     expect(product?.repos[0]?.defaultBranch).toBe('main');
+    expect(product?.repos[0]?.excludeBranches).toEqual([]);
     // `fullName` is derived, not authored.
     expect(product?.repos[0]?.fullName).toBe('tony-co/acme-backend');
     // No `agents:` => default/auto selection and no runtime overrides.
     expect(product?.agents).toEqual([]);
     expect(product?.agentSelectionMode).toBe('default');
     expect(product?.agentOverrides).toEqual({});
+  });
+
+  it('parses per-Repo base-branch exclusion patterns', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+        excludeBranches:
+          - " release/* "
+          - vendor/**
+`;
+
+    const repo = parseBotConfig(yaml).products[0]?.repos[0];
+
+    expect(repo?.excludeBranches).toEqual(['release/*', 'vendor/**']);
   });
 
   it('parses a full multi-Product config and preserves list-form exact Agent selection', () => {
@@ -222,6 +242,60 @@ products:
 `;
     expect(() => parseBotConfig(yaml)).toThrow(/acme/);
     expect(() => parseBotConfig(yaml)).toThrow(/defaultBranch/);
+  });
+
+  it('throws when `excludeBranches` is not a list', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+        excludeBranches: release/*
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(
+      /products\[0\] \(acme\)\.repos\[0\]\.excludeBranches/,
+    );
+    expect(() => parseBotConfig(yaml)).toThrow(/list/);
+  });
+
+  it('throws when an `excludeBranches` entry is not a string, naming the index', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+        excludeBranches:
+          - release/*
+          - 123
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(
+      /products\[0\] \(acme\)\.repos\[0\]\.excludeBranches\[1\]/,
+    );
+  });
+
+  it('throws when an `excludeBranches` entry is empty after trimming', () => {
+    const yaml = `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+        excludeBranches:
+          - release/*
+          - "   "
+`;
+    expect(() => parseBotConfig(yaml)).toThrow(
+      /products\[0\] \(acme\)\.repos\[0\]\.excludeBranches\[1\]/,
+    );
+    expect(() => parseBotConfig(yaml)).toThrow(/non-empty string/);
   });
 
   it('throws on a duplicate Product slug', () => {

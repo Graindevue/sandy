@@ -12,6 +12,7 @@ const repoA: RepoConfig = {
   name: 'api',
   fullName: 'acme/api',
   defaultBranch: 'main',
+  excludeBranches: [],
 };
 
 const repoB: RepoConfig = {
@@ -19,6 +20,7 @@ const repoB: RepoConfig = {
   name: 'desktop',
   fullName: 'acme/desktop',
   defaultBranch: 'main',
+  excludeBranches: [],
 };
 
 beforeEach(async () => {

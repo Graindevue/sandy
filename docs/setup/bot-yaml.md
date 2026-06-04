@@ -63,6 +63,9 @@ products:
       - owner: tony-co
         name: acme-desktop
         defaultBranch: main
+        excludeBranches:
+          - release/*
+          - vendor/**
     # Optional: choose which Agents run for this Product and override their
     # runtime vendor/model. See "Agent selection".
     agents:
@@ -101,10 +104,41 @@ These map to Sandy's `Product` type (`slug`, `name`).
 | `owner` | string | yes | GitHub owner or org login, e.g. `tony-co`. |
 | `name` | string | yes | Repository name, e.g. `acme-backend`. |
 | `defaultBranch` | string | yes | The Repo's default branch, e.g. `main`. |
+| `excludeBranches` | list of strings | no | Glob patterns for base branches where Sandy skips automatic draft → ready Review arming. Omit or use `[]` to exclude nothing. |
 
 These map to Sandy's `Repo` type. The `owner`/`name` pair must match a repository
 the GitHub App is installed on. `fullName` (`owner/name`) is derived by Sandy —
 you don't write it.
+
+### Base-Branch Exclusion
+
+`excludeBranches` is a per-Repo denylist. It matches the PR's base branch
+(target branch), not the head branch:
+
+```yaml
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+        excludeBranches:
+          - release/*
+          - vendor/**
+          - sandbox
+```
+
+Exact branch names work as patterns (`sandbox` matches only `sandbox`). Glob
+patterns use Node's `matchesGlob` semantics and are case-sensitive, like Git
+refs. `release/*` matches `release/2026.06`; `vendor/**` matches nested branch
+names such as `vendor/generated/current`.
+
+The exclusion gates only automatic Sticky Opt-In from `gh pr ready`
+(`ready_for_review`). PR open/reopen behavior is unchanged, and `@bot review`
+always overrides the exclusion. After a human opts in an excluded-branch PR with
+`@bot review`, subsequent pushes retrigger Reviews normally. A skipped automatic
+trigger posts no PR comment.
 
 ## Agent selection
 

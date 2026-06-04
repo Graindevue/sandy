@@ -23,6 +23,11 @@ products:
       - owner: your-org
         name: acme-desktop
         defaultBranch: main
+        # Optional: skip automatic `gh pr ready` Review arming for PRs targeting
+        # these base branches. A human `@bot review` mention still overrides it.
+        # excludeBranches:
+        #   - release/*
+        #   - vendor/**
     # Optional: choose which Agents run for this Product, by Agent key (the file
     # name without .md in agents/ or .config/agents/). List form is an exact
     # Product Agent set. Omit `agents` to use the default selection (every

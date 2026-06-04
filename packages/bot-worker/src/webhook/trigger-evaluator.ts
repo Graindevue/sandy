@@ -56,6 +56,8 @@ export interface TriggerDecision {
   trigger?: ReviewTrigger;
   /** The PR is declined without enqueuing; `'fork'` is the only v1 reason. */
   decline?: 'fork';
+  /** The Review was intentionally skipped without side effects. */
+  skip?: 'base-branch-excluded';
 }
 
 const DO_NOTHING: TriggerDecision = { enqueue: false };
@@ -71,7 +73,8 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  * - `@bot review` comment on an open PR → enqueue + set `reviewActive = true`
  *   (trigger `mention`); on a closed or merged PR → do nothing.
  * - draft → ready transition (`ready_for_review`) → enqueue + set
- *   `reviewActive = true` (trigger `ready`).
+ *   `reviewActive = true` (trigger `ready`) unless the dispatcher says the PR's
+ *   base branch is excluded from automatic arming.
  * - push / synchronize on a `reviewActive` PR → enqueue (trigger `push`).
  *   Pushes to an opted-out, closed, or merged PR are ignored.
  * - PR closed → clear `reviewActive`.
@@ -81,7 +84,11 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  * Cancel-on-Supersede is applied by the dispatcher/Convex enqueue path after
  * this pure decision; the evaluator only emits the trigger.
  */
-export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean): TriggerDecision {
+export function evaluateTrigger(
+  event: ParsedEvent,
+  currentReviewActive: boolean,
+  baseBranchExcluded = false,
+): TriggerDecision {
   switch (event.kind) {
     case 'ignored':
       return DO_NOTHING;
@@ -130,6 +137,9 @@ export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean
         case 'ready_for_review': {
           if (isForkPr(event.repo, event.pr)) {
             return { enqueue: false, decline: 'fork' };
+          }
+          if (baseBranchExcluded) {
+            return { enqueue: false, skip: 'base-branch-excluded' };
           }
           return { enqueue: true, setReviewActive: true, trigger: 'ready' };
         }

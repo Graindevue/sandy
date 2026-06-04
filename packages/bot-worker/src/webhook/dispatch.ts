@@ -1,4 +1,5 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
+import { isBaseBranchExcluded } from '../config/base-branch-exclusion.js';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import type { CommentEvent, ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
@@ -16,6 +17,7 @@ export type DispatchOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'cleared'; pullRequestId: string }
   | { action: 'declined-fork'; repo: string; number: number }
+  | { action: 'skipped-base-branch-excluded'; repo: string; number: number; baseRef: string }
   | {
       action: 'enqueued';
       reviewJobId: string;
@@ -64,6 +66,7 @@ export interface CommentReplyCapturer {
  * `.bot/agents.yaml` overrides) via `selectAgentsForReview`.
  */
 export type AgentKeysResolver = (repo: RepoRef) => string[];
+export type ExcludeBranchesResolver = (repo: RepoRef) => readonly string[];
 
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
@@ -71,6 +74,7 @@ export interface DispatchOptions {
   replyCapturer?: CommentReplyCapturer;
   reviewCanceller?: ReviewCanceller;
   resolveAgentKeys?: AgentKeysResolver;
+  resolveExcludeBranches?: ExcludeBranchesResolver;
 }
 
 function fullName(repo: RepoRef): string {
@@ -107,8 +111,12 @@ export async function dispatchEvent(
   const { repo, pr } = event;
   const repoId = await sink.ensureRepo(repo, undefined);
   const currentReviewActive = await sink.getReviewActive(repoId, pr.number);
+  const baseBranchExcluded = isBaseBranchExcluded(
+    pr.baseRef,
+    options.resolveExcludeBranches?.(repo),
+  );
 
-  const decision = evaluateTrigger(event, currentReviewActive);
+  const decision = evaluateTrigger(event, currentReviewActive, baseBranchExcluded);
 
   if (decision.decline === 'fork') {
     try {
@@ -128,6 +136,18 @@ export async function dispatchEvent(
 
   if (event.kind === 'comment') {
     await captureCommentReply(event, pullRequestId, logger, options.replyCapturer);
+  }
+
+  if (decision.skip === 'base-branch-excluded') {
+    logger.info(
+      `skipped auto-review for ${fullName(repo)}#${pr.number}: base branch ${pr.baseRef} is excluded`,
+    );
+    return {
+      action: 'skipped-base-branch-excluded',
+      repo: fullName(repo),
+      number: pr.number,
+      baseRef: pr.baseRef,
+    };
   }
 
   if (decision.clearReviewActive) {

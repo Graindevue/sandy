@@ -37,6 +37,8 @@ products:
       - owner: tony-co
         name: acme-desktop
         defaultBranch: develop
+        excludeBranches:
+          - release/*
     agents:
       - logic
   - slug: sandy
@@ -173,6 +175,7 @@ describe('ConfigLoader.resolveForRepo', () => {
 
     expect(resolved?.product.slug).toBe('acme');
     expect(resolved?.repo.defaultBranch).toBe('develop');
+    expect(resolved?.repo.excludeBranches).toEqual(['release/*']);
     expect(resolved?.agents.map((a) => a.key)).toEqual(['logic']);
   });
 

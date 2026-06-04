@@ -16,7 +16,7 @@ A single GitHub repository. Belongs to exactly one Product. Sandy clones each Re
 
 ## Review
 
-The act of running one or more Agents over a Pull Request. A Review produces a set of Findings. Reviews are triggered by webhook events: PR opened (only when configured), push to a PR with `reviewActive = true`, `@bot review` mention, or `gh pr ready` (draft → ready transition).
+The act of running one or more Agents over a Pull Request. A Review produces a set of Findings. Reviews are triggered by webhook events: PR opened (only when configured), push to a PR with `reviewActive = true`, `@bot review` mention, or `gh pr ready` (draft → ready transition, unless Base-Branch Exclusion applies).
 
 ## ReviewJob
 
@@ -123,9 +123,18 @@ temporarily unavailable, Sandy still emits `<!-- bot:finding=<id> -->` so the
 reaction webhook can map feedback back to the Finding. Load-bearing — do not
 remove.
 
+## Base-Branch Exclusion
+
+A per-Repo denylist in `.config/bot.yaml` (`excludeBranches`) that names base
+branch glob patterns where Sandy must not auto-arm a Review on `gh pr ready`.
+It gates only the automatic draft → ready trigger: `@bot review` is an explicit
+human request and overrides the exclusion, after which Sticky Opt-In works as
+usual and pushes retrigger Reviews. Skips are quiet on the PR page (no comment)
+and show up only in logs/dispatch outcomes.
+
 ## Sticky Opt-In
 
-The Review trigger model. PRs do not auto-review on open. The first `@bot review` mention or `gh pr ready` transition flips a `reviewActive` flag in Convex for that PR. Subsequent pushes to a `reviewActive` PR retrigger Reviews automatically. PR close clears the flag.
+The Review trigger model. PRs do not auto-review on open. The first `@bot review` mention or non-excluded `gh pr ready` transition flips a `reviewActive` flag in Convex for that PR. Subsequent pushes to a `reviewActive` PR retrigger Reviews automatically, including when the PR targets a base branch that would have been excluded before a human manually opted it in. PR close clears the flag.
 
 ## Cancel-on-Supersede
 

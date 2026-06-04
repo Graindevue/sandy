@@ -20,6 +20,8 @@ export interface RepoConfig {
   /** Derived `"owner/name"`; not authored in the file. */
   fullName: string;
   defaultBranch: string;
+  /** Glob patterns for base branches that should not auto-arm reviews. */
+  excludeBranches: string[];
 }
 
 export type AgentSelectionMode = 'default' | 'explicit';
@@ -53,6 +55,7 @@ interface RawRepo {
   owner?: unknown;
   name?: unknown;
   defaultBranch?: unknown;
+  excludeBranches?: unknown;
 }
 
 interface RawProduct {
@@ -157,6 +160,7 @@ function parseRepo(
   const owner = requireString(repo.owner, `${where}.owner`);
   const name = requireString(repo.name, `${where}.name`);
   const defaultBranch = requireString(repo.defaultBranch, `${where}.defaultBranch`);
+  const excludeBranches = parseOptionalStringList(repo.excludeBranches, `${where}.excludeBranches`);
   const fullName = `${owner}/${name}`;
 
   // Dedup on a case-insensitive key to match the loader's index, which lowercases
@@ -172,7 +176,7 @@ function parseRepo(
   }
   seenRepos.set(dedupKey, productSlug);
 
-  return { owner, name, fullName, defaultBranch };
+  return { owner, name, fullName, defaultBranch, excludeBranches };
 }
 
 function parseAgents(
@@ -214,6 +218,16 @@ function parseAgentKeyList(value: unknown, where: string): string[] {
     throw new Error(`bot.yaml: ${where} must be a list of Agent-key strings`);
   }
   return value as string[];
+}
+
+function parseOptionalStringList(value: unknown, where: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`bot.yaml: ${where} must be a list of non-empty strings`);
+  }
+  return value.map((item, index) => requireString(item, `${where}[${index}]`));
 }
 
 function parseAgentRuntimeOverrides(

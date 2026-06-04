@@ -217,6 +217,64 @@ describe('dispatchEvent', () => {
     expect(sink.enqueued).toHaveLength(0);
   });
 
+  it('skips ready_for_review on an excluded base branch without enqueuing or commenting', async () => {
+    const info = vi.fn();
+    const sink = new FakeSink(false);
+    const commenter = new FakeForkDeclineCommenter();
+    const resolveExcludeBranches = vi.fn(() => ['release/*']);
+
+    const outcome = await dispatchEvent(
+      pr('ready_for_review', { baseRef: 'release/2026.06' }),
+      sink,
+      { info, warn: vi.fn() },
+      {
+        forkDeclineCommenter: commenter,
+        resolveExcludeBranches,
+      },
+    );
+
+    expect(outcome).toEqual({
+      action: 'skipped-base-branch-excluded',
+      repo: 'tony-co/sandy',
+      number: 7,
+      baseRef: 'release/2026.06',
+    });
+    expect(resolveExcludeBranches).toHaveBeenCalledWith(BASE_REPO);
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.supersedingEnqueues).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
+    expect(commenter.comments).toHaveLength(0);
+    expect(
+      info.mock.calls.some(
+        ([message]) =>
+          typeof message === 'string' &&
+          message.includes('tony-co/sandy#7') &&
+          message.includes('release/2026.06'),
+      ),
+    ).toBe(true);
+  });
+
+  it('lets an @bot review mention override an excluded base branch', async () => {
+    const sink = new FakeSink(false);
+    const resolveExcludeBranches = vi.fn(() => ['release/*']);
+
+    const outcome = await dispatchEvent(
+      comment('@bot review', { baseRef: 'release/2026.06' }),
+      sink,
+      silentLogger,
+      { resolveExcludeBranches },
+    );
+
+    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
+    expect(resolveExcludeBranches).toHaveBeenCalledWith(BASE_REPO);
+    expect(sink.setActiveCalls).toEqual([{ id: 'pr:repo:tony-co/sandy#7', active: true }]);
+    expect(sink.enqueued[0]).toMatchObject({
+      headSha: 'sha-7',
+      trigger: 'mention',
+      agentKeys: ['logic'],
+    });
+  });
+
   // AC: PR close clears reviewActive.
   it('close clears reviewActive and enqueues nothing', async () => {
     const sink = new FakeSink(true);
