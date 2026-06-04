@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  CheckRunEvent,
   CommentEvent,
   PullRequestEvent,
   PullRequestFacts,
@@ -59,6 +60,10 @@ function triggerContext(
   return { currentReviewActive, readyForReviewSkipReason };
 }
 
+function checkRunEvent(prOverrides: Partial<PullRequestFacts> = {}): CheckRunEvent {
+  return { kind: 'check_run', repo: BASE_REPO, pr: prFacts(prOverrides) };
+}
+
 describe('isReviewMention', () => {
   it('matches @bot review with surrounding text', () => {
     expect(isReviewMention('hey @bot review please')).toBe(true);
@@ -111,6 +116,14 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     });
     expect(evaluateTrigger(prEvent('reopened'), triggerContext(true))).toEqual({
       enqueue: false,
+    });
+  });
+
+  it('enqueues a Check Run re-run regardless of Sticky Opt-In state', () => {
+    expect(evaluateTrigger(checkRunEvent(), triggerContext(false))).toEqual({
+      enqueue: true,
+      setReviewActive: true,
+      trigger: 'rerun',
     });
   });
 
@@ -255,6 +268,11 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     });
   });
 
+  it('declines a fork PR on a Check Run re-run', () => {
+    const event = checkRunEvent({ headRepo: { owner: 'forker', name: 'sandy' } });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({ enqueue: false, decline: 'fork' });
+  });
+
   it('still clears a fork PR on close (close wins over decline)', () => {
     const event = prEvent('closed', { headRepo: { owner: 'forker', name: 'sandy' } });
     expect(evaluateTrigger(event, triggerContext(true))).toEqual({
@@ -320,6 +338,12 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     expect(
       evaluateTrigger(prEvent('synchronize', { state: 'merged' }), triggerContext(true)),
     ).toEqual({
+      enqueue: false,
+    });
+  });
+
+  it('does nothing on a Check Run re-run for a closed PR', () => {
+    expect(evaluateTrigger(checkRunEvent({ state: 'closed' }), triggerContext(false))).toEqual({
       enqueue: false,
     });
   });

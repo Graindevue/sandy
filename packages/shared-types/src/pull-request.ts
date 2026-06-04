@@ -26,8 +26,8 @@ export interface PullRequest {
   url: string;
   /**
    * Sticky Opt-In flag. Flipped `true` by the first `@bot review` mention or
-   * `gh pr ready` transition; cleared on close. While `true`, every push
-   * retriggers a Review automatically.
+   * `gh pr ready` transition, or by re-running Sandy's Review Status Check;
+   * cleared on close. While `true`, every push retriggers a Review automatically.
    */
   reviewActive: boolean;
 }

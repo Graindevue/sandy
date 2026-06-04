@@ -10,7 +10,8 @@ import {
   type ForkDeclineCommenter,
   type PrCloseSignalCapturer,
 } from './dispatch.js';
-import { isSupportedEvent, type PullRequestResolver, parseEventForDispatch } from './parse.js';
+import { isSupportedEvent } from './events.js';
+import { type PullRequestResolver, parseEventForDispatch } from './parse.js';
 import { verifySignature } from './signature.js';
 import type { ReviewSink } from './sink.js';
 

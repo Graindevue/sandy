@@ -1,5 +1,5 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
-import type { ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
+import type { ParsedEvent, PullRequestBackedEvent, PullRequestFacts, RepoRef } from './events.js';
 
 /**
  * Matches an `@bot review` mention anywhere in a comment body. Case-insensitive,
@@ -55,7 +55,7 @@ export interface TriggerEvaluationContext {
 export interface TriggerDecision {
   /** Enqueue a ReviewJob for this PR's current head. */
   enqueue: boolean;
-  /** Flip the PR's Sticky Opt-In flag on (first mention / ready transition). */
+  /** Flip the PR's Sticky Opt-In flag on for explicit Review triggers. */
   setReviewActive?: boolean;
   /** Clear the Sticky Opt-In flag (PR closed). */
   clearReviewActive?: boolean;
@@ -68,6 +68,34 @@ export interface TriggerDecision {
 }
 
 const DO_NOTHING: TriggerDecision = { enqueue: false };
+
+interface EnqueueReviewOptions {
+  setReviewActive?: true;
+}
+
+function enqueueSameRepoPr(
+  event: PullRequestBackedEvent,
+  trigger: ReviewTrigger,
+  options: EnqueueReviewOptions = {},
+): TriggerDecision {
+  if (isForkPr(event.repo, event.pr)) {
+    return { enqueue: false, decline: 'fork' };
+  }
+  return options.setReviewActive === true
+    ? { enqueue: true, setReviewActive: true, trigger }
+    : { enqueue: true, trigger };
+}
+
+function enqueueLiveSameRepoPr(
+  event: PullRequestBackedEvent,
+  trigger: ReviewTrigger,
+  options: EnqueueReviewOptions = {},
+): TriggerDecision {
+  if (isTerminal(event.pr)) {
+    return DO_NOTHING;
+  }
+  return enqueueSameRepoPr(event, trigger, options);
+}
 
 /**
  * Sticky Opt-In, as a pure function. Decides whether a normalized webhook event
@@ -84,6 +112,7 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  *   base branch is excluded from automatic arming.
  * - push / synchronize on a `reviewActive` PR → enqueue (trigger `push`).
  *   Pushes to an opted-out, closed, or merged PR are ignored.
+ * - Check Run re-run → enqueue regardless of `reviewActive` (trigger `rerun`).
  * - PR closed → clear `reviewActive`.
  * - fork PR (head Repo ≠ base Repo) → decline (`decline: 'fork'`); v1 declines
  *   forks (PRD open question) and never enqueues them.
@@ -105,34 +134,18 @@ export function evaluateTrigger(
       if (!isReviewMention(event.body)) {
         return DO_NOTHING;
       }
-      // A mention on a closed or merged PR is a no-op: there is no live head to
-      // review, and re-arming `reviewActive` would defeat the clear-on-close that
-      // already ran. Do nothing — neither enqueue nor flip the flag.
-      if (isTerminal(event.pr)) {
-        return DO_NOTHING;
-      }
-      // A fork PR cannot be reviewed in v1; decline before opting it in so the
-      // sticky flag never flips on for a PR we will not review.
-      if (isForkPr(event.repo, event.pr)) {
-        return { enqueue: false, decline: 'fork' };
-      }
-      return { enqueue: true, setReviewActive: true, trigger: 'mention' };
+      return enqueueLiveSameRepoPr(event, 'mention', { setReviewActive: true });
     }
 
     case 'push': {
-      // A push to a closed or merged PR must not re-review a dead head SHA, even
-      // if `reviewActive` is stale (e.g. the `closed` webhook was missed). The
-      // parsed PR state is authoritative; the flag alone is not.
-      if (isTerminal(event.pr)) {
-        return DO_NOTHING;
-      }
       if (!currentReviewActive) {
         return DO_NOTHING;
       }
-      if (isForkPr(event.repo, event.pr)) {
-        return { enqueue: false, decline: 'fork' };
-      }
-      return { enqueue: true, trigger: 'push' };
+      return enqueueLiveSameRepoPr(event, 'push');
+    }
+
+    case 'check_run': {
+      return enqueueLiveSameRepoPr(event, 'rerun', { setReviewActive: true });
     }
 
     case 'pull_request': {
@@ -156,18 +169,10 @@ export function evaluateTrigger(
           // A push to a PR can arrive as both `push` and `synchronize`.
           // The dispatcher uses an idempotent push enqueue, so both normalized
           // events can safely request the same new-head review for opted-in PRs.
-          if (isTerminal(event.pr)) {
-            // A synchronize on a closed/merged PR with a stale `reviewActive`
-            // must not enqueue against a dead head SHA.
-            return DO_NOTHING;
-          }
           if (!currentReviewActive) {
             return DO_NOTHING;
           }
-          if (isForkPr(event.repo, event.pr)) {
-            return { enqueue: false, decline: 'fork' };
-          }
-          return { enqueue: true, trigger: 'push' };
+          return enqueueLiveSameRepoPr(event, 'push');
         }
 
         case 'opened':

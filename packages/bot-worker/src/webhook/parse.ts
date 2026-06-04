@@ -1,7 +1,9 @@
 import type { PullRequestState } from '@sandy/shared-types';
 import type {
+  CheckRunEvent,
   CommentEvent,
   ParsedEvent,
+  PullRequestBackedEvent,
   PullRequestEvent,
   PullRequestFacts,
   PushEvent,
@@ -58,14 +60,29 @@ interface RawPushPayload {
   deleted?: boolean;
 }
 
+interface RawCheckRunPayload {
+  action?: string;
+  repository?: RawRepoRef;
+  check_run?: {
+    name?: string;
+    pull_requests?: Array<{ number?: number }>;
+  };
+}
+
 interface PushFacts {
   repo: RepoRef;
   branch: string;
   headSha: string;
 }
 
+const SANDY_CHECK_RUN_NAME = 'Sandy';
+
 function ignored(reason: string): ParsedEvent {
   return { kind: 'ignored', reason };
+}
+
+function isObjectPayload(payload: unknown): payload is Record<string, unknown> {
+  return typeof payload === 'object' && payload !== null;
 }
 
 function parseRepoRef(raw: RawRepoRef | null | undefined): RepoRef | null {
@@ -190,6 +207,21 @@ export interface PullRequestResolver {
   ): Promise<PullRequestFacts | null>;
 }
 
+async function resolvePullRequestByNumber(
+  resolver: PullRequestResolver,
+  repo: RepoRef,
+  number: number,
+  eventName: 'issue_comment' | 'check_run',
+): Promise<PullRequestFacts | { reason: string }> {
+  try {
+    const pr = await resolver.resolvePullRequest(repo, number);
+    return pr ?? { reason: `${eventName}: pull_request details unavailable` };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { reason: `${eventName}: pull_request resolution failed: ${detail}` };
+  }
+}
+
 async function parseResolvableIssueCommentEvent(
   payload: RawCommentPayload,
   resolver: PullRequestResolver,
@@ -212,15 +244,9 @@ async function parseResolvableIssueCommentEvent(
   if (typeof number !== 'number') {
     return ignored('issue_comment: missing issue number');
   }
-  let pr: PullRequestFacts | null;
-  try {
-    pr = await resolver.resolvePullRequest(repo, number);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return ignored(`issue_comment: pull_request resolution failed: ${detail}`);
-  }
-  if (pr === null) {
-    return ignored('issue_comment: pull_request details unavailable');
+  const pr = await resolvePullRequestByNumber(resolver, repo, number, 'issue_comment');
+  if ('reason' in pr) {
+    return ignored(pr.reason);
   }
   return {
     kind: 'comment',
@@ -279,6 +305,22 @@ async function parseResolvablePushEvent(
   return { kind: 'push', repo: facts.repo, pr } satisfies PushEvent;
 }
 
+async function parseResolvableCheckRunEvent(
+  payload: RawCheckRunPayload,
+  resolver: PullRequestResolver,
+): Promise<ParsedEvent> {
+  const facts = parseCheckRunFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+
+  const pr = await resolvePullRequestByNumber(resolver, facts.repo, facts.number, 'check_run');
+  if ('reason' in pr) {
+    return ignored(pr.reason);
+  }
+  return { kind: 'check_run', repo: facts.repo, pr } satisfies CheckRunEvent;
+}
+
 function parsePushEvent(payload: RawPushPayload): ParsedEvent {
   const facts = parsePushFacts(payload);
   if ('reason' in facts) {
@@ -288,6 +330,14 @@ function parsePushEvent(payload: RawPushPayload): ParsedEvent {
   // this through GitHub before dispatch; the pure parser fails closed without
   // that network dependency.
   return ignored('push: pull_request details unavailable');
+}
+
+function parseCheckRunEvent(payload: RawCheckRunPayload): ParsedEvent {
+  const facts = parseCheckRunFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+  return ignored('check_run: pull_request details unavailable');
 }
 
 function parsePushFacts(payload: RawPushPayload): PushFacts | { reason: string } {
@@ -310,13 +360,33 @@ function parsePushFacts(payload: RawPushPayload): PushFacts | { reason: string }
   return { repo, branch: ref.slice(prefix.length), headSha };
 }
 
+function parseCheckRunFacts(
+  payload: RawCheckRunPayload,
+): { repo: RepoRef; number: number } | { reason: string } {
+  if (payload.action !== 'rerequested') {
+    return { reason: `check_run: action ${payload.action ?? 'missing'} is not rerequested` };
+  }
+  const repo = parseRepoRef(payload.repository);
+  if (repo === null) {
+    return { reason: 'check_run: missing repository' };
+  }
+  if (payload.check_run?.name !== SANDY_CHECK_RUN_NAME) {
+    return { reason: 'check_run: not Sandy' };
+  }
+  const number = payload.check_run.pull_requests?.[0]?.number;
+  if (typeof number !== 'number') {
+    return { reason: 'check_run: missing pull_request number' };
+  }
+  return { repo, number };
+}
+
 /**
  * Normalize a raw GitHub webhook payload into a {@link ParsedEvent}. Unknown or
  * malformed deliveries fail closed to an `ignored` event so the dispatcher never
  * acts on incomplete data.
  */
 export function parseEvent(eventName: SupportedEventName, payload: unknown): ParsedEvent {
-  if (typeof payload !== 'object' || payload === null) {
+  if (!isObjectPayload(payload)) {
     return ignored(`${eventName}: payload is not an object`);
   }
   switch (eventName) {
@@ -328,57 +398,42 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
       return parseCommentEvent(payload as RawCommentPayload, true);
     case 'push':
       return parsePushEvent(payload as RawPushPayload);
+    case 'check_run':
+      return parseCheckRunEvent(payload as RawCheckRunPayload);
   }
 }
 
 /**
  * Normalize a delivery for dispatch, using the GitHub API for payloads that are
  * valid review signals but do not embed full PR facts. PR Conversation comments
- * (`issue_comment`) carry only an issue number, and `push` deliveries carry a
- * branch ref rather than a PR, so Sandy resolves the PR before Sticky Opt-In
- * evaluation.
+ * (`issue_comment`) and Sandy Check Run re-runs carry only a PR number, and
+ * `push` deliveries carry a branch ref rather than a PR, so Sandy resolves the
+ * PR before Sticky Opt-In evaluation.
  */
 export async function parseEventForDispatch(
   eventName: SupportedEventName,
   payload: unknown,
   resolver?: PullRequestResolver,
 ): Promise<ParsedEvent> {
-  if (resolver !== undefined && isResolvableIssueCommentPayload(eventName, payload)) {
-    return await parseResolvableIssueCommentEvent(payload, resolver);
+  if (resolver === undefined || !isObjectPayload(payload)) {
+    return parseEvent(eventName, payload);
   }
-  if (resolver !== undefined && isResolvablePushPayload(eventName, payload)) {
-    return await parseResolvablePushEvent(payload, resolver);
+
+  switch (eventName) {
+    case 'issue_comment':
+      if ((payload as RawCommentPayload).pull_request == null) {
+        return await parseResolvableIssueCommentEvent(payload as RawCommentPayload, resolver);
+      }
+      break;
+    case 'push':
+      return await parseResolvablePushEvent(payload as RawPushPayload, resolver);
+    case 'check_run':
+      return await parseResolvableCheckRunEvent(payload as RawCheckRunPayload, resolver);
+    case 'pull_request':
+    case 'pull_request_review_comment':
+      break;
   }
   return parseEvent(eventName, payload);
-}
-
-function isResolvableIssueCommentPayload(
-  eventName: SupportedEventName,
-  payload: unknown,
-): payload is RawCommentPayload {
-  return (
-    eventName === 'issue_comment' &&
-    typeof payload === 'object' &&
-    payload !== null &&
-    (payload as RawCommentPayload).pull_request == null
-  );
-}
-
-function isResolvablePushPayload(
-  eventName: SupportedEventName,
-  payload: unknown,
-): payload is RawPushPayload {
-  return eventName === 'push' && typeof payload === 'object' && payload !== null;
-}
-
-/** Whether a string is one of the webhook events Sandy subscribes to. */
-export function isSupportedEvent(eventName: string | undefined): eventName is SupportedEventName {
-  return (
-    eventName === 'pull_request' ||
-    eventName === 'issue_comment' ||
-    eventName === 'pull_request_review_comment' ||
-    eventName === 'push'
-  );
 }
 
 /**
@@ -387,7 +442,7 @@ export function isSupportedEvent(eventName: string | undefined): eventName is Su
  * assuming `'open'`, so a comment on a closed or merged PR does not clobber the
  * stored state back to `'open'`.
  */
-export function prStateForEvent(event: PullRequestEvent | CommentEvent | PushEvent): {
+export function prStateForEvent(event: PullRequestBackedEvent): {
   state: PullRequestState;
 } {
   return { state: event.pr.state };

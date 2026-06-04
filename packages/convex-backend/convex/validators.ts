@@ -34,6 +34,7 @@ export const reviewTrigger = v.union(
   v.literal('ready' satisfies ReviewTrigger),
   v.literal('push' satisfies ReviewTrigger),
   v.literal('opened' satisfies ReviewTrigger),
+  v.literal('rerun' satisfies ReviewTrigger),
 );
 
 export const pullRequestState = v.union(

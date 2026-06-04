@@ -33,8 +33,9 @@ export interface ReviewSink {
   /** Enqueue a pending ReviewJob and return its id. */
   enqueueReviewJob(input: EnqueueInput): Promise<string>;
   /**
-   * For a new push head, supersede active stale ReviewJobs and enqueue (or reuse)
-   * the pending/running job for the new head in one Convex transaction.
+   * For a superseding review trigger, supersede active stale ReviewJobs and
+   * enqueue (or reuse) the pending/running job for the new head in one Convex
+   * transaction.
    */
   enqueueSupersedingReviewJob(input: EnqueueInput): Promise<EnqueueSupersedingResult>;
 }

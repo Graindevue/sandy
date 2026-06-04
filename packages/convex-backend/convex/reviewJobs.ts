@@ -27,10 +27,10 @@ export const enqueue = mutation({
 });
 
 /**
- * Push-triggered enqueue with Cancel-on-Supersede semantics. In one transaction:
- * mark pending/running jobs for older heads as `superseded`, then enqueue the
- * new head unless a pending/running job for that same head already exists
- * (covers GitHub delivering both `push` and `pull_request.synchronize`).
+ * Enqueue with Cancel-on-Supersede semantics. In one transaction: mark
+ * pending/running jobs for older heads as `superseded`, then enqueue the new
+ * head unless a pending/running job for that same head already exists (covers
+ * GitHub delivering both `push` and `pull_request.synchronize`).
  */
 export const enqueueSuperseding = mutation({
   args: {
