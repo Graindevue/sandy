@@ -254,7 +254,7 @@ describe('dispatchEvent', () => {
     ).toBe(true);
   });
 
-  it('lets an @bot review mention override an excluded base branch', async () => {
+  it('lets an @bot review mention bypass base-branch exclusion', async () => {
     const sink = new FakeSink(false);
     const resolveExcludeBranches = vi.fn(() => ['release/*']);
 
@@ -266,7 +266,7 @@ describe('dispatchEvent', () => {
     );
 
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
-    expect(resolveExcludeBranches).toHaveBeenCalledWith(BASE_REPO);
+    expect(resolveExcludeBranches).not.toHaveBeenCalled();
     expect(sink.setActiveCalls).toEqual([{ id: 'pr:repo:tony-co/sandy#7', active: true }]);
     expect(sink.enqueued[0]).toMatchObject({
       headSha: 'sha-7',

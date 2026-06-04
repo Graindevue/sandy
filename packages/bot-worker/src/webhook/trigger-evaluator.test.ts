@@ -6,7 +6,13 @@ import type {
   PushEvent,
   RepoRef,
 } from './events.js';
-import { evaluateTrigger, isForkPr, isReviewMention } from './trigger-evaluator.js';
+import {
+  evaluateTrigger,
+  isForkPr,
+  isReviewMention,
+  type ReadyForReviewSkipReason,
+  type TriggerEvaluationContext,
+} from './trigger-evaluator.js';
 
 const BASE_REPO: RepoRef = { owner: 'tony-co', name: 'sandy' };
 
@@ -46,6 +52,13 @@ function pushEvent(prOverrides: Partial<PullRequestFacts> = {}): PushEvent {
   return { kind: 'push', repo: BASE_REPO, pr: prFacts(prOverrides) };
 }
 
+function triggerContext(
+  currentReviewActive: boolean,
+  readyForReviewSkipReason?: ReadyForReviewSkipReason,
+): TriggerEvaluationContext {
+  return { currentReviewActive, readyForReviewSkipReason };
+}
+
 describe('isReviewMention', () => {
   it('matches @bot review with surrounding text', () => {
     expect(isReviewMention('hey @bot review please')).toBe(true);
@@ -83,21 +96,27 @@ describe('isForkPr', () => {
 describe('evaluateTrigger — Sticky Opt-In matrix', () => {
   // Rule 1: opened / synchronize on an opted-out PR with no mention → do nothing.
   it('does nothing when a PR is opened with reviewActive=false', () => {
-    expect(evaluateTrigger(prEvent('opened'), false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(prEvent('opened'), triggerContext(false))).toEqual({ enqueue: false });
   });
 
   it('does nothing on synchronize when reviewActive=false', () => {
-    expect(evaluateTrigger(prEvent('synchronize'), false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(prEvent('synchronize'), triggerContext(false))).toEqual({
+      enqueue: false,
+    });
   });
 
   it('does nothing on reopened', () => {
-    expect(evaluateTrigger(prEvent('reopened'), false)).toEqual({ enqueue: false });
-    expect(evaluateTrigger(prEvent('reopened'), true)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(prEvent('reopened'), triggerContext(false))).toEqual({
+      enqueue: false,
+    });
+    expect(evaluateTrigger(prEvent('reopened'), triggerContext(true))).toEqual({
+      enqueue: false,
+    });
   });
 
   // Rule 2: @bot review mention → enqueue + set reviewActive=true (trigger mention).
   it('enqueues and opts in on an @bot review mention', () => {
-    expect(evaluateTrigger(commentEvent('@bot review'), false)).toEqual({
+    expect(evaluateTrigger(commentEvent('@bot review'), triggerContext(false))).toEqual({
       enqueue: true,
       setReviewActive: true,
       trigger: 'mention',
@@ -105,11 +124,13 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
   });
 
   it('ignores a comment without the mention', () => {
-    expect(evaluateTrigger(commentEvent('nice work!'), false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(commentEvent('nice work!'), triggerContext(false))).toEqual({
+      enqueue: false,
+    });
   });
 
   it('still enqueues on mention even if already opted in', () => {
-    expect(evaluateTrigger(commentEvent('@bot review'), true)).toEqual({
+    expect(evaluateTrigger(commentEvent('@bot review'), triggerContext(true))).toEqual({
       enqueue: true,
       setReviewActive: true,
       trigger: 'mention',
@@ -118,7 +139,7 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   // Rule 3: draft → ready transition → enqueue + set reviewActive=true (trigger ready).
   it('enqueues and opts in on ready_for_review', () => {
-    expect(evaluateTrigger(prEvent('ready_for_review'), false)).toEqual({
+    expect(evaluateTrigger(prEvent('ready_for_review'), triggerContext(false))).toEqual({
       enqueue: true,
       setReviewActive: true,
       trigger: 'ready',
@@ -126,7 +147,9 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
   });
 
   it('skips ready_for_review when the base branch is excluded', () => {
-    expect(evaluateTrigger(prEvent('ready_for_review'), false, true)).toEqual({
+    expect(
+      evaluateTrigger(prEvent('ready_for_review'), triggerContext(false, 'base-branch-excluded')),
+    ).toEqual({
       enqueue: false,
       skip: 'base-branch-excluded',
     });
@@ -134,7 +157,10 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   it('still enqueues an @bot review mention when the base branch is excluded', () => {
     expect(
-      evaluateTrigger(commentEvent('@bot review', { baseRef: 'release/2026.06' }), false, true),
+      evaluateTrigger(
+        commentEvent('@bot review', { baseRef: 'release/2026.06' }),
+        triggerContext(false, 'base-branch-excluded'),
+      ),
     ).toEqual({
       enqueue: true,
       setReviewActive: true,
@@ -144,22 +170,30 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   // Rule 4: push to a reviewActive PR → enqueue (trigger push).
   it('enqueues a push when the PR is opted in', () => {
-    expect(evaluateTrigger(pushEvent(), true)).toEqual({ enqueue: true, trigger: 'push' });
+    expect(evaluateTrigger(pushEvent(), triggerContext(true))).toEqual({
+      enqueue: true,
+      trigger: 'push',
+    });
   });
 
   it('still enqueues a push to an opted-in PR when the base branch is excluded', () => {
-    expect(evaluateTrigger(pushEvent({ baseRef: 'release/2026.06' }), true, true)).toEqual({
+    expect(
+      evaluateTrigger(
+        pushEvent({ baseRef: 'release/2026.06' }),
+        triggerContext(true, 'base-branch-excluded'),
+      ),
+    ).toEqual({
       enqueue: true,
       trigger: 'push',
     });
   });
 
   it('ignores a push when the PR is opted out', () => {
-    expect(evaluateTrigger(pushEvent(), false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(pushEvent(), triggerContext(false))).toEqual({ enqueue: false });
   });
 
   it('treats synchronize on an opted-in PR as a push re-review', () => {
-    expect(evaluateTrigger(prEvent('synchronize'), true)).toEqual({
+    expect(evaluateTrigger(prEvent('synchronize'), triggerContext(true))).toEqual({
       enqueue: true,
       trigger: 'push',
     });
@@ -167,14 +201,14 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   // Rule 5: PR closed → clear reviewActive.
   it('clears reviewActive on close', () => {
-    expect(evaluateTrigger(prEvent('closed'), true)).toEqual({
+    expect(evaluateTrigger(prEvent('closed'), triggerContext(true))).toEqual({
       enqueue: false,
       clearReviewActive: true,
     });
   });
 
   it('clears reviewActive on close even when already opted out', () => {
-    expect(evaluateTrigger(prEvent('closed'), false)).toEqual({
+    expect(evaluateTrigger(prEvent('closed'), triggerContext(false))).toEqual({
       enqueue: false,
       clearReviewActive: true,
     });
@@ -183,84 +217,117 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
   // Rule 6: fork PR (head repo ≠ base repo) → decline, never enqueue.
   it('declines a fork PR on a mention instead of opting it in', () => {
     const event = commentEvent('@bot review', { headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('declines a fork PR on ready_for_review', () => {
     const event = prEvent('ready_for_review', { headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('declines a fork PR on ready_for_review even when the base branch is excluded', () => {
     const event = prEvent('ready_for_review', { headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, false, true)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(false, 'base-branch-excluded'))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('declines a fork PR on a push to an opted-in PR', () => {
     const event = pushEvent({ headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('declines a fork PR on synchronize to an opted-in PR', () => {
     const event = prEvent('synchronize', { headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('still clears a fork PR on close (close wins over decline)', () => {
     const event = prEvent('closed', { headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, clearReviewActive: true });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({
+      enqueue: false,
+      clearReviewActive: true,
+    });
   });
 
   // Finding #3: a mention on a closed or merged PR must not enqueue a job for a
   // dead head SHA nor re-arm reviewActive (which clear-on-close already cleared).
   it('does nothing on an @bot review mention on a closed PR', () => {
     const event = commentEvent('@bot review', { state: 'closed' });
-    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({ enqueue: false });
     // Even if the flag was somehow still set, the mention must not re-enqueue.
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({ enqueue: false });
   });
 
   it('does nothing on an @bot review mention on a merged PR', () => {
     const event = commentEvent('@bot review', { state: 'merged' });
-    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false });
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({ enqueue: false });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({ enqueue: false });
   });
 
   // Finding #4: a null head repo (GitHub couldn't resolve it, e.g. deleted fork)
   // is treated as a fork and declined, not enqueued against an unfetchable SHA.
   it('declines a PR whose head repo is unknown (null) on a mention', () => {
     const event = commentEvent('@bot review', { headRepo: null });
-    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('declines a null-head-repo PR on a push to an opted-in PR', () => {
     const event = pushEvent({ headRepo: null });
-    expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(true))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   // Follow-up: a push / synchronize on a closed or merged PR must not enqueue
   // even when `reviewActive` is stale (a missed `closed` webhook) — the parsed
   // PR state is authoritative, the flag alone is not.
   it('does nothing on a push to a closed PR even when reviewActive is stale', () => {
-    expect(evaluateTrigger(pushEvent({ state: 'closed' }), true)).toEqual({ enqueue: false });
+    expect(evaluateTrigger(pushEvent({ state: 'closed' }), triggerContext(true))).toEqual({
+      enqueue: false,
+    });
   });
 
   it('does nothing on a push to a closed excluded-branch PR even when reviewActive is stale', () => {
     expect(
-      evaluateTrigger(pushEvent({ baseRef: 'release/2026.06', state: 'closed' }), true, true),
+      evaluateTrigger(
+        pushEvent({ baseRef: 'release/2026.06', state: 'closed' }),
+        triggerContext(true, 'base-branch-excluded'),
+      ),
     ).toEqual({
       enqueue: false,
     });
   });
 
   it('does nothing on a synchronize to a merged PR even when reviewActive is stale', () => {
-    expect(evaluateTrigger(prEvent('synchronize', { state: 'merged' }), true)).toEqual({
+    expect(
+      evaluateTrigger(prEvent('synchronize', { state: 'merged' }), triggerContext(true)),
+    ).toEqual({
       enqueue: false,
     });
   });
 
   it('does nothing for an ignored event', () => {
-    expect(evaluateTrigger({ kind: 'ignored', reason: 'test' }, true)).toEqual({ enqueue: false });
+    expect(evaluateTrigger({ kind: 'ignored', reason: 'test' }, triggerContext(true))).toEqual({
+      enqueue: false,
+    });
   });
 });
 

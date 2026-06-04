@@ -4,7 +4,7 @@ import type { ReviewCanceller } from '../worker/cancellation.js';
 import type { CommentEvent, ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { EnqueueInput, ReviewSink } from './sink.js';
-import { evaluateTrigger } from './trigger-evaluator.js';
+import { evaluateTrigger, type ReadyForReviewSkipReason } from './trigger-evaluator.js';
 
 /** The message Sandy surfaces when it declines a fork PR (PRD documented limitation). */
 export const FORK_DECLINE_MESSAGE =
@@ -111,12 +111,14 @@ export async function dispatchEvent(
   const { repo, pr } = event;
   const repoId = await sink.ensureRepo(repo, undefined);
   const currentReviewActive = await sink.getReviewActive(repoId, pr.number);
-  const baseBranchExcluded = isBaseBranchExcluded(
-    pr.baseRef,
-    options.resolveExcludeBranches?.(repo),
-  );
 
-  const decision = evaluateTrigger(event, currentReviewActive, baseBranchExcluded);
+  const decision = evaluateTrigger(event, {
+    currentReviewActive,
+    readyForReviewSkipReason: resolveReadyForReviewSkipReason(
+      event,
+      options.resolveExcludeBranches,
+    ),
+  });
 
   if (decision.decline === 'fork') {
     try {
@@ -200,6 +202,19 @@ export async function dispatchEvent(
   }
 
   return { action: 'enqueued', reviewJobId: enqueueResult.reviewJobId, trigger };
+}
+
+function resolveReadyForReviewSkipReason(
+  event: Exclude<ParsedEvent, { kind: 'ignored' }>,
+  resolveExcludeBranches: ExcludeBranchesResolver | undefined,
+): ReadyForReviewSkipReason | undefined {
+  if (event.kind !== 'pull_request' || event.action !== 'ready_for_review') {
+    return undefined;
+  }
+  if (!isBaseBranchExcluded(event.pr.baseRef, resolveExcludeBranches?.(event.repo))) {
+    return undefined;
+  }
+  return 'base-branch-excluded';
 }
 
 async function captureCommentReply(

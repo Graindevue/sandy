@@ -40,10 +40,17 @@ function isTerminal(pr: PullRequestFacts): boolean {
   return pr.state === 'closed' || pr.state === 'merged';
 }
 
+export type ReadyForReviewSkipReason = 'base-branch-excluded';
+
+export interface TriggerEvaluationContext {
+  currentReviewActive: boolean;
+  readyForReviewSkipReason: ReadyForReviewSkipReason | undefined;
+}
+
 /**
- * The trigger-evaluator's verdict for a single webhook event. Exactly one of
- * `enqueue` / `clearReviewActive` / `decline` drives a side effect; the others
- * stay falsy. `setReviewActive` only ever pairs with `enqueue`.
+ * The trigger-evaluator's verdict for a single webhook event. At most one of
+ * `enqueue` / `clearReviewActive` / `decline` / `skip` drives dispatcher work;
+ * the others stay falsy. `setReviewActive` only ever pairs with `enqueue`.
  */
 export interface TriggerDecision {
   /** Enqueue a ReviewJob for this PR's current head. */
@@ -57,7 +64,7 @@ export interface TriggerDecision {
   /** The PR is declined without enqueuing; `'fork'` is the only v1 reason. */
   decline?: 'fork';
   /** The Review was intentionally skipped without side effects. */
-  skip?: 'base-branch-excluded';
+  skip?: ReadyForReviewSkipReason;
 }
 
 const DO_NOTHING: TriggerDecision = { enqueue: false };
@@ -86,9 +93,10 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  */
 export function evaluateTrigger(
   event: ParsedEvent,
-  currentReviewActive: boolean,
-  baseBranchExcluded = false,
+  context: TriggerEvaluationContext,
 ): TriggerDecision {
+  const { currentReviewActive, readyForReviewSkipReason } = context;
+
   switch (event.kind) {
     case 'ignored':
       return DO_NOTHING;
@@ -138,8 +146,8 @@ export function evaluateTrigger(
           if (isForkPr(event.repo, event.pr)) {
             return { enqueue: false, decline: 'fork' };
           }
-          if (baseBranchExcluded) {
-            return { enqueue: false, skip: 'base-branch-excluded' };
+          if (readyForReviewSkipReason !== undefined) {
+            return { enqueue: false, skip: readyForReviewSkipReason };
           }
           return { enqueue: true, setReviewActive: true, trigger: 'ready' };
         }

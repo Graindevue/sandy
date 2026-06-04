@@ -1,4 +1,4 @@
-import { matchesGlob } from 'node:path';
+import { matchesGlob } from 'node:path/posix';
 
 /**
  * Return true when a PR base branch matches any configured Base-Branch Exclusion

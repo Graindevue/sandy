@@ -29,7 +29,7 @@ manually armed remain no-ops because `reviewActive` is false.
 
 The matcher is a small pure function over `(baseRef, patterns)` using Node's
 built-in `matchesGlob`. The dispatcher resolves patterns from config, computes a
-boolean, and passes that verdict into the trigger evaluator so the evaluator
+skip reason, and passes that verdict into the trigger evaluator so the evaluator
 stays free of config and glob knowledge. A skipped automatic trigger returns a
 distinct dispatch outcome and logs the repo, PR number, and base branch, but
 posts no PR comment.
