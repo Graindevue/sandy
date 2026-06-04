@@ -39,12 +39,14 @@ worker config.
 
 ## 2. Set permissions
 
-Under **Permissions → Repository permissions**, set exactly these four. Leave
-everything else at **No access** — Sandy needs nothing more in Phase 1.
+Under **Permissions → Repository permissions**, set exactly these five. Leave
+everything else at **No access** — Sandy needs nothing more for the documented
+workflow.
 
 | Permission | Access | Why |
 |------------|--------|-----|
 | **Pull requests** | **Read & write** | Read PR metadata and diffs; post inline comments + the summary comment. |
+| **Checks** | **Read & write** | Create and update the advisory **Sandy** Review Status Check while a Review is running and when it finishes. |
 | **Contents** | **Read & write** | Read clones and fetches registered Repos to local disk. Write lets the learning loop open the `.bot/product-rules.md` PR when an operator promotes a SuggestedRule to a positive Rule (Phase 3). Without write, positive promotion fails with `403 Resource not accessible by integration` on branch creation. |
 | **Issues** | **Read-only** | Required to subscribe to the **Issue comment** event in step 3 — GitHub gates that event on the Issues permission, even though `@bot review` arrives as a comment on a PR. Without it, "Issue comment" won't appear in the events list. Read-only suffices; Sandy never writes to Issues. |
 | **Metadata** | **Read-only** | Mandatory baseline; GitHub auto-selects it. |
@@ -60,7 +62,7 @@ Under **Subscribe to events**, check exactly these four:
 | **Pull request review comment** | Reactions/replies on Sandy's inline Findings (the trailer-driven reaction loop). Subscribe now so deliveries arrive from day one, but Phase 1 has no Reactions table — persisting reactions and feeding the learning loop is Phase 3. |
 | **Push** | New commits on an opted-in PR retrigger a Review automatically (Cancel-on-Supersede if one is already in flight). |
 
-These four events and the three permissions above are exactly what the worker's
+These four events and the permissions above are exactly what the worker's
 webhook dispatcher expects. Adding more events is harmless but unused; removing
 any of these will silently break a trigger.
 

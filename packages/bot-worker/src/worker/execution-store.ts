@@ -30,6 +30,7 @@ const refs = {
     getForWorker: api.reviewJobs.getForWorker,
     getStatus: api.reviewJobs.getStatus,
     setSiblingShas: api.reviewJobs.setSiblingShas,
+    setCheckRunId: api.reviewJobs.setCheckRunId,
     markCompleted: api.reviewJobs.markCompleted,
     markFailed: api.reviewJobs.markFailed,
   },
@@ -136,6 +137,10 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
 
   async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
     await this.#client.mutation(refs.reviewJobs.setSiblingShas, { jobId, siblingShas });
+  }
+
+  async setReviewCheckRunId(jobId: string, checkRunId: number): Promise<void> {
+    await this.#client.mutation(refs.reviewJobs.setCheckRunId, { jobId, checkRunId });
   }
 
   async markCompleted(jobId: string, finishedAt: number): Promise<void> {

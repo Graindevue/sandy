@@ -15,9 +15,9 @@ to every row.
 - **reviewJobs** — `enqueue`, `enqueueSuperseding` (push-triggered
   Cancel-on-Supersede), `claim` (OCC-protected: claims a `pending` job and
   transitions it to `running`; the loser of a race returns `false`),
-  `setSiblingShas`, `setConfidenceScore`, `markCompleted`, `markFailed`,
-  `markSuperseded`, `getStatus`, and the `subscribePending` query the worker
-  subscribes to.
+  `setSiblingShas`, `setCheckRunId`, `setConfidenceScore`, `markCompleted`,
+  `markFailed`, `markSuperseded`, `getStatus`, and the `subscribePending` query
+  the worker subscribes to.
 - **pullRequests** — `upsert`, `setReviewActive`, `clearOnClose`.
 - **findings** — `recordFinding`, `recordSynthesizedReview`, `markPosted`,
   `listForPr`.

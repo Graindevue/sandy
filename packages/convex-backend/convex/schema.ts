@@ -68,6 +68,7 @@ export default defineSchema({
     confidenceScore: confidence,
     agentRuns: v.array(v.id('agentRuns')),
     siblingShas,
+    checkRunId: v.optional(v.number()),
     claimedAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
     error: v.optional(v.string()),

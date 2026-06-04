@@ -19,7 +19,13 @@ import type {
   PullRequestTarget,
   ReviewCommentInput,
 } from '../worker/poster.js';
-import type { RepoForWorktree, ReviewDiffInspector } from '../worker/review-executor.js';
+import type {
+  CompleteReviewStatusCheckInput,
+  CreateReviewStatusCheckInput,
+  RepoForWorktree,
+  ReviewDiffInspector,
+  ReviewStatusCheckReporter,
+} from '../worker/review-executor.js';
 
 type Fetch = typeof fetch;
 
@@ -45,6 +51,7 @@ export class GitHubAppClient
   implements
     GitHubReviewPoster,
     ReviewDiffInspector,
+    ReviewStatusCheckReporter,
     PullRequestResolver,
     ReactionCaptureGitHub,
     MergeStateGitHub
@@ -115,12 +122,58 @@ export class GitHubAppClient
     );
   }
 
-  async createIssueComment(input: IssueCommentInput): Promise<{ id: number }> {
-    return await this.#installationRequest<{ id: number }>(
+  async createIssueComment(input: IssueCommentInput): Promise<{ id: number; url?: string }> {
+    const raw = await this.#installationRequest<unknown>(
       input.owner,
       input.repo,
       `/repos/${input.owner}/${input.repo}/issues/${input.issueNumber}/comments`,
       { method: 'POST', body: { body: input.body } },
+    );
+    return parseIssueComment(raw);
+  }
+
+  async createInProgress(input: CreateReviewStatusCheckInput): Promise<{ id: number }> {
+    const raw = await this.#installationRequest<unknown>(
+      input.owner,
+      input.repo,
+      `/repos/${input.owner}/${input.repo}/check-runs`,
+      {
+        method: 'POST',
+        body: {
+          name: 'Sandy',
+          head_sha: input.headSha,
+          status: 'in_progress',
+          details_url: input.pullRequestUrl,
+          started_at: new Date(input.startedAt).toISOString(),
+          output: {
+            title: 'Sandy review',
+            summary: 'Sandy review is running.',
+          },
+        },
+      },
+    );
+    return { id: parseCheckRunId(raw) };
+  }
+
+  async complete(input: CompleteReviewStatusCheckInput): Promise<void> {
+    await this.#installationRequest<unknown>(
+      input.owner,
+      input.repo,
+      `/repos/${input.owner}/${input.repo}/check-runs/${input.checkRunId}`,
+      {
+        method: 'PATCH',
+        body: {
+          name: 'Sandy',
+          status: 'completed',
+          conclusion: input.conclusion,
+          details_url: input.detailsUrl,
+          completed_at: new Date(input.completedAt).toISOString(),
+          output: {
+            title: 'Sandy review',
+            summary: checkRunSummary(input),
+          },
+        },
+      },
     );
   }
 
@@ -631,6 +684,38 @@ function parseContentCommitSha(raw: unknown): string {
     throw new Error('GitHub contents update response did not include commit.sha');
   }
   return sha;
+}
+
+function parseIssueComment(raw: unknown): { id: number; url?: string } {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub issue comment response was not an object');
+  }
+  const object = raw as { id?: unknown; html_url?: unknown };
+  if (typeof object.id !== 'number') {
+    throw new Error('GitHub issue comment response did not include id');
+  }
+  if (typeof object.html_url === 'string') {
+    return { id: object.id, url: object.html_url };
+  }
+  return { id: object.id };
+}
+
+function parseCheckRunId(raw: unknown): number {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('GitHub Check Run response was not an object');
+  }
+  const id = (raw as { id?: unknown }).id;
+  if (typeof id !== 'number') {
+    throw new Error('GitHub Check Run response did not include id');
+  }
+  return id;
+}
+
+function checkRunSummary(input: CompleteReviewStatusCheckInput): string {
+  if (input.summaryCommentUrl === undefined) {
+    return `${input.verdict}.`;
+  }
+  return `${input.verdict}. [View summary](${input.summaryCommentUrl}).`;
 }
 
 function productRuleBranchName(suggestedRuleId: string): string {

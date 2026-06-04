@@ -87,6 +87,16 @@ export const setSiblingShas = mutation({
   },
 });
 
+/** Persist the GitHub Check Run id created for this ReviewJob. */
+export const setCheckRunId = mutation({
+  args: { jobId: v.id('reviewJobs'), checkRunId: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { jobId, checkRunId }) => {
+    await ctx.db.patch(jobId, { checkRunId });
+    return null;
+  },
+});
+
 /** Store the synthesized PR-level confidence score for this ReviewJob. */
 export const setConfidenceScore = mutation({
   args: { jobId: v.id('reviewJobs'), confidenceScore: confidence },
@@ -144,6 +154,7 @@ export const getForWorker = query({
         confidenceScore: job.confidenceScore,
         agentRuns: job.agentRuns,
         siblingShas: job.siblingShas,
+        checkRunId: job.checkRunId,
       },
       repo: {
         id: repo._id,

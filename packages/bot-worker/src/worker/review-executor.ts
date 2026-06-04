@@ -24,7 +24,8 @@ import {
 } from './cancellation.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
-  PostedFinding,
+  PostedReviewResult,
+  PostedSummaryComment,
   PostReviewResultInput,
   PostScopeDeclinedInput,
   PullRequestTarget,
@@ -60,6 +61,7 @@ export interface ReviewJobContext {
     agentKeys: string[];
     confidenceScore: Confidence;
     agentRuns: string[];
+    checkRunId?: number;
   };
   repo: {
     id: string;
@@ -126,6 +128,7 @@ export interface ReviewExecutionStore {
   recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
+  setReviewCheckRunId(jobId: string, checkRunId: number): Promise<void>;
   markCompleted(jobId: string, finishedAt: number): Promise<void>;
   markFailed(jobId: string, finishedAt: number, error: string): Promise<void>;
 }
@@ -161,6 +164,29 @@ type AgentExecutionOutcome =
       error: string;
     };
 
+type SelectedAgentReviewResult =
+  | { status: 'completed'; output: AgentReviewOutput }
+  | { status: 'failed' };
+
+interface SelectedAgentReviewResults {
+  outputs: AgentReviewOutput[];
+  failedAgentCount: number;
+  selectedAgentCount: number;
+}
+
+interface CompletedReviewCheckOutcome {
+  conclusion: ReviewStatusCheckConclusion;
+  verdict: string;
+}
+
+interface CompleteStatusCheckInput {
+  context: ReviewJobContext;
+  target: PullRequestTarget;
+  checkRunId: number | null;
+  outcome: CompletedReviewCheckOutcome;
+  summaryComment?: PostedSummaryComment;
+}
+
 interface AgentWorkspace {
   prWorktree: ReviewWorktree;
   siblingWorktrees: readonly RunnerSiblingWorktree[];
@@ -177,8 +203,38 @@ interface AgentExecutionInput {
 }
 
 export interface ReviewPoster {
-  postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]>;
-  postScopeDeclined(input: PostScopeDeclinedInput): Promise<void>;
+  postReviewResult(input: PostReviewResultInput): Promise<PostedReviewResult>;
+  postScopeDeclined(input: PostScopeDeclinedInput): Promise<PostedSummaryComment>;
+}
+
+export type ReviewStatusCheckConclusion = 'success' | 'neutral' | 'failure';
+
+export interface CreateReviewStatusCheckInput {
+  owner: string;
+  repo: string;
+  headSha: string;
+  pullRequestUrl: string;
+  startedAt: number;
+}
+
+export interface CompleteReviewStatusCheckInput {
+  owner: string;
+  repo: string;
+  checkRunId: number;
+  conclusion: ReviewStatusCheckConclusion;
+  detailsUrl: string;
+  summaryCommentUrl?: string;
+  verdict: string;
+  completedAt: number;
+}
+
+export interface ReviewStatusCheckReporter {
+  createInProgress(input: CreateReviewStatusCheckInput): Promise<{ id: number }>;
+  complete(input: CompleteReviewStatusCheckInput): Promise<void>;
+}
+
+export interface ReviewExecutorLogger {
+  warn(message: string, ...args: unknown[]): void;
 }
 
 export interface ReviewArchetypeAssigner {
@@ -204,6 +260,7 @@ export interface ReviewExecutorOptions {
   diffInspector: ReviewDiffInspector;
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
+  statusChecks?: ReviewStatusCheckReporter;
   archetypeAssigner: ReviewArchetypeAssigner;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
@@ -213,6 +270,7 @@ export interface ReviewExecutorOptions {
   maxChangedLines?: number;
   agentTimeoutMs?: number;
   now?: () => number;
+  logger?: ReviewExecutorLogger;
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
@@ -224,6 +282,7 @@ export class ReviewExecutor {
   readonly #diffInspector: ReviewDiffInspector;
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
+  readonly #statusChecks: ReviewStatusCheckReporter | null;
   readonly #archetypeAssigner: ReviewArchetypeAssigner;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
@@ -235,6 +294,7 @@ export class ReviewExecutor {
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
   readonly #now: () => number;
+  readonly #logger: ReviewExecutorLogger;
 
   constructor(options: ReviewExecutorOptions) {
     this.#store = options.store;
@@ -242,6 +302,7 @@ export class ReviewExecutor {
     this.#diffInspector = options.diffInspector;
     this.#runner = options.runner;
     this.#poster = options.poster;
+    this.#statusChecks = options.statusChecks ?? null;
     this.#archetypeAssigner = options.archetypeAssigner;
     this.#resolveAgent = options.resolveAgent;
     this.#resolveAgents = options.resolveAgents ?? null;
@@ -251,10 +312,13 @@ export class ReviewExecutor {
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
+    this.#logger = options.logger ?? console;
   }
 
   async executeClaimedJob(jobId: string): Promise<void> {
     let context: ReviewJobContext | null = null;
+    let target: PullRequestTarget | null = null;
+    let checkRunId: number | null = null;
     const worktrees: ReviewWorktree[] = [];
     const cancellation = this.#cancellationRegistry?.register(jobId);
     const cancellationSignal = cancellation?.signal;
@@ -263,7 +327,8 @@ export class ReviewExecutor {
       cancellationSignal?.throwIfAborted();
       context = await this.#requiredContext(jobId);
       const repo = repoForWorktree(context);
-      const target = pullRequestTarget(context);
+      target = pullRequestTarget(context);
+      checkRunId = context.job.checkRunId ?? (await this.#createStatusCheck(context));
       const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
       const changedLines = await this.#diffInspector.changedLineCount(
         target,
@@ -273,7 +338,17 @@ export class ReviewExecutor {
 
       if (changedLines > this.#maxChangedLines) {
         await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-        await this.#completeScopeDecline(jobId, target, changedLines);
+        const summaryComment = await this.#completeScopeDecline(jobId, target, changedLines);
+        await this.#completeStatusCheck({
+          context,
+          target,
+          checkRunId,
+          outcome: {
+            conclusion: 'neutral',
+            verdict: 'Sandy skipped this review',
+          },
+          summaryComment,
+        });
         return;
       }
 
@@ -296,7 +371,7 @@ export class ReviewExecutor {
         workspace.manifestRepos,
         reviewBotConfig,
       );
-      const agentOutputs = await this.#runSelectedAgents({
+      const agentResults = await this.#runSelectedAgents({
         context,
         agents,
         workspace,
@@ -304,11 +379,12 @@ export class ReviewExecutor {
         reviewBotConfig,
         cancellationSignal,
       });
-      if (agentOutputs.length > 0) {
-        await this.#synthesizePersistAndPostReview({
+      let postedReview: PostedReviewResult | null = null;
+      if (agentResults.outputs.length > 0) {
+        postedReview = await this.#synthesizePersistAndPostReview({
           context,
           target,
-          agentOutputs,
+          agentOutputs: agentResults.outputs,
           changedLineCount: changedLines,
           siblingShas: workspace.siblingShas,
           cancellationSignal,
@@ -317,17 +393,99 @@ export class ReviewExecutor {
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#store.markCompleted(jobId, this.#now());
+      const statusCheckInput: CompleteStatusCheckInput = {
+        context,
+        target,
+        checkRunId,
+        outcome: completedReviewCheckOutcome({
+          selectedAgentCount: agentResults.selectedAgentCount,
+          failedAgentCount: agentResults.failedAgentCount,
+          postedFindingCount: postedReview?.postedFindings.length ?? 0,
+        }),
+      };
+      if (postedReview !== null) {
+        statusCheckInput.summaryComment = postedReview.summaryComment;
+      }
+      await this.#completeStatusCheck(statusCheckInput);
     } catch (error) {
       if (isReviewSupersededError(error)) {
         return;
       }
       const message = describeError(error);
       await this.#store.markFailed(jobId, this.#now(), message);
+      if (context !== null && target !== null) {
+        await this.#completeStatusCheck({
+          context,
+          target,
+          checkRunId,
+          outcome: {
+            conclusion: 'failure',
+            verdict: 'Sandy failed to run',
+          },
+        });
+      }
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
       cancellation?.dispose();
+    }
+  }
+
+  async #createStatusCheck(context: ReviewJobContext): Promise<number | null> {
+    if (this.#statusChecks === null) {
+      return null;
+    }
+
+    let checkRunId: number;
+    try {
+      const check = await this.#statusChecks.createInProgress({
+        owner: context.repo.owner,
+        repo: context.repo.name,
+        headSha: context.job.headSha,
+        pullRequestUrl: context.pullRequest.url,
+        startedAt: this.#now(),
+      });
+      checkRunId = check.id;
+    } catch (error) {
+      this.#logger.warn(`failed to create Sandy Check Run for ReviewJob ${context.job.id}`, error);
+      return null;
+    }
+
+    try {
+      await this.#store.setReviewCheckRunId(context.job.id, checkRunId);
+    } catch (error) {
+      this.#logger.warn(
+        `failed to persist Sandy Check Run ${checkRunId} for ReviewJob ${context.job.id}`,
+        error,
+      );
+    }
+    return checkRunId;
+  }
+
+  async #completeStatusCheck(input: CompleteStatusCheckInput): Promise<void> {
+    if (this.#statusChecks === null || input.checkRunId === null) {
+      return;
+    }
+
+    try {
+      await this.#statusChecks.complete({
+        owner: input.target.owner,
+        repo: input.target.repo,
+        checkRunId: input.checkRunId,
+        conclusion: input.outcome.conclusion,
+        detailsUrl: input.summaryComment?.url ?? input.context.pullRequest.url,
+        ...(input.summaryComment === undefined
+          ? {}
+          : { summaryCommentUrl: input.summaryComment.url }),
+        verdict: input.outcome.verdict,
+        completedAt: this.#now(),
+      });
+    } catch (error) {
+      this.#logger.warn(
+        `failed to update Sandy Check Run ${input.checkRunId} for ReviewJob ${input.context.job.id}`,
+        error,
+      );
     }
   }
 
@@ -358,24 +516,31 @@ export class ReviewExecutor {
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<AgentReviewOutput[]> {
+  }): Promise<SelectedAgentReviewResults> {
     const results = await Promise.allSettled(
       input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
     );
 
     const outputs: AgentReviewOutput[] = [];
+    let failedAgentCount = 0;
     for (const result of results) {
       if (result.status === 'rejected') {
         throw result.reason;
       }
-      if (result.value !== null) {
-        outputs.push(result.value);
+      if (result.value.status === 'failed') {
+        failedAgentCount += 1;
+        continue;
       }
+      outputs.push(result.value.output);
     }
-    return outputs;
+    return {
+      outputs,
+      failedAgentCount,
+      selectedAgentCount: input.agents.length,
+    };
   }
 
-  async #runSelectedAgent(input: AgentExecutionInput): Promise<AgentReviewOutput | null> {
+  async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
     if (outcome.status !== 'completed') {
@@ -388,7 +553,7 @@ export class ReviewExecutor {
         findingCount: 0,
         error: outcome.error,
       });
-      return null;
+      return { status: 'failed' };
     }
 
     await this.#store.recordAgentRun({
@@ -401,7 +566,7 @@ export class ReviewExecutor {
       crossRepoSearch: outcome.payload.crossRepoSearch,
     });
 
-    return { agentKey: agent.key, payload: outcome.payload };
+    return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
   }
 
   async #executeAgent(input: AgentExecutionInput): Promise<AgentExecutionOutcome> {
@@ -510,13 +675,14 @@ export class ReviewExecutor {
     jobId: string,
     target: PullRequestTarget,
     changedLines: number,
-  ): Promise<void> {
-    await this.#poster.postScopeDeclined({
+  ): Promise<PostedSummaryComment> {
+    const summaryComment = await this.#poster.postScopeDeclined({
       target,
       changedLines,
       maxChangedLines: this.#maxChangedLines,
     });
     await this.#store.markCompleted(jobId, this.#now());
+    return summaryComment;
   }
 
   async #buildAndRecordManifest(
@@ -543,7 +709,7 @@ export class ReviewExecutor {
     changedLineCount: number;
     siblingShas: SiblingShas;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<void> {
+  }): Promise<PostedReviewResult> {
     const synthesized = synthesizeAgentOutputs({
       agentOutputs: input.agentOutputs,
       changedLineCount: input.changedLineCount,
@@ -565,7 +731,7 @@ export class ReviewExecutor {
       changedLineCount: input.changedLineCount,
       rawFindingCount: synthesized.rawFindingCount,
     });
-    await this.#postReviewResult(
+    return await this.#postReviewResult(
       input.target,
       postable.findings,
       input.siblingShas,
@@ -578,11 +744,12 @@ export class ReviewExecutor {
     findings: PostableFinding[],
     siblingShas: SiblingShas,
     summary: string,
-  ): Promise<void> {
-    const posted = await this.#poster.postReviewResult({ target, findings, siblingShas, summary });
-    for (const postedFinding of posted) {
+  ): Promise<PostedReviewResult> {
+    const result = await this.#poster.postReviewResult({ target, findings, siblingShas, summary });
+    for (const postedFinding of result.postedFindings) {
       await this.#store.markFindingPosted(postedFinding.findingId, postedFinding.commentId);
     }
+    return result;
   }
 
   async #throwIfCancelledOrSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
@@ -638,6 +805,50 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
     runInput.siblingWorktrees = input.workspace.siblingWorktrees;
   }
   return runInput;
+}
+
+function completedReviewCheckOutcome(input: {
+  selectedAgentCount: number;
+  failedAgentCount: number;
+  postedFindingCount: number;
+}): CompletedReviewCheckOutcome {
+  const successfulAgentCount = input.selectedAgentCount - input.failedAgentCount;
+  if (input.selectedAgentCount > 0 && successfulAgentCount === 0) {
+    return {
+      conclusion: 'failure',
+      verdict: 'Sandy failed to produce review results',
+    };
+  }
+
+  if (input.failedAgentCount > 0) {
+    return {
+      conclusion: 'neutral',
+      verdict: 'Sandy completed with partial agent failures',
+    };
+  }
+
+  if (input.postedFindingCount > 0) {
+    return {
+      conclusion: 'neutral',
+      verdict: `Sandy posted ${formatCountWithNoun(input.postedFindingCount, 'finding')}`,
+    };
+  }
+
+  if (input.selectedAgentCount === 0) {
+    return {
+      conclusion: 'neutral',
+      verdict: 'Sandy completed without running agents',
+    };
+  }
+
+  return {
+    conclusion: 'success',
+    verdict: 'Sandy ran cleanly',
+  };
+}
+
+function formatCountWithNoun(count: number, noun: string): string {
+  return `${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
 function describeError(error: unknown): string {

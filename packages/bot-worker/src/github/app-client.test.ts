@@ -2,6 +2,90 @@ import { describe, expect, it } from 'vitest';
 import { GitHubAppClient } from './app-client.js';
 
 describe('GitHubAppClient', () => {
+  it('creates and completes the Sandy Check Run', async () => {
+    const requests: Array<{ request: string; body: unknown }> = [];
+    const client = new GitHubAppClient({
+      appId: '123',
+      privateKey: 'unused',
+      createJwt: () => 'app-jwt',
+      fetch: async (url, init) => {
+        const request = `${init?.method ?? 'GET'} ${String(url)}`;
+        const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+        requests.push({ request, body });
+        if (String(url).endsWith('/repos/acme/widget/installation')) {
+          return jsonResponse({ id: 42 });
+        }
+        if (String(url).endsWith('/app/installations/42/access_tokens')) {
+          return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+        }
+        if (String(url).endsWith('/repos/acme/widget/check-runs')) {
+          return jsonResponse({ id: 1200 }, 201);
+        }
+        if (String(url).endsWith('/repos/acme/widget/check-runs/1200')) {
+          return jsonResponse({ id: 1200 });
+        }
+        return jsonResponse({ message: `unexpected ${request}` }, 500);
+      },
+    });
+
+    await expect(
+      client.createInProgress({
+        owner: 'acme',
+        repo: 'widget',
+        headSha: 'abc123',
+        pullRequestUrl: 'https://github.com/acme/widget/pull/12',
+        startedAt: Date.parse('2026-06-04T10:00:00Z'),
+      }),
+    ).resolves.toEqual({ id: 1200 });
+
+    await expect(
+      client.complete({
+        owner: 'acme',
+        repo: 'widget',
+        checkRunId: 1200,
+        conclusion: 'neutral',
+        detailsUrl: 'https://github.com/acme/widget/pull/12#issuecomment-900',
+        summaryCommentUrl: 'https://github.com/acme/widget/pull/12#issuecomment-900',
+        verdict: 'Sandy posted 1 finding',
+        completedAt: Date.parse('2026-06-04T10:01:00Z'),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          request: 'POST https://api.github.com/repos/acme/widget/check-runs',
+          body: {
+            name: 'Sandy',
+            head_sha: 'abc123',
+            status: 'in_progress',
+            details_url: 'https://github.com/acme/widget/pull/12',
+            started_at: '2026-06-04T10:00:00.000Z',
+            output: {
+              title: 'Sandy review',
+              summary: 'Sandy review is running.',
+            },
+          },
+        },
+        {
+          request: 'PATCH https://api.github.com/repos/acme/widget/check-runs/1200',
+          body: {
+            name: 'Sandy',
+            status: 'completed',
+            conclusion: 'neutral',
+            details_url: 'https://github.com/acme/widget/pull/12#issuecomment-900',
+            completed_at: '2026-06-04T10:01:00.000Z',
+            output: {
+              title: 'Sandy review',
+              summary:
+                'Sandy posted 1 finding. [View summary](https://github.com/acme/widget/pull/12#issuecomment-900).',
+            },
+          },
+        },
+      ]),
+    );
+  });
+
   it('counts changed lines across PR files', async () => {
     const requests: string[] = [];
     const signals: Array<AbortSignal | null | undefined> = [];

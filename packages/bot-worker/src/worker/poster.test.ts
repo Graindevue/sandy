@@ -49,14 +49,18 @@ describe('PullRequestPoster', () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: {},
       summary: 'Confidence score: 2/5\n\nSandy review posted 1 finding.',
       findings: [persistedFinding()],
     });
 
-    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.postedFindings).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.summaryComment).toEqual({
+      commentId: 102,
+      url: 'https://github.com/acme/widget/pull/12#issuecomment-102',
+    });
     expect(github.reviewComments).toEqual([
       {
         owner: 'acme',
@@ -80,14 +84,18 @@ describe('PullRequestPoster', () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: {},
       summary: noFindingsSummary,
       findings: [],
     });
 
-    expect(posted).toEqual([]);
+    expect(result.postedFindings).toEqual([]);
+    expect(result.summaryComment).toEqual({
+      commentId: 101,
+      url: 'https://github.com/acme/widget/pull/12#issuecomment-101',
+    });
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments).toEqual([
       {
@@ -104,7 +112,7 @@ describe('PullRequestPoster', () => {
     const logger = { warn: vi.fn() };
     const poster = new PullRequestPoster(github, { logger });
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: {},
       summary: twoFindingsSummary,
@@ -120,7 +128,7 @@ describe('PullRequestPoster', () => {
       ],
     });
 
-    expect(posted).toEqual([
+    expect(result.postedFindings).toEqual([
       { findingId: 'finding-2', commentId: 101 },
       { findingId: 'finding-1', commentId: 102 },
     ]);
@@ -238,7 +246,7 @@ describe('PullRequestPoster', () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: consumerSiblingShas,
       summary: oneFindingSummary,
@@ -255,7 +263,7 @@ describe('PullRequestPoster', () => {
       ],
     });
 
-    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.postedFindings).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
     expect(github.issueComments[0]?.body).toContain(
@@ -308,8 +316,12 @@ class FakeGitHubReviewPoster implements GitHubReviewPoster {
     return { id: this.#nextCommentId++ };
   }
 
-  async createIssueComment(input: IssueCommentInput): Promise<{ id: number }> {
+  async createIssueComment(input: IssueCommentInput): Promise<{ id: number; url: string }> {
     this.issueComments.push(input);
-    return { id: this.#nextCommentId++ };
+    const id = this.#nextCommentId++;
+    return {
+      id,
+      url: `https://github.com/${input.owner}/${input.repo}/pull/${input.issueNumber}#issuecomment-${id}`,
+    };
   }
 }

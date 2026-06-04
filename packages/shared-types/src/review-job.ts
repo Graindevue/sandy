@@ -36,6 +36,8 @@ export interface ReviewJob {
   agentRuns: AgentRunId[];
   /** Sibling Repo full names mapped to their pinned default-branch SHA. */
   siblingShas: SiblingShas;
+  /** GitHub Check Run id for the advisory Sandy Review Status Check. */
+  checkRunId?: number;
   /** Epoch milliseconds when the job was enqueued. */
   createdAt: number;
   /** Epoch milliseconds when a worker claimed the job, if claimed. */

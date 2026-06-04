@@ -213,6 +213,7 @@ export async function main(): Promise<void> {
     diffInspector: github,
     runner: new SandcastleRunner({ imageName: config.agentImage, env: config.agentEnv }),
     poster,
+    statusChecks: github,
     archetypeAssigner,
     cancellationRegistry: cancellations,
     maxChangedLines: config.maxChangedLines,

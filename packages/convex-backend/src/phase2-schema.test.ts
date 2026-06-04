@@ -7,7 +7,12 @@ import {
   markMergeStateSignalsRolledUp,
 } from '../convex/pullRequests.js';
 import { recordMergeStateReaction } from '../convex/reactions.js';
-import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
+import {
+  enqueue,
+  setCheckRunId,
+  setConfidenceScore,
+  setSiblingShas,
+} from '../convex/reviewJobs.js';
 
 describe('Phase 2 Convex schema handlers', () => {
   it('round-trips anchor-only and cross-repo Findings', async () => {
@@ -126,6 +131,7 @@ describe('Phase 2 Convex schema handlers', () => {
       jobId: reviewJobId,
       siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
     });
+    await invoke(setCheckRunId, ctx, { jobId: reviewJobId, checkRunId: 1200 });
     const agentRunId = await invoke(recordAgentRun, ctx, {
       reviewJobId,
       agentKey: 'logic',
@@ -146,6 +152,7 @@ describe('Phase 2 Convex schema handlers', () => {
         confidenceScore: 4,
         agentRuns: [agentRunId],
         siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
+        checkRunId: 1200,
       }),
     );
     expect(ctx.db.getDoc(agentRunId)).toEqual(
