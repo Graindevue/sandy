@@ -1,6 +1,12 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
 import type { ReviewCanceller } from '../worker/cancellation.js';
-import type { CommentEvent, ParsedEvent, PullRequestFacts, RepoRef } from './events.js';
+import type {
+  CommentEvent,
+  ParsedEvent,
+  PullRequestBackedEvent,
+  PullRequestFacts,
+  RepoRef,
+} from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { EnqueueInput, ReviewSink } from './sink.js';
 import { evaluateTrigger } from './trigger-evaluator.js';
@@ -250,7 +256,7 @@ function enqueueLogMessage(
 function upsertPr(
   sink: ReviewSink,
   repoId: string,
-  event: Exclude<ParsedEvent, { kind: 'ignored' }>,
+  event: PullRequestBackedEvent,
   pr: PullRequestFacts,
 ): Promise<string> {
   const { state } = prStateForEvent(event);

@@ -328,6 +328,19 @@ describe('parseEventForDispatch — check_run hydration', () => {
 
     expect(event).toEqual({ kind: 'ignored', reason: 'check_run: not Sandy' });
   });
+
+  it('ignores a Check Run re-run when PR resolution fails', async () => {
+    const event = await parseEventForDispatch('check_run', checkRunPayload('rerequested'), {
+      async resolvePullRequest() {
+        throw new Error('GitHub is unavailable');
+      },
+    });
+
+    expect(event).toEqual({
+      kind: 'ignored',
+      reason: 'check_run: pull_request resolution failed: GitHub is unavailable',
+    });
+  });
 });
 
 describe('parseEvent — PR lifecycle state (finding #3)', () => {

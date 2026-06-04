@@ -8,12 +8,22 @@
 import type { PullRequestState } from '@sandy/shared-types';
 
 /** The GitHub webhook event names Sandy subscribes to (the `X-GitHub-Event` header). */
-export type SupportedEventName =
-  | 'pull_request'
-  | 'issue_comment'
-  | 'pull_request_review_comment'
-  | 'push'
-  | 'check_run';
+export const SUPPORTED_EVENT_NAMES = [
+  'pull_request',
+  'issue_comment',
+  'pull_request_review_comment',
+  'push',
+  'check_run',
+] as const;
+
+export type SupportedEventName = (typeof SUPPORTED_EVENT_NAMES)[number];
+
+const SUPPORTED_EVENT_NAME_SET: ReadonlySet<string> = new Set<string>(SUPPORTED_EVENT_NAMES);
+
+/** Whether a string is one of the webhook events Sandy subscribes to. */
+export function isSupportedEvent(eventName: string | undefined): eventName is SupportedEventName {
+  return eventName !== undefined && SUPPORTED_EVENT_NAME_SET.has(eventName);
+}
 
 export type GitHubCommentKind = 'pull_request_review_comment' | 'issue_comment';
 
@@ -105,3 +115,6 @@ export type ParsedEvent =
   | PushEvent
   | CheckRunEvent
   | IgnoredEvent;
+
+/** Any normalized event that carries PR facts and can update the PullRequest row. */
+export type PullRequestBackedEvent = Exclude<ParsedEvent, IgnoredEvent>;
