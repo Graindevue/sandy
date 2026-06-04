@@ -22,6 +22,13 @@ The act of running one or more Agents over a Pull Request. A Review produces a s
 
 A queued unit of work in Convex. Status flows: `pending` → `running` → (`completed` | `failed` | `superseded`). One ReviewJob per Review attempt. Multiple ReviewJobs may exist for the same PR over time as iteration happens.
 
+## Review Status Check
+
+The GitHub Check Run Sandy publishes on a PR to project a ReviewJob's lifecycle onto the PR page — the glanceable counterpart to the inline Findings and summary comment, so a Review in flight is visible at a glance instead of leaving the PR page empty. One Check Run per ReviewJob, named **Sandy**.
+
+It is **advisory**: a running Review shows as in-progress, and a finished Review reports its outcome — but the Check never blocks a merge on the Findings it surfaces. The verdict carries an at-a-glance distinction between "Sandy ran and is clean", "Sandy ran and has something to say", a Review that was skipped or superseded, and Sandy itself failing to run (the one genuinely loud state, since a silently broken reviewer is the worst failure mode). Its Re-run control is a Review trigger, a sibling to `@bot review`. See ADR 0015.
+_Avoid_: CI check, status check (Sandy is a reviewer, not CI; "status check" also conflates it with GitHub's older Commit Status API, which Sandy does not use)
+
 ## Agent
 
 A single reviewer persona — a system prompt + a vendor/model selection + a tool allowlist + a completion signal. Agents are markdown files in `agents/` (defaults shipped with Sandy) or `.config/agents/` (per-instance customizations). Multiple Agents run in parallel within a Review, each in its own Apple Container.
