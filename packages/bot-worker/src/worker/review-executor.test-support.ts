@@ -200,12 +200,22 @@ export class FakeExecutionStore implements ReviewExecutionStore {
     this.checkRunIds.push({ jobId, checkRunId });
   }
 
-  async markCompleted(jobId: string, finishedAt: number): Promise<void> {
+  async markCompleted(jobId: string, finishedAt: number): Promise<boolean> {
+    if (this.status !== 'running') {
+      return false;
+    }
+    this.status = 'completed';
     this.completed.push({ jobId, finishedAt });
+    return true;
   }
 
-  async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
+  async markFailed(jobId: string, finishedAt: number, error: string): Promise<boolean> {
+    if (this.status !== 'running') {
+      return false;
+    }
+    this.status = 'failed';
     this.failed.push({ jobId, finishedAt, error });
+    return true;
   }
 }
 
