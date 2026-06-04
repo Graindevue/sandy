@@ -371,6 +371,7 @@ export class ReviewExecutor {
       await statusCheck.complete(statusCheckCompletion);
     } catch (error) {
       if (isReviewSupersededError(error)) {
+        await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
         return;
       }
       const message = describeError(error);

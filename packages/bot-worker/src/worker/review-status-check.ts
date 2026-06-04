@@ -1,6 +1,11 @@
 import type { PostedSummaryComment } from './poster.js';
 
-export type ReviewStatusCheckConclusion = 'success' | 'neutral' | 'failure';
+export type ReviewStatusCheckConclusion =
+  | 'success'
+  | 'neutral'
+  | 'failure'
+  | 'skipped'
+  | 'cancelled';
 
 export interface CreateReviewStatusCheckInput {
   owner: string;
@@ -56,8 +61,12 @@ export interface ReviewStatusCheckOutcome {
 
 export const REVIEW_STATUS_CHECK_OUTCOMES = {
   scopeDeclined: {
-    conclusion: 'neutral',
+    conclusion: 'skipped',
     verdict: 'Sandy skipped this review',
+  },
+  superseded: {
+    conclusion: 'cancelled',
+    verdict: 'Sandy review was superseded by a newer push',
   },
   reviewFailed: {
     conclusion: 'failure',
