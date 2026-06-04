@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { dispatchEvent, FORK_DECLINE_MESSAGE } from './dispatch.js';
 import type {
+  CheckRunEvent,
   CommentEvent,
   PullRequestEvent,
   PullRequestFacts,
@@ -126,6 +127,10 @@ function pr(
 
 function push(prOverrides: Partial<PullRequestFacts> = {}): PushEvent {
   return { kind: 'push', repo: BASE_REPO, pr: prFacts(prOverrides) };
+}
+
+function checkRun(prOverrides: Partial<PullRequestFacts> = {}): CheckRunEvent {
+  return { kind: 'check_run', repo: BASE_REPO, pr: prFacts(prOverrides) };
 }
 
 describe('dispatchEvent', () => {
@@ -396,6 +401,39 @@ describe('dispatchEvent', () => {
     const outcome = await dispatchEvent(push(), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
     expect(sink.supersedingEnqueues[0]).toMatchObject({ headSha: 'sha-7', trigger: 'push' });
+  });
+
+  it('enqueues a Check Run re-run through the superseding path even when opted out', async () => {
+    const sink = new FakeSink(false);
+    sink.supersededJobIds = ['job:old-running'];
+    const cancelled: string[][] = [];
+
+    const outcome = await dispatchEvent(checkRun({ headSha: 'current-sha' }), sink, silentLogger, {
+      reviewCanceller: {
+        cancelReviewJobs(jobIds) {
+          cancelled.push(jobIds);
+        },
+      },
+    });
+
+    expect(outcome).toEqual({
+      action: 'enqueued',
+      reviewJobId: 'job:1',
+      trigger: 'rerun',
+      supersededJobIds: ['job:old-running'],
+    });
+    expect(sink.setActiveCalls).toEqual([{ id: 'pr:repo:tony-co/sandy#7', active: true }]);
+    expect(sink.enqueued).toEqual([]);
+    expect(sink.supersedingEnqueues).toEqual([
+      {
+        pullRequestId: 'pr:repo:tony-co/sandy#7',
+        repoId: 'repo:tony-co/sandy',
+        headSha: 'current-sha',
+        trigger: 'rerun',
+        agentKeys: ['logic'],
+      },
+    ]);
+    expect(cancelled).toEqual([['job:old-running']]);
   });
 
   it('supersedes active stale jobs and requests cancellation before returning a push enqueue', async () => {

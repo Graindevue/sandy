@@ -74,6 +74,7 @@ const DO_NOTHING: TriggerDecision = { enqueue: false };
  *   `reviewActive = true` (trigger `ready`).
  * - push / synchronize on a `reviewActive` PR → enqueue (trigger `push`).
  *   Pushes to an opted-out, closed, or merged PR are ignored.
+ * - Check Run re-run → enqueue regardless of `reviewActive` (trigger `rerun`).
  * - PR closed → clear `reviewActive`.
  * - fork PR (head Repo ≠ base Repo) → decline (`decline: 'fork'`); v1 declines
  *   forks (PRD open question) and never enqueues them.
@@ -118,6 +119,16 @@ export function evaluateTrigger(event: ParsedEvent, currentReviewActive: boolean
         return { enqueue: false, decline: 'fork' };
       }
       return { enqueue: true, trigger: 'push' };
+    }
+
+    case 'check_run': {
+      if (isTerminal(event.pr)) {
+        return DO_NOTHING;
+      }
+      if (isForkPr(event.repo, event.pr)) {
+        return { enqueue: false, decline: 'fork' };
+      }
+      return { enqueue: true, setReviewActive: true, trigger: 'rerun' };
     }
 
     case 'pull_request': {

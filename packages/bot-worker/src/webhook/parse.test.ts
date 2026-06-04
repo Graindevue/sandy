@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { CommentEvent, ParsedEvent, PullRequestEvent, PushEvent } from './events.js';
+import type {
+  CheckRunEvent,
+  CommentEvent,
+  ParsedEvent,
+  PullRequestEvent,
+  PushEvent,
+} from './events.js';
 import { parseEvent, parseEventForDispatch, prStateForEvent } from './parse.js';
 
 /**
@@ -73,6 +79,19 @@ function pushPayload(ref = 'refs/heads/feature') {
   };
 }
 
+function checkRunPayload(action: string, options: { name?: string; number?: number } = {}) {
+  const { name = 'Sandy', number = 42 } = options;
+  return {
+    action,
+    repository: REPO,
+    check_run: {
+      name,
+      head_sha: 'stale-check-sha',
+      pull_requests: [{ number }],
+    },
+  };
+}
+
 function expectComment(event: ParsedEvent): CommentEvent {
   expect(event.kind).toBe('comment');
   return event as CommentEvent;
@@ -86,6 +105,11 @@ function expectPullRequest(event: ParsedEvent): PullRequestEvent {
 function expectPush(event: ParsedEvent): PushEvent {
   expect(event.kind).toBe('push');
   return event as PushEvent;
+}
+
+function expectCheckRun(event: ParsedEvent): CheckRunEvent {
+  expect(event.kind).toBe('check_run');
+  return event as CheckRunEvent;
 }
 
 describe('parseEvent — pull_request_review_comment action (finding #2)', () => {
@@ -253,6 +277,56 @@ describe('parseEventForDispatch — push hydration', () => {
 
     const event = await parseEventForDispatch('push', pushPayload(), new ThisDependentResolver());
     expect(expectPush(event).pr.headSha).toBe('abc123');
+  });
+});
+
+describe('parseEventForDispatch — check_run hydration', () => {
+  it('resolves a Sandy Check Run re-run to current PR facts', async () => {
+    const currentPr = expectPullRequest(
+      parseEvent('pull_request', pullRequestPayload('synchronize')),
+    ).pr;
+    const resolved: Array<{ repo: { owner: string; name: string }; number: number }> = [];
+    const event = await parseEventForDispatch('check_run', checkRunPayload('rerequested'), {
+      async resolvePullRequest(repo, number) {
+        resolved.push({ repo, number });
+        return { ...currentPr, headSha: 'current-pr-head' };
+      },
+    });
+
+    const checkRun = expectCheckRun(event);
+    expect(checkRun.pr.headSha).toBe('current-pr-head');
+    expect(resolved).toEqual([{ repo: { owner: 'tony-co', name: 'sandy' }, number: 42 }]);
+  });
+
+  it('ignores non-rerequested Check Run actions without resolving PR details', async () => {
+    let resolved = false;
+    const event = await parseEventForDispatch('check_run', checkRunPayload('completed'), {
+      async resolvePullRequest() {
+        resolved = true;
+        return null;
+      },
+    });
+
+    expect(event).toEqual({
+      kind: 'ignored',
+      reason: 'check_run: action completed is not rerequested',
+    });
+    expect(resolved).toBe(false);
+  });
+
+  it('ignores re-runs for non-Sandy Check Runs', async () => {
+    const event = await parseEventForDispatch(
+      'check_run',
+      checkRunPayload('rerequested', { name: 'CI' }),
+      {
+        async resolvePullRequest() {
+          return expectPullRequest(parseEvent('pull_request', pullRequestPayload('synchronize')))
+            .pr;
+        },
+      },
+    );
+
+    expect(event).toEqual({ kind: 'ignored', reason: 'check_run: not Sandy' });
   });
 });
 

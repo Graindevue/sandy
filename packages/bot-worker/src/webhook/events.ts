@@ -12,7 +12,8 @@ export type SupportedEventName =
   | 'pull_request'
   | 'issue_comment'
   | 'pull_request_review_comment'
-  | 'push';
+  | 'push'
+  | 'check_run';
 
 export type GitHubCommentKind = 'pull_request_review_comment' | 'issue_comment';
 
@@ -84,6 +85,13 @@ export interface PushEvent {
   pr: PullRequestFacts;
 }
 
+/** `check_run.rerequested` delivery for Sandy's advisory Review Status Check. */
+export interface CheckRunEvent {
+  kind: 'check_run';
+  repo: RepoRef;
+  pr: PullRequestFacts;
+}
+
 /** A webhook delivery Sandy understands but that carries no review signal. */
 export interface IgnoredEvent {
   kind: 'ignored';
@@ -91,4 +99,9 @@ export interface IgnoredEvent {
 }
 
 /** Any normalized webhook event. */
-export type ParsedEvent = PullRequestEvent | CommentEvent | PushEvent | IgnoredEvent;
+export type ParsedEvent =
+  | PullRequestEvent
+  | CommentEvent
+  | PushEvent
+  | CheckRunEvent
+  | IgnoredEvent;

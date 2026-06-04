@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  CheckRunEvent,
   CommentEvent,
   PullRequestEvent,
   PullRequestFacts,
@@ -44,6 +45,10 @@ function prEvent(
 
 function pushEvent(prOverrides: Partial<PullRequestFacts> = {}): PushEvent {
   return { kind: 'push', repo: BASE_REPO, pr: prFacts(prOverrides) };
+}
+
+function checkRunEvent(prOverrides: Partial<PullRequestFacts> = {}): CheckRunEvent {
+  return { kind: 'check_run', repo: BASE_REPO, pr: prFacts(prOverrides) };
 }
 
 describe('isReviewMention', () => {
@@ -93,6 +98,14 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
   it('does nothing on reopened', () => {
     expect(evaluateTrigger(prEvent('reopened'), false)).toEqual({ enqueue: false });
     expect(evaluateTrigger(prEvent('reopened'), true)).toEqual({ enqueue: false });
+  });
+
+  it('enqueues a Check Run re-run regardless of Sticky Opt-In state', () => {
+    expect(evaluateTrigger(checkRunEvent(), false)).toEqual({
+      enqueue: true,
+      setReviewActive: true,
+      trigger: 'rerun',
+    });
   });
 
   // Rule 2: @bot review mention → enqueue + set reviewActive=true (trigger mention).
@@ -177,6 +190,11 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
     expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, decline: 'fork' });
   });
 
+  it('declines a fork PR on a Check Run re-run', () => {
+    const event = checkRunEvent({ headRepo: { owner: 'forker', name: 'sandy' } });
+    expect(evaluateTrigger(event, false)).toEqual({ enqueue: false, decline: 'fork' });
+  });
+
   it('still clears a fork PR on close (close wins over decline)', () => {
     const event = prEvent('closed', { headRepo: { owner: 'forker', name: 'sandy' } });
     expect(evaluateTrigger(event, true)).toEqual({ enqueue: false, clearReviewActive: true });
@@ -218,6 +236,12 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   it('does nothing on a synchronize to a merged PR even when reviewActive is stale', () => {
     expect(evaluateTrigger(prEvent('synchronize', { state: 'merged' }), true)).toEqual({
+      enqueue: false,
+    });
+  });
+
+  it('does nothing on a Check Run re-run for a closed PR', () => {
+    expect(evaluateTrigger(checkRunEvent({ state: 'closed' }), false)).toEqual({
       enqueue: false,
     });
   });

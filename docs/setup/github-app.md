@@ -53,16 +53,17 @@ workflow.
 
 ## 3. Subscribe to webhook events
 
-Under **Subscribe to events**, check exactly these four:
+Under **Subscribe to events**, check exactly these five:
 
 | Event | Drives |
 |-------|--------|
+| **Check run** | The **Re-run** button on Sandy's Review Status Check triggers a fresh Review for the PR's current head. |
 | **Pull request** | PR opened / closed / `draft → ready` transitions. Close clears `reviewActive`; ready-for-review is a Review trigger (Sticky Opt-In). |
 | **Issue comment** | `@bot review` mention on a PR conversation (the opt-in trigger). Gated on the **Issues** permission from step 2 — if you don't see this event in the list, you haven't granted Issues (Read-only) yet. |
 | **Pull request review comment** | Reactions/replies on Sandy's inline Findings (the trailer-driven reaction loop). Subscribe now so deliveries arrive from day one, but Phase 1 has no Reactions table — persisting reactions and feeding the learning loop is Phase 3. |
 | **Push** | New commits on an opted-in PR retrigger a Review automatically (Cancel-on-Supersede if one is already in flight). |
 
-These four events and the permissions above are exactly what the worker's
+These five events and the permissions above are exactly what the worker's
 webhook dispatcher expects. Adding more events is harmless but unused; removing
 any of these will silently break a trigger.
 

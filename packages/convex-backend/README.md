@@ -12,8 +12,8 @@ to every row.
 
 ## Functions
 
-- **reviewJobs** — `enqueue`, `enqueueSuperseding` (push-triggered
-  Cancel-on-Supersede), `claim` (OCC-protected: claims a `pending` job and
+- **reviewJobs** — `enqueue`, `enqueueSuperseding` (Cancel-on-Supersede for
+  superseding triggers), `claim` (OCC-protected: claims a `pending` job and
   transitions it to `running`; the loser of a race returns `false`),
   `setSiblingShas`, `setCheckRunId`, `setConfidenceScore`, `markCompleted`,
   `markFailed`, `markSuperseded`, `getStatus`, and the `subscribePending` query

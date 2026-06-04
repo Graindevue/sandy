@@ -88,9 +88,9 @@ function fullName(repo: RepoRef): string {
  *   4. flip / clear the flag, then enqueue — so an enqueued job always points at
  *      a PR row whose flag already reflects the opt-in.
  *
- * Push-triggered reviews use a single Convex mutation that supersedes active
- * stale jobs and enqueues (or reuses) the new-head job atomically; any local
- * running jobs returned by that mutation are then aborted through the optional
+ * Superseding reviews use a single Convex mutation that supersedes active stale
+ * jobs and enqueues (or reuses) the new-head job atomically; any local running
+ * jobs returned by that mutation are then aborted through the optional
  * cancellation registry.
  */
 export async function dispatchEvent(
@@ -218,7 +218,7 @@ async function enqueueReviewForTrigger(
   input: EnqueueInput,
   reviewCanceller: ReviewCanceller | undefined,
 ): Promise<{ reviewJobId: string; supersededJobIds?: string[] }> {
-  if (input.trigger !== 'push') {
+  if (!usesSupersedingEnqueue(input.trigger)) {
     return { reviewJobId: await sink.enqueueReviewJob(input) };
   }
 
@@ -228,6 +228,10 @@ async function enqueueReviewForTrigger(
     reviewJobId: result.reviewJobId,
     supersededJobIds: result.supersededJobIds,
   };
+}
+
+function usesSupersedingEnqueue(trigger: ReviewTrigger): boolean {
+  return trigger === 'push' || trigger === 'rerun';
 }
 
 function enqueueLogMessage(

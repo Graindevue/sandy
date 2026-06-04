@@ -10,7 +10,7 @@ export type ReviewJobId = string;
 export type ReviewJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'superseded';
 
 /** What caused a Review to be triggered. */
-export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened';
+export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened' | 'rerun';
 
 /** Sibling Repo full names mapped to their pinned default-branch SHA. */
 export type SiblingShas = Record<string, string>;

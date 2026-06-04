@@ -176,6 +176,50 @@ describe('webhook server', () => {
     ]);
   });
 
+  it('accepts a signed Check Run re-run event and dispatches it', async () => {
+    const body = JSON.stringify({
+      action: 'rerequested',
+      repository: { owner: { login: 'tony-co' }, name: 'sandy' },
+      check_run: {
+        name: 'Sandy',
+        head_sha: 'stale-check-sha',
+        pull_requests: [{ number: 7 }],
+      },
+    });
+    const resolved: Array<{ repo: RepoRef; number: number }> = [];
+    const handler = createWebhookHandler({
+      webhookSecret: SECRET,
+      sink,
+      logger,
+      pullRequestResolver: {
+        async resolvePullRequest(repo, number) {
+          resolved.push({ repo, number });
+          return { ...resolvedPr, headSha: 'current-sha' };
+        },
+      },
+    });
+    const req = new EventEmitter() as IncomingMessage;
+    req.url = '/';
+    req.method = 'POST';
+    req.headers = {
+      'x-github-event': 'check_run',
+      'x-hub-signature-256': sign(body),
+    };
+    const res = fakeResponse();
+
+    const done = handler(req, res);
+    req.emit('data', Buffer.from(body));
+    req.emit('end');
+    await done;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('enqueued');
+    expect(resolved).toEqual([{ repo: { owner: 'tony-co', name: 'sandy' }, number: 7 }]);
+    expect(sink.enqueued).toEqual([
+      expect.objectContaining({ headSha: 'current-sha', trigger: 'rerun', agentKeys: ['logic'] }),
+    ]);
+  });
+
   it('acknowledges a verified but unsupported event without dispatching (202)', async () => {
     const body = JSON.stringify({ zen: 'Keep it logically awesome.' });
     const res = await post(body, {

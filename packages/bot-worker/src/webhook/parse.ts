@@ -1,5 +1,6 @@
 import type { PullRequestState } from '@sandy/shared-types';
 import type {
+  CheckRunEvent,
   CommentEvent,
   ParsedEvent,
   PullRequestEvent,
@@ -58,11 +59,22 @@ interface RawPushPayload {
   deleted?: boolean;
 }
 
+interface RawCheckRunPayload {
+  action?: string;
+  repository?: RawRepoRef;
+  check_run?: {
+    name?: string;
+    pull_requests?: Array<{ number?: number }>;
+  };
+}
+
 interface PushFacts {
   repo: RepoRef;
   branch: string;
   headSha: string;
 }
+
+const SANDY_CHECK_RUN_NAME = 'Sandy';
 
 function ignored(reason: string): ParsedEvent {
   return { kind: 'ignored', reason };
@@ -279,6 +291,28 @@ async function parseResolvablePushEvent(
   return { kind: 'push', repo: facts.repo, pr } satisfies PushEvent;
 }
 
+async function parseResolvableCheckRunEvent(
+  payload: RawCheckRunPayload,
+  resolver: PullRequestResolver,
+): Promise<ParsedEvent> {
+  const facts = parseCheckRunFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+
+  let pr: PullRequestFacts | null;
+  try {
+    pr = await resolver.resolvePullRequest(facts.repo, facts.number);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return ignored(`check_run: pull_request resolution failed: ${detail}`);
+  }
+  if (pr === null) {
+    return ignored('check_run: pull_request details unavailable');
+  }
+  return { kind: 'check_run', repo: facts.repo, pr } satisfies CheckRunEvent;
+}
+
 function parsePushEvent(payload: RawPushPayload): ParsedEvent {
   const facts = parsePushFacts(payload);
   if ('reason' in facts) {
@@ -288,6 +322,14 @@ function parsePushEvent(payload: RawPushPayload): ParsedEvent {
   // this through GitHub before dispatch; the pure parser fails closed without
   // that network dependency.
   return ignored('push: pull_request details unavailable');
+}
+
+function parseCheckRunEvent(payload: RawCheckRunPayload): ParsedEvent {
+  const facts = parseCheckRunFacts(payload);
+  if ('reason' in facts) {
+    return ignored(facts.reason);
+  }
+  return ignored('check_run: pull_request details unavailable');
 }
 
 function parsePushFacts(payload: RawPushPayload): PushFacts | { reason: string } {
@@ -310,6 +352,26 @@ function parsePushFacts(payload: RawPushPayload): PushFacts | { reason: string }
   return { repo, branch: ref.slice(prefix.length), headSha };
 }
 
+function parseCheckRunFacts(
+  payload: RawCheckRunPayload,
+): { repo: RepoRef; number: number } | { reason: string } {
+  if (payload.action !== 'rerequested') {
+    return { reason: `check_run: action ${payload.action ?? 'missing'} is not rerequested` };
+  }
+  const repo = parseRepoRef(payload.repository);
+  if (repo === null) {
+    return { reason: 'check_run: missing repository' };
+  }
+  if (payload.check_run?.name !== SANDY_CHECK_RUN_NAME) {
+    return { reason: 'check_run: not Sandy' };
+  }
+  const number = payload.check_run.pull_requests?.[0]?.number;
+  if (typeof number !== 'number') {
+    return { reason: 'check_run: missing pull_request number' };
+  }
+  return { repo, number };
+}
+
 /**
  * Normalize a raw GitHub webhook payload into a {@link ParsedEvent}. Unknown or
  * malformed deliveries fail closed to an `ignored` event so the dispatcher never
@@ -328,6 +390,8 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
       return parseCommentEvent(payload as RawCommentPayload, true);
     case 'push':
       return parsePushEvent(payload as RawPushPayload);
+    case 'check_run':
+      return parseCheckRunEvent(payload as RawCheckRunPayload);
   }
 }
 
@@ -348,6 +412,9 @@ export async function parseEventForDispatch(
   }
   if (resolver !== undefined && isResolvablePushPayload(eventName, payload)) {
     return await parseResolvablePushEvent(payload, resolver);
+  }
+  if (resolver !== undefined && isResolvableCheckRunPayload(eventName, payload)) {
+    return await parseResolvableCheckRunEvent(payload, resolver);
   }
   return parseEvent(eventName, payload);
 }
@@ -371,13 +438,21 @@ function isResolvablePushPayload(
   return eventName === 'push' && typeof payload === 'object' && payload !== null;
 }
 
+function isResolvableCheckRunPayload(
+  eventName: SupportedEventName,
+  payload: unknown,
+): payload is RawCheckRunPayload {
+  return eventName === 'check_run' && typeof payload === 'object' && payload !== null;
+}
+
 /** Whether a string is one of the webhook events Sandy subscribes to. */
 export function isSupportedEvent(eventName: string | undefined): eventName is SupportedEventName {
   return (
     eventName === 'pull_request' ||
     eventName === 'issue_comment' ||
     eventName === 'pull_request_review_comment' ||
-    eventName === 'push'
+    eventName === 'push' ||
+    eventName === 'check_run'
   );
 }
 
@@ -387,7 +462,9 @@ export function isSupportedEvent(eventName: string | undefined): eventName is Su
  * assuming `'open'`, so a comment on a closed or merged PR does not clobber the
  * stored state back to `'open'`.
  */
-export function prStateForEvent(event: PullRequestEvent | CommentEvent | PushEvent): {
+export function prStateForEvent(
+  event: PullRequestEvent | CommentEvent | PushEvent | CheckRunEvent,
+): {
   state: PullRequestState;
 } {
   return { state: event.pr.state };
