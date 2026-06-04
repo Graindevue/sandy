@@ -270,7 +270,10 @@ describe('evaluateTrigger — Sticky Opt-In matrix', () => {
 
   it('declines a fork PR on a Check Run re-run', () => {
     const event = checkRunEvent({ headRepo: { owner: 'forker', name: 'sandy' } });
-    expect(evaluateTrigger(event, triggerContext(false))).toEqual({ enqueue: false, decline: 'fork' });
+    expect(evaluateTrigger(event, triggerContext(false))).toEqual({
+      enqueue: false,
+      decline: 'fork',
+    });
   });
 
   it('still clears a fork PR on close (close wins over decline)', () => {
