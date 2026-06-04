@@ -143,13 +143,26 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     await this.#client.mutation(refs.reviewJobs.setCheckRunId, { jobId, checkRunId });
   }
 
-  async markCompleted(jobId: string, finishedAt: number): Promise<void> {
-    await this.#client.mutation(refs.reviewJobs.markCompleted, { jobId, finishedAt });
+  async markCompleted(jobId: string, finishedAt: number): Promise<boolean> {
+    return booleanMutationResult(
+      await this.#client.mutation(refs.reviewJobs.markCompleted, { jobId, finishedAt }),
+      'reviewJobs.markCompleted',
+    );
   }
 
-  async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
-    await this.#client.mutation(refs.reviewJobs.markFailed, { jobId, finishedAt, error });
+  async markFailed(jobId: string, finishedAt: number, error: string): Promise<boolean> {
+    return booleanMutationResult(
+      await this.#client.mutation(refs.reviewJobs.markFailed, { jobId, finishedAt, error }),
+      'reviewJobs.markFailed',
+    );
   }
+}
+
+function booleanMutationResult(value: unknown, name: string): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  throw new Error(`Convex mutation ${name} did not return a boolean`);
 }
 
 function findingMutationArgs(finding: Finding): Record<string, unknown> {

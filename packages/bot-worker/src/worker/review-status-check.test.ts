@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   completedReviewStatusCheckOutcome,
+  REVIEW_STATUS_CHECK_OUTCOMES,
   type ReviewStatusCheckReporter,
   startReviewStatusCheck,
 } from './review-status-check.js';
@@ -98,6 +99,23 @@ describe('ReviewStatusCheckRun', () => {
     ).toEqual({
       conclusion: 'neutral',
       verdict: 'Sandy posted 2 findings',
+    });
+  });
+
+  it('maps terminal non-completed Review outcomes to advisory check conclusions', () => {
+    expect(REVIEW_STATUS_CHECK_OUTCOMES).toEqual({
+      scopeDeclined: {
+        conclusion: 'skipped',
+        verdict: 'Sandy skipped this review',
+      },
+      superseded: {
+        conclusion: 'cancelled',
+        verdict: 'Sandy review was superseded by a newer push',
+      },
+      reviewFailed: {
+        conclusion: 'failure',
+        verdict: 'Sandy failed to run',
+      },
     });
   });
 });

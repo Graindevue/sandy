@@ -138,8 +138,8 @@ export interface ReviewExecutionStore {
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
   setReviewCheckRunId(jobId: string, checkRunId: number): Promise<void>;
-  markCompleted(jobId: string, finishedAt: number): Promise<void>;
-  markFailed(jobId: string, finishedAt: number, error: string): Promise<void>;
+  markCompleted(jobId: string, finishedAt: number): Promise<boolean>;
+  markFailed(jobId: string, finishedAt: number, error: string): Promise<boolean>;
 }
 
 export interface ReviewDiffInspector {
@@ -309,7 +309,12 @@ export class ReviewExecutor {
 
       if (changedLines > this.#maxChangedLines) {
         await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-        const summaryComment = await this.#completeScopeDecline(jobId, target, changedLines);
+        const summaryComment = await this.#completeScopeDecline(
+          jobId,
+          target,
+          changedLines,
+          cancellationSignal,
+        );
         await statusCheck.complete({
           outcome: REVIEW_STATUS_CHECK_OUTCOMES.scopeDeclined,
           summaryComment,
@@ -357,7 +362,7 @@ export class ReviewExecutor {
       }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      await this.#store.markCompleted(jobId, this.#now());
+      await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
       const statusCheckCompletion: CompleteReviewStatusCheckRunInput = {
         outcome: completedReviewStatusCheckOutcome({
           selectedAgentCount: agentResults.selectedAgentCount,
@@ -375,7 +380,11 @@ export class ReviewExecutor {
         return;
       }
       const message = describeError(error);
-      await this.#store.markFailed(jobId, this.#now(), message);
+      const markedFailed = await this.#store.markFailed(jobId, this.#now(), message);
+      if (!markedFailed && (await this.#reviewWasSuperseded(jobId, cancellationSignal))) {
+        await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
+        return;
+      }
       await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed });
     } finally {
       for (const worktree of worktrees.reverse()) {
@@ -571,13 +580,14 @@ export class ReviewExecutor {
     jobId: string,
     target: PullRequestTarget,
     changedLines: number,
+    cancellationSignal: AbortSignal | undefined,
   ): Promise<PostedSummaryComment> {
     const summaryComment = await this.#poster.postScopeDeclined({
       target,
       changedLines,
       maxChangedLines: this.#maxChangedLines,
     });
-    await this.#store.markCompleted(jobId, this.#now());
+    await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
     return summaryComment;
   }
 
@@ -655,6 +665,28 @@ export class ReviewExecutor {
     if (status === 'superseded') {
       throw new ReviewSupersededError(jobId);
     }
+  }
+
+  async #markCompletedOrThrowIfSuperseded(
+    jobId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const markedCompleted = await this.#store.markCompleted(jobId, this.#now());
+    if (markedCompleted) {
+      return;
+    }
+    if (await this.#reviewWasSuperseded(jobId, signal)) {
+      throw new ReviewSupersededError(jobId);
+    }
+    throw new Error(`ReviewJob ${jobId} was not running when completion was recorded`);
+  }
+
+  async #reviewWasSuperseded(jobId: string, signal: AbortSignal | undefined): Promise<boolean> {
+    if (isReviewSupersededError(signal?.reason)) {
+      return true;
+    }
+    const status = await this.#store.getReviewJobStatus(jobId);
+    return status === 'superseded' || isReviewSupersededError(signal?.reason);
   }
 }
 

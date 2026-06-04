@@ -1,3 +1,4 @@
+import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it, vi } from 'vitest';
 import type { ReviewAgentRunner } from './review-executor.js';
 import { ReviewExecutor } from './review-executor.js';
@@ -195,6 +196,76 @@ describe('ReviewExecutor Review Status Check', () => {
     ]);
   });
 
+  it('resolves a ReviewJob superseded during completion to a cancelled check', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    store.markCompleted = async () => {
+      store.status = 'superseded';
+      return false;
+    };
+    const { executor, poster, statusChecks } = makeExecutor({
+      store,
+      runner: {
+        runAgent: async () => {
+          throw new Error('should not run');
+        },
+      },
+      resolveAgents: () => [],
+      now: nextNow([100, 200, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(poster.results).toEqual([]);
+    expect(poster.scopeDeclines).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(statusChecks.completed).toEqual([
+      {
+        owner: 'acme',
+        repo: 'widget',
+        checkRunId: 1200,
+        conclusion: 'cancelled',
+        detailsUrl: 'https://github.com/acme/widget/pull/12',
+        verdict: 'Sandy review was superseded by a newer push',
+        completedAt: 300,
+      },
+    ]);
+  });
+
+  it('resolves a ReviewJob superseded during failure recording to a cancelled check', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    store.recordSynthesizedReview = async () => {
+      throw new Error('Convex write failed');
+    };
+    store.markFailed = async () => {
+      store.status = 'superseded';
+      return false;
+    };
+    const { executor, poster, statusChecks } = makeExecutor({
+      store,
+      runner: new FakeRunner(findingsOutput([finding])),
+      now: nextNow([100, 200, 300, 400, 500]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(poster.results).toEqual([]);
+    expect(poster.scopeDeclines).toEqual([]);
+    expect(store.completed).toEqual([]);
+    expect(store.failed).toEqual([]);
+    expect(statusChecks.completed).toEqual([
+      {
+        owner: 'acme',
+        repo: 'widget',
+        checkRunId: 1200,
+        conclusion: 'cancelled',
+        detailsUrl: 'https://github.com/acme/widget/pull/12',
+        verdict: 'Sandy review was superseded by a newer push',
+        completedAt: 500,
+      },
+    ]);
+  });
+
   it('logs and swallows Check Run create failures without blocking review comments', async () => {
     const statusChecks = new FakeStatusCheckReporter({ failCreate: true });
     const logger = { warn: vi.fn() };
@@ -248,7 +319,7 @@ function makeExecutor(options: {
   runner: ReviewAgentRunner;
   changedLineCount?: number;
   maxChangedLines?: number;
-  resolveAgents?: () => readonly [typeof logicAgent, typeof securityAgent];
+  resolveAgents?: () => readonly AgentDefinition[];
   now: () => number;
 }): {
   executor: ReviewExecutor;
@@ -269,16 +340,10 @@ function makeExecutor(options: {
     runner: options.runner,
     resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
     now: options.now,
+    ...(options.maxChangedLines === undefined ? {} : { maxChangedLines: options.maxChangedLines }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.resolveAgents === undefined ? {} : { resolveAgents: options.resolveAgents }),
   };
-  if (options.maxChangedLines !== undefined) {
-    executorOptions.maxChangedLines = options.maxChangedLines;
-  }
-  if (options.logger !== undefined) {
-    executorOptions.logger = options.logger;
-  }
-  if (options.resolveAgents !== undefined) {
-    executorOptions.resolveAgents = options.resolveAgents;
-  }
 
   return {
     executor: new ReviewExecutor(executorOptions),
