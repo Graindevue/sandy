@@ -65,6 +65,10 @@ type AppleContainerProviderModule = {
     deleted: string[];
     failed: readonly { name: string; error: string }[];
   }>;
+  startAppleContainerReaper: (options?: {
+    onReap?: (name: string, ageMs: number) => void;
+  }) => () => void;
+  getAppleContainerMemoryBudgetMb: () => number;
 };
 
 /**
@@ -172,6 +176,7 @@ export async function main(): Promise<void> {
   loadInstanceEnv(process.cwd(), process.env);
   const config = loadConfig(process.env);
   await cleanupWorkerAppleContainers();
+  await startWorkerAppleContainerReaper();
   const httpClient = new ConvexHttpClient(config.convexUrl);
   const reactiveClient = new ConvexClient(config.convexUrl);
   const sink = new ConvexSink(httpClient);
@@ -353,6 +358,24 @@ async function cleanupWorkerAppleContainers(): Promise<void> {
     }
   } catch (error) {
     console.warn(`Skipping Sandy worker container startup cleanup: ${errorMessage(error)}`);
+  }
+}
+
+async function startWorkerAppleContainerReaper(): Promise<void> {
+  try {
+    const { startAppleContainerReaper, getAppleContainerMemoryBudgetMb } =
+      await importAppleContainerProvider();
+    startAppleContainerReaper({
+      onReap: (name, ageMs) =>
+        console.warn(
+          `Reaped stale Sandy worker container ${name} after ${Math.round(ageMs / 1000)}s`,
+        ),
+    });
+    console.info(
+      `Sandy worker VM memory budget: ${Math.round(getAppleContainerMemoryBudgetMb() / 1024)}g`,
+    );
+  } catch (error) {
+    console.warn(`Skipping Sandy worker container reaper: ${errorMessage(error)}`);
   }
 }
 

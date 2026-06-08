@@ -10,7 +10,7 @@
 import { execFile, execFileSync, type StdioOptions, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, renameSync, rmSync } from 'node:fs';
-import { constants as osConstants } from 'node:os';
+import { constants as osConstants, totalmem } from 'node:os';
 import { createInterface } from 'node:readline';
 import type { MountConfig } from '@ai-hero/sandcastle';
 import {
@@ -23,6 +23,7 @@ import {
 } from '@ai-hero/sandcastle';
 import { defaultImageName } from '@ai-hero/sandcastle/sandboxes/docker';
 
+import { createMemoryBudget, parseMemoryToMb } from './memory-budget.js';
 import { formatVolumeMount, processFileMountParents, resolveUserMounts } from './mount-utils.js';
 
 export interface AppleContainerOptions {
@@ -44,13 +45,59 @@ const BUILD_IMAGE_HINT = 'pnpm sandcastle:build-image';
 const CONTAINER_DNS_ARGS = ['--dns', '1.1.1.1', '--dns', '8.8.8.8'];
 
 /**
- * Apple `container run` defaults to 1g RAM per lightweight VM. Docker Desktop
- * shared a much larger VM, so monorepo type-check/test appeared to work there
- * without explicit limits. Sandcastle agents need headroom for turbo + tsc.
+ * Apple `container run` defaults to 1g RAM per lightweight VM — too small for
+ * turbo type-check. We used to hard-code 8g, but a handful of concurrent VMs at
+ * 8g overcommits host RAM and panics the machine (launchd SIGBUS / "initproc
+ * exited"). The default is now a more conservative 6g, overridable per host via
+ * `APPLE_CONTAINER_MEMORY` / `APPLE_CONTAINER_CPUS`. Aggregate guest RAM is
+ * bounded by the memory budget below regardless of per-VM size.
  */
-const DEFAULT_CONTAINER_MEMORY = '8g';
-const DEFAULT_CONTAINER_CPUS = 4;
+const DEFAULT_CONTAINER_MEMORY = process.env.APPLE_CONTAINER_MEMORY?.trim() || '6g';
+const DEFAULT_CONTAINER_CPUS = resolvePositiveIntEnv(process.env.APPLE_CONTAINER_CPUS, 3);
 const DEFAULT_CONTAINER_NAME_PREFIX = 'sandcastle-';
+
+/**
+ * Reserve only a fraction of host RAM for the VM fleet, leaving headroom for the
+ * host itself plus any other container fleet sharing the machine (e.g.
+ * graindevue's own sandcastle VMs, which run in a separate process with their
+ * own copy of this provider).
+ */
+const DEFAULT_MEMORY_BUDGET_FRACTION = 0.5;
+/** Floor so the budget stays usable on small CI hosts. */
+const MIN_MEMORY_BUDGET_MB = 4096;
+
+function resolvePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) {
+    return fallback;
+  }
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function resolveMemoryBudgetMb(): number {
+  const override = process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB;
+  if (override !== undefined) {
+    const gb = Number(override);
+    if (Number.isFinite(gb) && gb > 0) {
+      return Math.floor(gb * 1024);
+    }
+  }
+  const totalMb = Math.floor(totalmem() / (1024 * 1024));
+  return Math.max(MIN_MEMORY_BUDGET_MB, Math.floor(totalMb * DEFAULT_MEMORY_BUDGET_FRACTION));
+}
+
+/**
+ * Process-wide budget gating concurrent VM memory. create() reserves a VM's
+ * memory before launching it and blocks until the fleet fits, so N agents can
+ * never commit more guest RAM than the host can back. Shared across every
+ * provider instance in this process.
+ */
+let memoryBudget = createMemoryBudget(resolveMemoryBudgetMb());
+
+/** Aggregate memory budget for container VMs in this process, in MiB. */
+export function getAppleContainerMemoryBudgetMb(): number {
+  return memoryBudget.limitMb;
+}
 
 /** Bound control-plane `container` CLI calls so a wedged daemon can't hang the worker. */
 const CONTAINER_CLI_TIMEOUT_MS = 60_000;
@@ -397,6 +444,85 @@ let signalHandlersInstalled = false;
 /** ~5s ceiling per container so a wedged daemon can't pin process exit. */
 const CONTAINER_CLEANUP_TIMEOUT_MS = 5000;
 
+/**
+ * Live containers we created, with their budget reservation and birth time.
+ * close() and the reaper use this to free the VM's memory-budget slot exactly
+ * once, and the reaper uses `createdAt` to find VMs that outlived their job.
+ */
+interface TrackedContainer {
+  readonly releaseBudget: () => void;
+  readonly createdAt: number;
+}
+const trackedContainers = new Map<string, TrackedContainer>();
+
+const trackContainer = (name: string, releaseBudget: () => void): void => {
+  trackedContainers.set(name, { releaseBudget, createdAt: Date.now() });
+};
+
+/** Free a container's memory-budget reservation. Idempotent across close()/reaper. */
+const releaseContainer = (name: string): void => {
+  const tracked = trackedContainers.get(name);
+  if (tracked === undefined) {
+    return;
+  }
+  trackedContainers.delete(name);
+  tracked.releaseBudget();
+};
+
+const DEFAULT_REAPER_MAX_AGE_MS = 15 * 60 * 1000;
+const DEFAULT_REAPER_INTERVAL_MS = 60_000;
+
+export interface AppleContainerReaperOptions {
+  /** Force-delete tracked VMs older than this. Default 15 min. */
+  readonly maxAgeMs?: number;
+  /** Sweep interval. Default 60s. */
+  readonly intervalMs?: number;
+  /** Notified when a stale VM is reaped, for logging. */
+  readonly onReap?: (name: string, ageMs: number) => void;
+}
+
+/**
+ * Periodically force-delete VMs that outlived their job — a safety net for when
+ * the orchestrator fails to close a sandbox (agent timeout, crash, or a `run()`
+ * path that skips teardown). Frees both the VM and its memory-budget slot, so a
+ * leaked VM can't permanently starve the budget. Returns a stop function; the
+ * interval is unref'd so it never keeps the process alive.
+ */
+export function startAppleContainerReaper(options: AppleContainerReaperOptions = {}): () => void {
+  const maxAgeMs = options.maxAgeMs ?? DEFAULT_REAPER_MAX_AGE_MS;
+  const intervalMs = options.intervalMs ?? DEFAULT_REAPER_INTERVAL_MS;
+  const timer = setInterval(() => {
+    const now = Date.now();
+    // Snapshot: releaseContainer mutates trackedContainers during the sweep.
+    for (const [name, tracked] of [...trackedContainers]) {
+      const ageMs = now - tracked.createdAt;
+      if (ageMs <= maxAgeMs) {
+        continue;
+      }
+      activeContainerNames.delete(name);
+      releaseContainer(name);
+      options.onReap?.(name, ageMs);
+      void deleteContainerAsync(name, CONTAINER_CLEANUP_TIMEOUT_MS);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => {
+    clearInterval(timer);
+  };
+}
+
+/**
+ * Test-only: clear the process-wide container tracking and rebuild the memory
+ * budget from the current environment. Lets tests isolate budget/lifecycle
+ * state between cases (and run lifecycle tests under an unbounded budget by
+ * setting APPLE_CONTAINER_MEMORY_BUDGET_GB first). Not part of the public API.
+ */
+export function __resetAppleContainerStateForTests(): void {
+  trackedContainers.clear();
+  activeContainerNames.clear();
+  memoryBudget = createMemoryBudget(resolveMemoryBudgetMb());
+}
+
 const deleteContainerSync = (name: string): void => {
   try {
     execFileSync('container', ['delete', '-f', name], {
@@ -414,6 +540,9 @@ const deleteContainerSync = (name: string): void => {
 const deleteContainerAsync = (name: string, timeoutMs: number): Promise<void> =>
   new Promise<void>((resolve) => {
     let settled = false;
+    // Declared before execFile so a synchronously-invoked callback (e.g. a test
+    // double) can clear it safely — `clearTimeout(undefined)` is a no-op.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       if (settled) return;
       settled = true;
@@ -421,7 +550,7 @@ const deleteContainerAsync = (name: string, timeoutMs: number): Promise<void> =>
       resolve();
     };
     const child = execFile('container', ['delete', '-f', name], () => settle());
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       try {
         child.kill('SIGKILL');
       } catch {
@@ -631,24 +760,34 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
       const containerMemory = options?.memory ?? DEFAULT_CONTAINER_MEMORY;
       const containerCpus = options?.cpus ?? DEFAULT_CONTAINER_CPUS;
 
-      await startDetachedContainer(containerName, imageName, [
-        ...CONTAINER_DNS_ARGS,
-        '--memory',
-        containerMemory,
-        '--cpus',
-        String(containerCpus),
-        '--user',
-        `${containerUid}:${containerGid}`,
-        ...envArgs,
-        ...volumeArgs,
-        '-w',
-        worktreePath,
-        '--entrypoint',
-        'sleep',
-      ]);
+      // Reserve this VM's memory before launching it; blocks until the fleet
+      // fits the budget. Released in close(), the setup-error path, and the
+      // reaper — whichever frees the VM first.
+      const releaseBudget = await memoryBudget.acquire(parseMemoryToMb(containerMemory));
+      try {
+        await startDetachedContainer(containerName, imageName, [
+          ...CONTAINER_DNS_ARGS,
+          '--memory',
+          containerMemory,
+          '--cpus',
+          String(containerCpus),
+          '--user',
+          `${containerUid}:${containerGid}`,
+          ...envArgs,
+          ...volumeArgs,
+          '-w',
+          worktreePath,
+          '--entrypoint',
+          'sleep',
+        ]);
+      } catch (startError) {
+        releaseBudget();
+        throw startError;
+      }
 
       ensureSignalHandlersInstalled();
       activeContainerNames.add(containerName);
+      trackContainer(containerName, releaseBudget);
 
       try {
         for (const dir of parentDirsToCreate) {
@@ -685,6 +824,7 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
       } catch (setupError) {
         activeContainerNames.delete(containerName);
         deleteContainerSync(containerName);
+        releaseContainer(containerName);
         throw setupError;
       }
 
@@ -799,6 +939,9 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
               () => resolve(),
             );
           });
+          // Free the budget only after the VM is gone, so a waiter can't start
+          // before this VM's RAM is actually reclaimed.
+          releaseContainer(containerName);
         },
       };
 
