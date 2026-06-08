@@ -34,7 +34,19 @@ import { PassThrough } from 'node:stream';
 
 import type { BindMountCreateOptions, BindMountSandboxHandle } from '@ai-hero/sandcastle';
 
-import { appleContainer, cleanupOrphanedAppleContainers } from './apple-container.js';
+import {
+  __resetAppleContainerStateForTests,
+  appleContainer,
+  cleanupOrphanedAppleContainers,
+  startAppleContainerReaper,
+} from './apple-container.js';
+
+// These tests exercise container lifecycle, not the memory budget, and create
+// several sandboxes at once. Give them an effectively unbounded budget so
+// reservations never block (the budget logic is covered in memory-budget.test.ts),
+// and reset the process-wide tracking before each case for isolation.
+process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB = '4096';
+__resetAppleContainerStateForTests();
 
 const mockExecFile = vi.mocked(execFile);
 const mockSpawn = vi.mocked(spawn);
@@ -95,6 +107,7 @@ const imageInspectJson = (user: string) => JSON.stringify([{ config: { User: use
 afterEach(() => {
   mockExecFile.mockReset();
   mockSpawn.mockReset();
+  __resetAppleContainerStateForTests();
 });
 
 const mockCreateFlow = (imageUser?: string) => {
@@ -608,9 +621,9 @@ describe('appleContainer()', () => {
     expect(runArgs).toContain('1.1.1.1');
     expect(runArgs).toContain('8.8.8.8');
     expect(runArgs).toContain('--memory');
-    expect(runArgs).toContain('8g');
+    expect(runArgs).toContain('6g');
     expect(runArgs).toContain('--cpus');
-    expect(runArgs).toContain('4');
+    expect(runArgs).toContain('3');
     const userIdx = runArgs.indexOf('--user');
     expect(userIdx).toBeGreaterThan(-1);
     const hostUid = process.getuid?.() ?? 1000;
@@ -879,6 +892,79 @@ describe('appleContainer()', () => {
 
     rmSync(tmpDir, { recursive: true, force: true });
     await handle.close();
+  });
+});
+
+describe('appleContainer() — memory budget and reaper', () => {
+  const createOptions: BindMountCreateOptions = {
+    worktreePath: '/tmp/worktree',
+    hostRepoPath: '/tmp/repo',
+    mounts: [{ hostPath: '/tmp/worktree', sandboxPath: '/home/agent/workspace' }],
+    env: {},
+  };
+
+  it('blocks a second create() until the first frees its budget, then admits it', async () => {
+    const prevBudget = process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB;
+    // Budget holds exactly one 6g VM, so the second create() must wait for the
+    // first to close before it can reserve its slice.
+    process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB = '6';
+    __resetAppleContainerStateForTests();
+    try {
+      mockCreateFlow();
+      const provider = appleContainer({ memory: '6g' });
+
+      const first = await provider.create(createOptions);
+
+      let secondCreated = false;
+      const secondPromise = provider.create(createOptions).then((handle) => {
+        secondCreated = true;
+        return handle;
+      });
+      // Let the second create() advance as far as it can; it should park on the
+      // budget rather than launch a VM that would overcommit the host.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(secondCreated).toBe(false);
+
+      await first.close();
+      const second = await secondPromise;
+      expect(secondCreated).toBe(true);
+      await second.close();
+    } finally {
+      if (prevBudget === undefined) {
+        delete process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB;
+      } else {
+        process.env.APPLE_CONTAINER_MEMORY_BUDGET_GB = prevBudget;
+      }
+      __resetAppleContainerStateForTests();
+    }
+  });
+
+  it('reaps a tracked VM older than maxAgeMs and force-deletes it', async () => {
+    mockCreateFlow();
+    const provider = appleContainer();
+    // Leave the sandbox open so only the reaper tears it down.
+    await provider.create(createOptions);
+
+    const reaped: { name: string; ageMs: number }[] = [];
+    const stop = startAppleContainerReaper({
+      maxAgeMs: 0,
+      intervalMs: 5,
+      onReap: (name, ageMs) => reaped.push({ name, ageMs }),
+    });
+
+    try {
+      await vi.waitFor(() => expect(reaped).toHaveLength(1));
+    } finally {
+      stop();
+    }
+
+    const reapedName = reaped[0].name;
+    expect(reapedName).toMatch(/^sandcastle-/);
+    expect(reaped[0].ageMs).toBeGreaterThanOrEqual(0);
+    const forceDeletedReapedVm = mockExecFile.mock.calls.some(
+      (call) => Array.isArray(call[1]) && call[1][0] === 'delete' && call[1].includes(reapedName),
+    );
+    expect(forceDeletedReapedVm).toBe(true);
   });
 });
 
