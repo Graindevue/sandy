@@ -66,6 +66,20 @@ const DEFAULT_MEMORY_BUDGET_FRACTION = 0.5;
 /** Floor so the budget stays usable on small CI hosts. */
 const MIN_MEMORY_BUDGET_MB = 4096;
 
+/**
+ * Cap how long create() waits for a memory-budget slot. Sandcastle abandons a
+ * provider create() after 120s (ContainerStartTimeoutError) but cannot cancel
+ * it, so an unbounded acquire() that resolved later would launch a VM nobody
+ * owns — a leak that pins its budget slot until the reaper. Failing the wait
+ * just under sandcastle's deadline drops the queued reservation cleanly so the
+ * agent fails fast instead of starving the fleet. Override (ms) per host via
+ * `APPLE_CONTAINER_BUDGET_ACQUIRE_TIMEOUT_MS`.
+ */
+const BUDGET_ACQUIRE_TIMEOUT_MS = resolvePositiveIntEnv(
+  process.env.APPLE_CONTAINER_BUDGET_ACQUIRE_TIMEOUT_MS,
+  110_000,
+);
+
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined) {
     return fallback;
@@ -469,13 +483,18 @@ const releaseContainer = (name: string): void => {
   tracked.releaseBudget();
 };
 
-const DEFAULT_REAPER_MAX_AGE_MS = 15 * 60 * 1000;
-const DEFAULT_REAPER_INTERVAL_MS = 60_000;
+// A review agent's container lives from create until its 300s execution timeout
+// plus teardown — well under 8 min. Reaping at 8 min (was 15) clears VMs leaked
+// by superseded/timed-out jobs ~2x faster, shrinking the window in which leaked
+// VMs starve the memory budget. Both overridable (ms) via
+// `APPLE_CONTAINER_REAPER_MAX_AGE_MS` / `APPLE_CONTAINER_REAPER_INTERVAL_MS`.
+const DEFAULT_REAPER_MAX_AGE_MS = 8 * 60 * 1000;
+const DEFAULT_REAPER_INTERVAL_MS = 30_000;
 
 export interface AppleContainerReaperOptions {
-  /** Force-delete tracked VMs older than this. Default 15 min. */
+  /** Force-delete tracked VMs older than this. Default 8 min. */
   readonly maxAgeMs?: number;
-  /** Sweep interval. Default 60s. */
+  /** Sweep interval. Default 30s. */
   readonly intervalMs?: number;
   /** Notified when a stale VM is reaped, for logging. */
   readonly onReap?: (name: string, ageMs: number) => void;
@@ -489,8 +508,15 @@ export interface AppleContainerReaperOptions {
  * interval is unref'd so it never keeps the process alive.
  */
 export function startAppleContainerReaper(options: AppleContainerReaperOptions = {}): () => void {
-  const maxAgeMs = options.maxAgeMs ?? DEFAULT_REAPER_MAX_AGE_MS;
-  const intervalMs = options.intervalMs ?? DEFAULT_REAPER_INTERVAL_MS;
+  const maxAgeMs =
+    options.maxAgeMs ??
+    resolvePositiveIntEnv(process.env.APPLE_CONTAINER_REAPER_MAX_AGE_MS, DEFAULT_REAPER_MAX_AGE_MS);
+  const intervalMs =
+    options.intervalMs ??
+    resolvePositiveIntEnv(
+      process.env.APPLE_CONTAINER_REAPER_INTERVAL_MS,
+      DEFAULT_REAPER_INTERVAL_MS,
+    );
   const timer = setInterval(() => {
     const now = Date.now();
     // Snapshot: releaseContainer mutates trackedContainers during the sweep.
@@ -761,9 +787,25 @@ export const appleContainer = (options?: AppleContainerOptions): SandboxProvider
       const containerCpus = options?.cpus ?? DEFAULT_CONTAINER_CPUS;
 
       // Reserve this VM's memory before launching it; blocks until the fleet
-      // fits the budget. Released in close(), the setup-error path, and the
-      // reaper — whichever frees the VM first.
-      const releaseBudget = await memoryBudget.acquire(parseMemoryToMb(containerMemory));
+      // fits the budget. Bounded by BUDGET_ACQUIRE_TIMEOUT_MS so a wait that
+      // outlives sandcastle's start timeout fails cleanly (dropping the queued
+      // reservation) instead of resolving later and launching an orphan VM.
+      // Released in close(), the setup-error path, and the reaper — whichever
+      // frees the VM first.
+      let releaseBudget: () => void;
+      try {
+        releaseBudget = await memoryBudget.acquire(
+          parseMemoryToMb(containerMemory),
+          AbortSignal.timeout(BUDGET_ACQUIRE_TIMEOUT_MS),
+        );
+      } catch (acquireError) {
+        throw new Error(
+          `Timed out after ${BUDGET_ACQUIRE_TIMEOUT_MS}ms waiting for VM memory budget ` +
+            `(${memoryBudget.reservedMb()}/${memoryBudget.limitMb} MiB reserved, ` +
+            `${memoryBudget.pendingCount()} waiting)`,
+          { cause: acquireError },
+        );
+      }
       try {
         await startDetachedContainer(containerName, imageName, [
           ...CONTAINER_DNS_ARGS,

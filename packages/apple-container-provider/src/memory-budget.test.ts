@@ -117,6 +117,46 @@ describe('createMemoryBudget', () => {
     expect(budget.reservedMb()).toBe(9_216);
   });
 
+  it('rejects immediately when given an already-aborted signal', async () => {
+    const budget = createMemoryBudget(8_192);
+    const reason = new Error('already gone');
+    await expect(budget.acquire(4_096, AbortSignal.abort(reason))).rejects.toBe(reason);
+    expect(budget.reservedMb()).toBe(0);
+    expect(budget.pendingCount()).toBe(0);
+  });
+
+  it('abandons a queued waiter on abort and never grants it a leaked slot', async () => {
+    const budget = createMemoryBudget(8_192);
+    const releaseFirst = await budget.acquire(8_192);
+
+    const controller = new AbortController();
+    const reason = new Error('start timed out');
+    const queued = budget.acquire(8_192, controller.signal);
+    await Promise.resolve();
+    expect(budget.pendingCount()).toBe(1);
+
+    controller.abort(reason);
+    await expect(queued).rejects.toBe(reason);
+    expect(budget.pendingCount()).toBe(0);
+
+    // Freeing the budget must not resurrect the abandoned waiter (which would
+    // reserve a slot nobody holds — the leak this guards against).
+    releaseFirst();
+    expect(budget.reservedMb()).toBe(0);
+  });
+
+  it('ignores an abort that fires after the reservation was granted', async () => {
+    const budget = createMemoryBudget(8_192);
+    const controller = new AbortController();
+    const release = await budget.acquire(4_096, controller.signal);
+    expect(budget.reservedMb()).toBe(4_096);
+
+    controller.abort(new Error('too late'));
+    expect(budget.reservedMb()).toBe(4_096);
+    release();
+    expect(budget.reservedMb()).toBe(0);
+  });
+
   it('drains queued waiters in FIFO order as room frees', async () => {
     const budget = createMemoryBudget(10_240);
     const releaseFirst = await budget.acquire(10_240);
