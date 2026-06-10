@@ -31,13 +31,13 @@ _Avoid_: CI check, status check (Sandy is a reviewer, not CI; "status check" als
 
 ## Agent
 
-A single reviewer persona — a system prompt + a vendor/model selection + a tool allowlist + a completion signal. Agents are markdown files in `agents/` (defaults shipped with Sandy) or `.config/agents/` (per-instance customizations). Multiple Agents run in parallel within a Review, each in its own Apple Container.
+A single reviewer persona — a system prompt + a vendor/model selection (with an optional per-vendor reasoning `effort`) + a tool allowlist + a completion signal. Agents are markdown files in `agents/` (defaults shipped with Sandy) or `.config/agents/` (per-instance customizations). Multiple Agents run in parallel within a Review, each in its own Apple Container.
 
 Agents are NOT software components — they are configuration data. Adding a new Agent does not require code changes to Sandy.
 
 ## Agent Runtime Override
 
-A configuration choice that changes an existing Agent's vendor/model selection without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime.
+A configuration choice that changes an existing Agent's runtime selection — vendor, model, and optionally reasoning effort — without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime. The override is the complete runtime selection: an override that omits `effort` runs the Agent at the vendor CLI default, regardless of the Agent file's own `effort`.
 _Avoid_: Agent override, custom Agent
 
 ## Finding

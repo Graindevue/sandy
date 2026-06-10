@@ -204,5 +204,15 @@ export function applyProductRuntimeOverride(
   if (override === undefined) {
     return agent;
   }
-  return { ...agent, vendor: override.vendor, model: override.model };
+  // The override is the complete runtime selection: the definition's `effort`
+  // never carries over, because effort vocabularies are vendor-scoped and the
+  // override may change the vendor. An override without `effort` resets the
+  // Agent to the vendor CLI default.
+  const { effort: _replaced, ...base } = agent;
+  return {
+    ...base,
+    vendor: override.vendor,
+    model: override.model,
+    ...(override.effort !== undefined ? { effort: override.effort } : {}),
+  };
 }

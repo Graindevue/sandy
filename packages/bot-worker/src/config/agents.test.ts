@@ -80,6 +80,8 @@ describe('loadAgentDefinitions', () => {
     expect(logic?.defaultEnabled).toBe(true);
     // `category` defaults to the key.
     expect(logic?.category).toBe('logic');
+    // No frontmatter `effort` => none set; the vendor CLI default applies.
+    expect(logic?.effort).toBeUndefined();
     expect(logic?.systemPrompt).toContain('# Logic Agent');
     expect(logic?.systemPrompt).toContain('Body of the logic agent prompt.');
     // Frontmatter is stripped from the system prompt body.
@@ -184,6 +186,44 @@ describe('loadAgentDefinitions', () => {
 
     expect(agents.size).toBe(1);
     expect(agents.get('logic')?.model).toBe('haiku');
+  });
+
+  it('parses an `effort` within the vendor vocabulary', async () => {
+    write(defaultsDir, 'logic.md', LOGIC_MD.replace('model: opus', 'model: opus\neffort: max'));
+
+    const agents = await loadAgentDefinitions(defaultsDir);
+
+    expect(agents.get('logic')?.effort).toBe('max');
+  });
+
+  it('rejects an unknown `effort` value, naming the file and field', async () => {
+    write(defaultsDir, 'logic.md', LOGIC_MD.replace('model: opus', 'model: opus\neffort: hgih'));
+
+    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/logic\.md/);
+    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/`effort`.*hgih/);
+  });
+
+  it("rejects an `effort` outside the vendor's own vocabulary", async () => {
+    // `max` exists for claude but is not in codex's vocabulary.
+    const codexMax = LOGIC_MD.replace('vendor: claude', 'vendor: codex').replace(
+      'model: opus',
+      'model: gpt-5.5\neffort: max',
+    );
+    write(defaultsDir, 'logic.md', codexMax);
+
+    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/vendor codex/);
+  });
+
+  it('rejects `effort` on a cursor Agent (no Sandcastle effort support)', async () => {
+    const cursorEffort = LOGIC_MD.replace('vendor: claude', 'vendor: cursor').replace(
+      'model: opus',
+      'model: composer\neffort: high',
+    );
+    write(defaultsDir, 'logic.md', cursorEffort);
+
+    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(
+      /`effort` is not supported for vendor cursor/,
+    );
   });
 
   it('trims surrounding whitespace from frontmatter string fields', async () => {

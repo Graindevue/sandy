@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   type AgentProvider,
+  type CodexOptions,
+  type CopilotOptions,
   claudeCode,
   codex,
   copilot,
@@ -143,16 +145,40 @@ export class SandcastleRunner {
   }
 }
 
-function createAgentProvider(agent: AgentDefinition, env: Record<string, string>): AgentProvider {
+/**
+ * Build the Sandcastle provider for an Agent's vendor/model/effort selection.
+ * An absent `effort` passes no option, so the vendor CLI default applies. The
+ * codex/copilot casts narrow the cross-vendor `AgentEffort` union to each
+ * provider's own vocabulary — safe because the config loader validates effort
+ * per vendor at startup. Cursor takes no effort; validation keeps a cursor
+ * Agent from ever carrying one.
+ */
+export function createAgentProvider(
+  agent: AgentDefinition,
+  env: Record<string, string>,
+): AgentProvider {
   switch (agent.vendor) {
     case 'claude':
-      return claudeCode(agent.model, { env });
+      return claudeCode(agent.model, {
+        env,
+        ...(agent.effort !== undefined ? { effort: agent.effort } : {}),
+      });
     case 'codex':
-      return codex(agent.model, { env });
+      return codex(agent.model, {
+        env,
+        ...(agent.effort !== undefined
+          ? { effort: agent.effort as NonNullable<CodexOptions['effort']> }
+          : {}),
+      });
     case 'cursor':
       return cursor(agent.model, { env });
     case 'copilot':
-      return copilot(agent.model, { env });
+      return copilot(agent.model, {
+        env,
+        ...(agent.effort !== undefined
+          ? { effort: agent.effort as NonNullable<CopilotOptions['effort']> }
+          : {}),
+      });
   }
 }
 

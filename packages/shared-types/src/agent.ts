@@ -5,6 +5,14 @@ import type { ReviewJobId } from './review-job.js';
 export type AgentVendor = 'claude' | 'codex' | 'cursor' | 'copilot';
 
 /**
+ * Reasoning effort passed to the vendor CLI via Sandcastle. The union covers
+ * every vendor's vocabulary; which levels a given vendor accepts is a
+ * vendor-scoped subset, validated at config load against the per-vendor
+ * tables in the bot-worker config layer.
+ */
+export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
  * Whether an Agent runs by default. `true`/`false` are explicit; `'auto'` lets
  * Sandy decide per Product (e.g. enable the `convex` Agent only when the Repo
  * uses Convex). The shipped Agent files declare this in their frontmatter.
@@ -32,6 +40,11 @@ export interface AgentDefinition {
   vendor: AgentVendor;
   /** Vendor-specific model identifier, e.g. `"opus"`. */
   model: string;
+  /**
+   * Reasoning effort for the vendor CLI (frontmatter `effort`). Absent means
+   * the vendor CLI's own default applies — exactly the pre-effort behavior.
+   */
+  effort?: AgentEffort;
   /** Allowed tool names inside the Agent's sandbox. */
   tools: string[];
   /** Maximum agent loop iterations before Sandcastle stops the run. */

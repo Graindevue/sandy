@@ -1,5 +1,6 @@
-import type { AgentVendor } from '@sandy/shared-types';
+import type { AgentEffort, AgentVendor } from '@sandy/shared-types';
 import { parse as parseYaml } from 'yaml';
+import { parseEffort } from './effort.js';
 
 /**
  * Parses and validates `.config/bot.yaml` — the declaration of which Products
@@ -29,6 +30,8 @@ export type AgentSelectionMode = 'default' | 'explicit';
 export interface AgentRuntimeOverride {
   vendor: AgentVendor;
   model: string;
+  /** Optional reasoning effort; absent means the vendor CLI default. */
+  effort?: AgentEffort;
 }
 
 /** A Product as declared in `bot.yaml`. */
@@ -256,10 +259,14 @@ function parseAgentRuntimeOverride(value: unknown, where: string): AgentRuntimeO
     throw new Error(`bot.yaml: ${where} must be a mapping with vendor and model`);
   }
   const object = value as Record<string, unknown>;
-  assertKnownKeys(object, ['vendor', 'model'], where);
+  assertKnownKeys(object, ['vendor', 'model', 'effort'], where);
+  const vendor = requireVendor(object.vendor, `${where}.vendor`);
+  // `effort` is vendor-scoped, so it validates against the override's vendor.
+  const effort = parseEffort(object.effort, vendor, `bot.yaml: ${where}.effort`);
   return {
-    vendor: requireVendor(object.vendor, `${where}.vendor`),
+    vendor,
     model: requireString(object.model, `${where}.model`),
+    ...(effort !== undefined ? { effort } : {}),
   };
 }
 
