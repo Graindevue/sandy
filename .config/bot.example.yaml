@@ -39,9 +39,10 @@ products:
       - logic
 
     # Object form supports the same exact Product selection plus instance-owned
-    # runtime overrides. Override entries must include both `vendor` and `model`.
-    # Repo-local `.bot/agents.yaml` can enable/disable Agents, but it cannot
-    # override runtime choices.
+    # runtime overrides. Override entries must include both `vendor` and `model`;
+    # `effort` is optional and sets the vendor CLI's reasoning effort (validated
+    # per vendor — see docs/setup/bot-yaml.md). Repo-local `.bot/agents.yaml`
+    # can enable/disable Agents, but it cannot override runtime choices.
     #
     # agents:
     #   enable: [logic, security]
@@ -49,6 +50,7 @@ products:
     #     logic:
     #       vendor: codex
     #       model: gpt-5.6
+    #       effort: xhigh
 
   # A second, unrelated Product. This one omits `agents`, so the default
   # selection applies.

@@ -3,6 +3,7 @@ import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import {
   buildReviewPrompt,
+  createAgentProvider,
   SANDY_WORKER_CONTAINER_PREFIX,
   SandcastleRunner,
 } from './sandcastle-runner.js';
@@ -140,6 +141,36 @@ describe('SandcastleRunner', () => {
     expect(prompt).toContain('Before emitting a Finding whose correctness depends on framework');
     expect(prompt).toContain('Record the verification in the Finding.evidence');
     expect(prompt).toContain('Memory or generic training knowledge is not evidence');
+  });
+});
+
+describe('createAgentProvider', () => {
+  function printCommand(agent: AgentDefinition): string {
+    const provider = createAgentProvider(agent, {});
+    return provider.buildPrintCommand({ prompt: 'review', dangerouslySkipPermissions: true })
+      .command;
+  }
+
+  it('passes a claude Agent effort to the CLI as --effort', () => {
+    expect(printCommand({ ...logicAgent, effort: 'max' })).toContain('--effort max');
+  });
+
+  it('passes a codex Agent effort to the CLI as model_reasoning_effort', () => {
+    const command = printCommand({
+      ...logicAgent,
+      vendor: 'codex',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+    });
+    expect(command).toContain('model_reasoning_effort');
+    expect(command).toContain('xhigh');
+  });
+
+  it('builds the unchanged default command when effort is absent', () => {
+    expect(printCommand(logicAgent)).not.toContain('--effort');
+    expect(printCommand({ ...logicAgent, vendor: 'codex', model: 'gpt-5.5' })).not.toContain(
+      'model_reasoning_effort',
+    );
   });
 });
 

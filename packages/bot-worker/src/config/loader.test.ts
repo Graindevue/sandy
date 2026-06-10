@@ -223,6 +223,74 @@ products:
     expect(resolved?.agents[0]?.model).toBe('gpt-5.6');
   });
 
+  it('keeps a definition effort intact when no Product override targets the Agent', async () => {
+    await writeFile(join(layout.agentsDir, 'logic.md'), agentMd('logic', 'effort: high\n'));
+
+    const loader = await ConfigLoader.create(options());
+
+    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    expect(resolved?.agents[0]?.effort).toBe('high');
+  });
+
+  it('applies a Product override effort', async () => {
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      enable: [logic]
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+          effort: xhigh
+`,
+    );
+
+    const loader = await ConfigLoader.create(options());
+
+    const logic = loader.resolveForRepo('tony-co', 'acme-backend')?.agents[0];
+    expect(logic?.vendor).toBe('codex');
+    expect(logic?.effort).toBe('xhigh');
+  });
+
+  it('resets a definition effort when the Product override omits it', async () => {
+    // The override is the complete runtime selection: omitting `effort` means
+    // the vendor CLI default, not the definition's value (which may belong to
+    // a different vendor's vocabulary).
+    await writeFile(join(layout.agentsDir, 'logic.md'), agentMd('logic', 'effort: high\n'));
+    await writeFile(
+      layout.botYamlPath,
+      `
+products:
+  - slug: acme
+    name: Acme
+    repos:
+      - owner: tony-co
+        name: acme-backend
+        defaultBranch: main
+    agents:
+      enable: [logic]
+      overrides:
+        logic:
+          vendor: codex
+          model: gpt-5.6
+`,
+    );
+
+    const loader = await ConfigLoader.create(options());
+
+    const logic = loader.resolveForRepo('tony-co', 'acme-backend')?.agents[0];
+    expect(logic?.vendor).toBe('codex');
+    expect(logic?.effort).toBeUndefined();
+  });
+
   it('uses default selection when object-form agents omits enable', async () => {
     await writeFile(
       layout.botYamlPath,

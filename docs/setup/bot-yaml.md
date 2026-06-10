@@ -67,13 +67,15 @@ products:
           - release/*
           - vendor/**
     # Optional: choose which Agents run for this Product and override their
-    # runtime vendor/model. See "Agent selection".
+    # runtime vendor/model (and, optionally, reasoning effort). See "Agent
+    # selection".
     agents:
       enable: [logic, security]
       overrides:
         logic:
           vendor: codex
           model: gpt-5.6
+          effort: xhigh
 
   # A second, unrelated Product.
   - slug: sandy
@@ -217,12 +219,14 @@ operator-owned instance policy in `.config/bot.yaml`, not repo-owned policy.
 
 ### Runtime overrides
 
-An Agent runtime override changes only an existing Agent's `vendor` and `model`.
-It does not change the Agent's prompt, tools, completion signal, category, or
-default-enabled behavior. To change those, replace the Agent definition with a
-matching file in `.config/agents/`.
+An Agent runtime override changes only an existing Agent's runtime selection —
+`vendor`, `model`, and optionally `effort`. It does not change the Agent's
+prompt, tools, completion signal, category, or default-enabled behavior. To
+change those, replace the Agent definition with a matching file in
+`.config/agents/`.
 
-Each override entry must specify both `vendor` and `model`:
+Each override entry must specify both `vendor` and `model`; `effort` is
+optional:
 
 ```yaml
 agents:
@@ -230,7 +234,24 @@ agents:
     security:
       vendor: claude
       model: opus
+      effort: high
 ```
+
+`effort` sets the vendor CLI's reasoning effort and is validated per vendor at
+config load:
+
+| Vendor | Accepted `effort` values |
+|--------|--------------------------|
+| `claude` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `codex` | `low`, `medium`, `high`, `xhigh` |
+| `copilot` | `low`, `medium`, `high` |
+| `cursor` | none — setting `effort` is a config error |
+
+Omitting `effort` uses the vendor CLI's default. The same field is accepted in
+Agent definition frontmatter (next to `vendor`/`model`), but an override is the
+complete runtime selection: when an override targets an Agent, a frontmatter
+`effort` does not carry over — an override without `effort` runs the Agent at
+the vendor default.
 
 Overrides apply after `.config/agents/<key>.md` is loaded. They may target any
 known Agent key and are inert unless that Agent is selected for a Review. Unknown
