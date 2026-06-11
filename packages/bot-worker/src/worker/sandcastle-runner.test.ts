@@ -1,6 +1,7 @@
 import type { AgentProvider, RunOptions, RunResult, SandboxProvider } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
+import type { RunAgentInput, RunnerPullRequest } from './sandcastle-runner.js';
 import {
   buildReviewPrompt,
   createAgentProvider,
@@ -21,6 +22,24 @@ const logicAgent: AgentDefinition = {
   defaultEnabled: true,
   systemPrompt: '# Logic Agent\n\nEmit <findings>{"findings":[]}</findings>.',
 };
+const reviewWorktreePath = '/tmp/sandy/worktrees/job-1';
+const reviewPullRequest: RunnerPullRequest = {
+  owner: 'acme',
+  repo: 'widget',
+  number: 12,
+  headSha: 'abc123',
+  baseRef: 'main',
+  title: 'Fix cache key',
+  url: 'https://github.com/acme/widget/pull/12',
+};
+
+function reviewPromptInput(agent: AgentDefinition): RunAgentInput {
+  return {
+    agent,
+    worktreePath: reviewWorktreePath,
+    pullRequest: reviewPullRequest,
+  };
+}
 
 describe('SandcastleRunner', () => {
   it('runs an Agent in an Apple Container against the review worktree', async () => {
@@ -46,22 +65,14 @@ describe('SandcastleRunner', () => {
 
     const stdout = await runner.runAgent({
       agent: logicAgent,
-      worktreePath: '/tmp/sandy/worktrees/job-1',
+      worktreePath: reviewWorktreePath,
       signal: abortController.signal,
       botConfig: {
         repoRules: '- Keep widget cache keys tenant-scoped.',
         productRules: '- API errors expose stable codes.',
         ignorePatterns: ['generated/**'],
       },
-      pullRequest: {
-        owner: 'acme',
-        repo: 'widget',
-        number: 12,
-        headSha: 'abc123',
-        baseRef: 'main',
-        title: 'Fix cache key',
-        url: 'https://github.com/acme/widget/pull/12',
-      },
+      pullRequest: reviewPullRequest,
       apiSurfaceManifest: '# API Surface Manifest\n\n## acme/widget\n\n### npm Exports\n',
       siblingWorktrees: [
         {
@@ -123,17 +134,7 @@ describe('SandcastleRunner', () => {
 
   it('adds the source verification contract for opensrc-enabled Agents', () => {
     const prompt = buildReviewPrompt({
-      agent: { ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] },
-      worktreePath: '/tmp/sandy/worktrees/job-1',
-      pullRequest: {
-        owner: 'acme',
-        repo: 'widget',
-        number: 12,
-        headSha: 'abc123',
-        baseRef: 'main',
-        title: 'Fix cache key',
-        url: 'https://github.com/acme/widget/pull/12',
-      },
+      ...reviewPromptInput({ ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] }),
       apiSurfaceManifest: '## Framework Versions\n\n- next: 16.0.0',
     });
 
@@ -145,32 +146,10 @@ describe('SandcastleRunner', () => {
 
   it('adds token-discipline guidance for every Agent prompt', () => {
     const prompts = [
-      buildReviewPrompt({
-        agent: logicAgent,
-        worktreePath: '/tmp/sandy/worktrees/job-1',
-        pullRequest: {
-          owner: 'acme',
-          repo: 'widget',
-          number: 12,
-          headSha: 'abc123',
-          baseRef: 'main',
-          title: 'Fix cache key',
-          url: 'https://github.com/acme/widget/pull/12',
-        },
-      }),
-      buildReviewPrompt({
-        agent: { ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] },
-        worktreePath: '/tmp/sandy/worktrees/job-1',
-        pullRequest: {
-          owner: 'acme',
-          repo: 'widget',
-          number: 12,
-          headSha: 'abc123',
-          baseRef: 'main',
-          title: 'Fix cache key',
-          url: 'https://github.com/acme/widget/pull/12',
-        },
-      }),
+      buildReviewPrompt(reviewPromptInput(logicAgent)),
+      buildReviewPrompt(
+        reviewPromptInput({ ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] }),
+      ),
     ];
 
     for (const prompt of prompts) {
