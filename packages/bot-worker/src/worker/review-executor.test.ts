@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
 import { ReviewExecutor } from './review-executor.js';
 import {
+  agentRunUsage,
   deferred,
   FakeArchetypeAssigner,
   FakeCloneManager,
@@ -15,6 +16,7 @@ import {
   logicAgent,
   makeContext,
   nextNow,
+  runnerOutput,
   securityAgent,
   securityFinding,
   skippedCrossRepoSearch,
@@ -27,12 +29,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const diffInspector = new FakeDiffInspector(42);
-    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'), {
-      inputTokens: 11,
-      cacheCreationInputTokens: 22,
-      cacheReadInputTokens: 33,
-      outputTokens: 44,
-    });
+    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'), agentRunUsage);
     const botConfig = {
       repoRules: '- Keep cache keys tenant-scoped.',
       productRules: '- API errors expose stable codes.',
@@ -84,12 +81,7 @@ describe('ReviewExecutor', () => {
         startedAt: 100,
         finishedAt: 200,
         findingCount: 1,
-        usage: {
-          inputTokens: 11,
-          cacheCreationInputTokens: 22,
-          cacheReadInputTokens: 33,
-          outputTokens: 44,
-        },
+        usage: agentRunUsage,
         crossRepoSearch: skippedCrossRepoSearch,
       },
     ]);
@@ -457,13 +449,7 @@ describe('ReviewExecutor', () => {
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () =>
-          runnerOutput('<findings>[]</findings>', {
-            inputTokens: 11,
-            cacheCreationInputTokens: 22,
-            cacheReadInputTokens: 33,
-            outputTokens: 44,
-          }),
+        runAgent: async () => runnerOutput('<findings>[]</findings>', agentRunUsage),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -482,12 +468,7 @@ describe('ReviewExecutor', () => {
     });
     expect(store.agentRuns[0]).toMatchObject({
       error: expect.stringContaining('FindingsPayload must be an object'),
-      usage: {
-        inputTokens: 11,
-        cacheCreationInputTokens: 22,
-        cacheReadInputTokens: 33,
-        outputTokens: 44,
-      },
+      usage: agentRunUsage,
     });
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
@@ -706,18 +687,3 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 });
-
-function runnerOutput(
-  stdout: string,
-  usage?: {
-    inputTokens: number;
-    cacheCreationInputTokens: number;
-    cacheReadInputTokens: number;
-    outputTokens: number;
-  },
-) {
-  return {
-    stdout,
-    ...(usage !== undefined ? { usage } : {}),
-  };
-}

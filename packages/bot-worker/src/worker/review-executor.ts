@@ -191,6 +191,34 @@ interface SelectedAgentReviewResults {
   selectedAgentCount: number;
 }
 
+function agentRunRecordInput(
+  reviewJobId: string,
+  agentKey: string,
+  outcome: AgentExecutionOutcome,
+): RecordAgentRunInput {
+  const base = {
+    reviewJobId,
+    agentKey,
+    startedAt: outcome.startedAt,
+    finishedAt: outcome.finishedAt,
+    ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+  };
+  if (outcome.status !== 'completed') {
+    return {
+      ...base,
+      status: outcome.status,
+      findingCount: 0,
+      error: outcome.error,
+    };
+  }
+  return {
+    ...base,
+    status: 'completed',
+    findingCount: outcome.payload.findings.length,
+    crossRepoSearch: outcome.payload.crossRepoSearch,
+  };
+}
+
 interface AgentWorkspace {
   prWorktree: ReviewWorktree;
   siblingWorktrees: readonly RunnerSiblingWorktree[];
@@ -456,30 +484,10 @@ export class ReviewExecutor {
   async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
+    await this.#store.recordAgentRun(agentRunRecordInput(context.job.id, agent.key, outcome));
     if (outcome.status !== 'completed') {
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey: agent.key,
-        status: outcome.status,
-        startedAt: outcome.startedAt,
-        finishedAt: outcome.finishedAt,
-        findingCount: 0,
-        error: outcome.error,
-        ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
-      });
       return { status: 'failed' };
     }
-
-    await this.#store.recordAgentRun({
-      reviewJobId: context.job.id,
-      agentKey: agent.key,
-      status: 'completed',
-      startedAt: outcome.startedAt,
-      finishedAt: outcome.finishedAt,
-      findingCount: outcome.payload.findings.length,
-      crossRepoSearch: outcome.payload.crossRepoSearch,
-      ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
-    });
 
     return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
   }

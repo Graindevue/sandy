@@ -14,6 +14,13 @@ import {
   setSiblingShas,
 } from '../convex/reviewJobs.js';
 
+const agentRunUsage = {
+  inputTokens: 11,
+  cacheCreationInputTokens: 22,
+  cacheReadInputTokens: 33,
+  outputTokens: 44,
+};
+
 describe('Phase 2 Convex schema handlers', () => {
   it('round-trips anchor-only and cross-repo Findings', async () => {
     const ctx = fakeCtx();
@@ -185,12 +192,7 @@ describe('Phase 2 Convex schema handlers', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 1,
-      usage: {
-        inputTokens: 11,
-        cacheCreationInputTokens: 22,
-        cacheReadInputTokens: 33,
-        outputTokens: 44,
-      },
+      usage: agentRunUsage,
       crossRepoSearch: {
         status: 'skipped',
         trigger: 'none',
@@ -213,12 +215,7 @@ describe('Phase 2 Convex schema handlers', () => {
 
     expect(ctx.db.getDoc(withUsageId)).toEqual(
       expect.objectContaining({
-        usage: {
-          inputTokens: 11,
-          cacheCreationInputTokens: 22,
-          cacheReadInputTokens: 33,
-          outputTokens: 44,
-        },
+        usage: agentRunUsage,
       }),
     );
     expect(ctx.db.getDoc(withoutUsageId)).not.toHaveProperty('usage');

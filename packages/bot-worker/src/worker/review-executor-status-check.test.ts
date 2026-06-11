@@ -13,6 +13,7 @@ import {
   logicAgent,
   makeContext,
   nextNow,
+  runnerOutput,
   securityAgent,
 } from './review-executor.test-support.js';
 import type { ReviewStatusCheckReporter } from './review-status-check.js';
@@ -310,10 +311,6 @@ describe('ReviewExecutor Review Status Check', () => {
     );
   });
 });
-
-function runnerOutput(stdout: string) {
-  return { stdout };
-}
 
 function makeExecutor(options: {
   store?: FakeExecutionStore;

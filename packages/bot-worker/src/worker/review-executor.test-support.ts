@@ -75,6 +75,13 @@ export const skippedCrossRepoSearch = {
   rationale: 'No cross-repo contract risk was detected.',
 };
 
+export const agentRunUsage: AgentRunUsage = {
+  inputTokens: 11,
+  cacheCreationInputTokens: 22,
+  cacheReadInputTokens: 33,
+  outputTokens: 44,
+};
+
 export function makeContext(
   options: { productRepos?: ReviewJobContext['product']['repos']; agentKeys?: string[] } = {},
 ): ReviewJobContext {
@@ -137,6 +144,13 @@ export function findingsOutput(findings: Finding[], summary?: string): string {
     payload.summary = summary;
   }
   return `<findings>${JSON.stringify(payload)}</findings>`;
+}
+
+export function runnerOutput(stdout: string, usage?: AgentRunUsage) {
+  return {
+    stdout,
+    ...(usage !== undefined ? { usage } : {}),
+  };
 }
 
 export class FakeExecutionStore implements ReviewExecutionStore {
@@ -356,10 +370,7 @@ export class FakeRunner implements ReviewAgentRunner {
 
   async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]) {
     this.calls.push(input);
-    return {
-      stdout: this.stdout,
-      ...(this.usage !== undefined ? { usage: this.usage } : {}),
-    };
+    return runnerOutput(this.stdout, this.usage);
   }
 }
 

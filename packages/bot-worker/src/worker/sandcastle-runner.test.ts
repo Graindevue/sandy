@@ -1,4 +1,4 @@
-import type { AgentProvider, RunOptions, RunResult, SandboxProvider } from '@ai-hero/sandcastle';
+import type { AgentProvider, RunOptions, SandboxProvider } from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -36,7 +36,7 @@ describe('SandcastleRunner', () => {
       env: { ANTHROPIC_API_KEY: 'sk-test' },
       run: async (options) => {
         runCalls.push(options);
-        return { stdout: '<findings>{"findings":[]}</findings>', iterations: [] } as RunResult;
+        return { stdout: '<findings>{"findings":[]}</findings>', iterations: [] };
       },
       createAppleContainer: (options) => {
         createAppleContainerCalls.push(options);
@@ -146,29 +146,28 @@ describe('SandcastleRunner', () => {
 
   it('surfaces aggregated usage from Sandcastle iterations', async () => {
     const runner = new SandcastleRunner({
-      run: async () =>
-        ({
-          stdout: '<findings>{"findings":[]}</findings>',
-          iterations: [
-            {
-              usage: {
-                inputTokens: 10,
-                cacheCreationInputTokens: 20,
-                cacheReadInputTokens: 30,
-                outputTokens: 40,
-              },
+      run: async () => ({
+        stdout: '<findings>{"findings":[]}</findings>',
+        iterations: [
+          {
+            usage: {
+              inputTokens: 10,
+              cacheCreationInputTokens: 20,
+              cacheReadInputTokens: 30,
+              outputTokens: 40,
             },
-            {},
-            {
-              usage: {
-                inputTokens: 1,
-                cacheCreationInputTokens: 2,
-                cacheReadInputTokens: 3,
-                outputTokens: 4,
-              },
+          },
+          {},
+          {
+            usage: {
+              inputTokens: 1,
+              cacheCreationInputTokens: 2,
+              cacheReadInputTokens: 3,
+              outputTokens: 4,
             },
-          ],
-        }) as RunResult,
+          },
+        ],
+      }),
       createAppleContainer: () => fakeSandbox(),
       createAgentProvider: () => fakeAgentProvider('claude'),
     });

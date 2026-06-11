@@ -159,8 +159,7 @@ export function aggregateAgentRunUsage(
   iterations: readonly Pick<IterationResult, 'usage'>[],
 ): AgentRunUsage | undefined {
   let aggregate: AgentRunUsage | undefined;
-  for (const iteration of iterations) {
-    const usage = iteration.usage;
+  for (const { usage } of iterations) {
     if (usage === undefined) {
       continue;
     }
@@ -173,10 +172,12 @@ export function aggregateAgentRunUsage(
       };
       continue;
     }
-    aggregate.inputTokens += usage.inputTokens;
-    aggregate.cacheCreationInputTokens += usage.cacheCreationInputTokens;
-    aggregate.cacheReadInputTokens += usage.cacheReadInputTokens;
-    aggregate.outputTokens += usage.outputTokens;
+    aggregate = {
+      inputTokens: aggregate.inputTokens + usage.inputTokens,
+      cacheCreationInputTokens: aggregate.cacheCreationInputTokens + usage.cacheCreationInputTokens,
+      cacheReadInputTokens: aggregate.cacheReadInputTokens + usage.cacheReadInputTokens,
+      outputTokens: aggregate.outputTokens + usage.outputTokens,
+    };
   }
   return aggregate;
 }
