@@ -56,6 +56,7 @@ describe('SandcastleRunner', () => {
   it('runs an Agent in an Apple Container against the review worktree', async () => {
     const runCalls: RunOptions[] = [];
     const createAppleContainerCalls: unknown[] = [];
+    const agentProviderEnvs: Record<string, string>[] = [];
     const sandbox = fakeSandbox();
     const provider = fakeAgentProvider('claude');
     const abortController = new AbortController();
@@ -71,7 +72,10 @@ describe('SandcastleRunner', () => {
         createAppleContainerCalls.push(options);
         return sandbox;
       },
-      createAgentProvider: () => provider,
+      createAgentProvider: (_agent, env) => {
+        agentProviderEnvs.push(env);
+        return provider;
+      },
     });
 
     const result = await runner.runAgent({
@@ -96,6 +100,9 @@ describe('SandcastleRunner', () => {
     });
 
     expect(result.stdout).toBe('<findings>{"findings":[]}</findings>');
+    // The package-manager env must stay off the Agent provider: sandcastle
+    // throws on any key shared between agent and sandbox provider envs.
+    expect(agentProviderEnvs).toEqual([{ ANTHROPIC_API_KEY: 'sk-test' }]);
     expect(createAppleContainerCalls).toEqual([
       expect.objectContaining({
         imageName: 'sandy-agent',

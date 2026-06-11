@@ -147,6 +147,7 @@ type AppleContainerProviderModule = {
 export class SandcastleRunner {
   readonly #imageName: string;
   readonly #env: Record<string, string>;
+  readonly #sandboxEnv: Record<string, string>;
   readonly #installTimeoutMs: number;
   readonly #nodeModulesCacheDir: string;
   readonly #run: SandcastleRun;
@@ -155,7 +156,12 @@ export class SandcastleRunner {
 
   constructor(options: SandcastleRunnerOptions = {}) {
     this.#imageName = options.imageName ?? DEFAULT_AGENT_IMAGE;
-    this.#env = { ...PACKAGE_MANAGER_ENV, ...options.env };
+    this.#env = options.env ?? {};
+    // The package-manager env rides on the sandbox provider ONLY. Sandcastle
+    // rejects any key present in both the agent provider's env and the
+    // sandbox provider's env (mergeProviderEnv), so adding these to the
+    // shared operator env fails every Agent run at startup.
+    this.#sandboxEnv = { ...PACKAGE_MANAGER_ENV, ...this.#env };
     this.#installTimeoutMs = options.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
     this.#nodeModulesCacheDir = options.nodeModulesCacheDir ?? NODE_MODULES_CACHE_DIR;
     this.#run = options.run ?? run;
@@ -192,7 +198,7 @@ export class SandcastleRunner {
     const provider = await this.#createAppleContainer({
       imageName: this.#imageName,
       containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
-      env: this.#env,
+      env: this.#sandboxEnv,
     });
     if (provider.tag !== 'bind-mount') {
       return {
@@ -212,7 +218,7 @@ export class SandcastleRunner {
           { hostPath: input.worktreePath, sandboxPath: WORKSPACE_SANDBOX_PATH },
           ...(await resolveWorktreeGitMounts(input.worktreePath)),
         ],
-        env: this.#env,
+        env: this.#sandboxEnv,
       });
     } catch (error) {
       return { status: 'failed', command: detected.command, error: describeInstallError(error) };
@@ -281,7 +287,7 @@ export class SandcastleRunner {
         imageName: this.#imageName,
         containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
         mounts,
-        env: this.#env,
+        env: this.#sandboxEnv,
       }),
       cwd: input.worktreePath,
       prompt: buildReviewPrompt(input),
