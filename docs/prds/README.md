@@ -23,6 +23,14 @@ Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4
 
 Phases are strictly sequential. Phase N+1 assumes Phase N is merged and stable on the host.
 
+## Feature PRDs
+
+Standalone features that aren't tied to a phase:
+
+| PRD | One-line goal |
+|-----|---------------|
+| [Run tests inside reviews](./feature-run-tests-in-reviews.md) | Install deps + run the target Repo's test suite in the review sandbox so coverage/Convex findings are verified, not guessed. |
+
 ## Working with these PRDs
 
 The intended workflow:
