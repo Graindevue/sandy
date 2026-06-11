@@ -121,6 +121,49 @@ export const subscribePending = query({
   },
 });
 
+/**
+ * All `running` ReviewJobs, hydrated with the Repo and PullRequest data needed to
+ * terminate a dangling Sandy Check Run. On a single-worker host every `running`
+ * job at startup is an orphan from a prior worker exit (crash / restart) — the
+ * process that owned its inline Check Run updates is gone, so the Check Run is
+ * stuck `in_progress`. The worker reads this once on boot to reconcile them.
+ */
+export const listRunningForReconcile = query({
+  args: {},
+  handler: async (ctx) => {
+    const jobs = await ctx.db
+      .query('reviewJobs')
+      .withIndex('by_status', (q) => q.eq('status', 'running'))
+      .collect();
+    const out: Array<{
+      jobId: string;
+      checkRunId: number | null;
+      headSha: string;
+      owner: string;
+      name: string;
+      pullRequestUrl: string;
+    }> = [];
+    for (const job of jobs) {
+      const [repo, pullRequest] = await Promise.all([
+        ctx.db.get(job.repoId),
+        ctx.db.get(job.pullRequestId),
+      ]);
+      if (repo === null || pullRequest === null) {
+        continue;
+      }
+      out.push({
+        jobId: job._id,
+        checkRunId: job.checkRunId ?? null,
+        headSha: job.headSha,
+        owner: repo.owner,
+        name: repo.name,
+        pullRequestUrl: pullRequest.url,
+      });
+    }
+    return out;
+  },
+});
+
 /** Hydrate one claimed ReviewJob with the Repo and PullRequest data the worker needs. */
 export const getForWorker = query({
   args: { jobId: v.id('reviewJobs') },

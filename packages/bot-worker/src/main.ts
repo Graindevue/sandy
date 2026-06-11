@@ -34,6 +34,7 @@ import { ConvexSink } from './webhook/sink.js';
 import { ReviewCancellationCoordinator } from './worker/cancellation.js';
 import { ReviewClaimant } from './worker/claimant.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
+import { reconcileOrphanedReviews } from './worker/orphaned-review-reconciler.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { type RepoForWorktree, ReviewExecutor } from './worker/review-executor.js';
 import { SANDY_WORKER_CONTAINER_PREFIX, SandcastleRunner } from './worker/sandcastle-runner.js';
@@ -235,6 +236,23 @@ export async function main(): Promise<void> {
     resolveReviewBotConfig: ({ repo, worktreePath }) =>
       resolveReviewBotConfig(configLoader, botConfigReader, repo, worktreePath),
   });
+  // Reconcile ReviewJobs left `running` by a prior worker exit BEFORE claiming new
+  // work. A crash/restart mid-review leaves the Sandy Check Run stuck `in_progress`
+  // (inline updates die with the process; the Convex reaper can't call GitHub), so
+  // on a single-worker host every `running` job at boot is an orphan to terminate.
+  // Wrapped defensively: best-effort cleanup must never stop the worker starting.
+  try {
+    await reconcileOrphanedReviews({
+      listRunning: () => httpClient.query(api.reviewJobs.listRunningForReconcile, {}),
+      completeCheckRun: (input) => github.complete(input),
+      markFailed: (jobId, finishedAt, error) => executionStore.markFailed(jobId, finishedAt, error),
+      now: () => Date.now(),
+      logger: console,
+    });
+  } catch (error) {
+    console.warn('orphaned-review reconciliation failed; continuing startup', error);
+  }
+
   const claimant = new ReviewClaimant({
     client: reactiveClient,
     handleClaimedJob: (jobId) => executor.executeClaimedJob(jobId),
