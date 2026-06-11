@@ -5,7 +5,7 @@ vendor: claude
 model: haiku
 maxIterations: 15
 completionSignal: "</findings>"
-tools: [read_file, rg, git_diff]
+tools: [read_file, rg, git_diff, run_tests]
 ---
 
 # Test Coverage Agent

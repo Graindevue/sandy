@@ -55,7 +55,7 @@ describe('shipped agents/', () => {
     expect(testCoverage.vendor).toBe('claude');
     expect(testCoverage.model).toBe('haiku');
     expect(testCoverage.maxIterations).toBe(15);
-    expect(testCoverage.tools).toEqual(['read_file', 'rg', 'git_diff']);
+    expect(testCoverage.tools).toEqual(['read_file', 'rg', 'git_diff', 'run_tests']);
     for (const expectedText of RTK_PROMPT_CONTRACT) {
       expect(testCoverage.systemPrompt).toContain(expectedText);
     }
