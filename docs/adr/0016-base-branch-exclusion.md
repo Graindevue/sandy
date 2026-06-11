@@ -2,7 +2,13 @@
 
 Date: 2026-06-04
 
-Status: Accepted
+Status: Superseded by [0017](0017-manual-only-review-triggering.md)
+
+> **Superseded.** This ADR gated the *automatic* `gh pr ready` arming trigger.
+> ADR 0017 makes reviews manual-only, so there is no automatic trigger left to
+> gate and Base-Branch Exclusion is retired. The `excludeBranches` config key is
+> now inert (kept for compatibility), and the matcher module plus its dispatch
+> wiring have been removed. The record below is kept for history.
 
 ## Context
 

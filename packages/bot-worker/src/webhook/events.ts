@@ -47,7 +47,7 @@ export interface PullRequestFacts {
   /**
    * Lifecycle state of the PR, derived from GitHub's `pull_request.state` and
    * `pull_request.merged`. Closed or merged PRs are dead and must not be
-   * re-armed by a late `@bot review` mention (Sticky Opt-In).
+   * re-reviewed by a late `@bot review` mention.
    */
   state: PullRequestState;
   /**
@@ -60,8 +60,11 @@ export interface PullRequestFacts {
 }
 
 /**
- * `pull_request` delivery. `action` is narrowed to the subset that affects
- * Sticky Opt-In; everything else parses to `action: 'other'` and is ignored.
+ * `pull_request` delivery. `action` is narrowed to the lifecycle subset Sandy
+ * parses; under manual-only triggering only `closed` changes state (it clears the
+ * opt-in flag), and every other action — including `synchronize` and
+ * `ready_for_review` — is a no-op. Anything outside this set parses to
+ * `action: 'other'` and is ignored.
  */
 export interface PullRequestEvent {
   kind: 'pull_request';

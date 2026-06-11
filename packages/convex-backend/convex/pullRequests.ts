@@ -41,8 +41,9 @@ export const ensureRepo = mutation({
 
 /**
  * Insert or update a PullRequest keyed by (repo, number). On update the existing
- * `reviewActive` flag is preserved; new PRs start with `reviewActive: false` —
- * Sticky Opt-In means a PR is not reviewed until it is explicitly opted in.
+ * `reviewActive` flag is preserved; new PRs start with `reviewActive: false`.
+ * `reviewActive` is opt-in state only (set when a PR is put under review, cleared
+ * on close); it no longer gates triggering — reviews are manual-only.
  */
 export const upsert = mutation({
   args: {
@@ -72,9 +73,7 @@ export const upsert = mutation({
 
 /**
  * Look up a PullRequest by `(repo, number)`. Returns `null` when Sandy has never
- * seen the PR. The webhook front door reads `reviewActive` from this to evaluate
- * Sticky Opt-In on events (e.g. `synchronize`) that carry the full PR but not the
- * stored flag.
+ * seen the PR.
  */
 export const get = query({
   args: { repoId: v.id('repos'), number: v.number() },
@@ -123,7 +122,7 @@ export const listMergedForMergeStateBackfill = query({
   },
 });
 
-/** Set the Sticky Opt-In `reviewActive` flag for a PR. */
+/** Set the `reviewActive` opt-in flag for a PR. */
 export const setReviewActive = mutation({
   args: { pullRequestId: v.id('pullRequests'), active: v.boolean() },
   returns: v.null(),
@@ -133,7 +132,7 @@ export const setReviewActive = mutation({
   },
 });
 
-/** Clear the Sticky Opt-In `reviewActive` flag after a PR closes. */
+/** Clear the `reviewActive` opt-in flag after a PR closes. */
 export const clearOnClose = mutation({
   args: { pullRequestId: v.id('pullRequests') },
   returns: v.null(),

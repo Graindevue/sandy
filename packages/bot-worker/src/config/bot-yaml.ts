@@ -21,7 +21,10 @@ export interface RepoConfig {
   /** Derived `"owner/name"`; not authored in the file. */
   fullName: string;
   defaultBranch: string;
-  /** Glob patterns for base branches that should not auto-arm reviews. */
+  /**
+   * Inert since ADR 0017 (manual-only triggering): there is no automatic arming
+   * left to gate. Still parsed for config compatibility; nothing reads it.
+   */
   excludeBranches: string[];
 }
 

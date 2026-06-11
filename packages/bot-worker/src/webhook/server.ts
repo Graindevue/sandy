@@ -6,7 +6,6 @@ import {
   type DispatchLogger,
   type DispatchOptions,
   dispatchEvent,
-  type ExcludeBranchesResolver,
   type ForkDeclineCommenter,
   type PrCloseSignalCapturer,
 } from './dispatch.js';
@@ -49,8 +48,6 @@ export interface WebhookServerOptions {
   reviewCanceller?: ReviewCanceller;
   /** Optional resolver for the configured candidate Agent keys of an enqueued Review. */
   resolveAgentKeys?: AgentKeysResolver;
-  /** Optional resolver for base branches excluded from automatic review arming. */
-  resolveExcludeBranches?: ExcludeBranchesResolver;
   /** Logger; defaults to `console`. */
   logger?: DispatchLogger;
   /** Path the server accepts deliveries on. Defaults to `/`. */
@@ -189,8 +186,7 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
     options.closeSignalCapturer === undefined &&
     options.replyCapturer === undefined &&
     options.reviewCanceller === undefined &&
-    options.resolveAgentKeys === undefined &&
-    options.resolveExcludeBranches === undefined
+    options.resolveAgentKeys === undefined
   ) {
     return undefined;
   }
@@ -209,9 +205,6 @@ function dispatchOptions(options: WebhookServerOptions): DispatchOptions | undef
   }
   if (options.resolveAgentKeys !== undefined) {
     dispatch.resolveAgentKeys = options.resolveAgentKeys;
-  }
-  if (options.resolveExcludeBranches !== undefined) {
-    dispatch.resolveExcludeBranches = options.resolveExcludeBranches;
   }
   return dispatch;
 }

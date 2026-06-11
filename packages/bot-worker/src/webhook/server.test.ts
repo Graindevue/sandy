@@ -15,15 +15,11 @@ import type {
 const SECRET = 'server-test-secret';
 
 class RecordingSink implements ReviewSink {
-  reviewActive = false;
   readonly enqueued: EnqueueInput[] = [];
   readonly upserts: UpsertPullRequestInput[] = [];
 
   async ensureRepo(repo: RepoRef): Promise<string> {
     return `repo:${repo.owner}/${repo.name}`;
-  }
-  async getReviewActive(): Promise<boolean> {
-    return this.reviewActive;
   }
   async upsertPullRequest(input: UpsertPullRequestInput): Promise<string> {
     this.upserts.push(input);

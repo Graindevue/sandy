@@ -1,5 +1,4 @@
 import type { ReviewTrigger } from '@sandy/shared-types';
-import { isBaseBranchExcluded } from '../config/base-branch-exclusion.js';
 import type { ReviewCanceller } from '../worker/cancellation.js';
 import type {
   CommentEvent,
@@ -10,7 +9,7 @@ import type {
 } from './events.js';
 import { prStateForEvent } from './parse.js';
 import type { EnqueueInput, ReviewSink } from './sink.js';
-import { evaluateTrigger, type ReadyForReviewSkipReason } from './trigger-evaluator.js';
+import { evaluateTrigger } from './trigger-evaluator.js';
 
 /** The message Sandy surfaces when it declines a fork PR (PRD documented limitation). */
 export const FORK_DECLINE_MESSAGE =
@@ -23,7 +22,6 @@ export type DispatchOutcome =
   | { action: 'ignored'; reason: string }
   | { action: 'cleared'; pullRequestId: string }
   | { action: 'declined-fork'; repo: string; number: number }
-  | { action: 'skipped-base-branch-excluded'; repo: string; number: number; baseRef: string }
   | {
       action: 'enqueued';
       reviewJobId: string;
@@ -72,7 +70,6 @@ export interface CommentReplyCapturer {
  * `.bot/agents.yaml` overrides) via `selectAgentsForReview`.
  */
 export type AgentKeysResolver = (repo: RepoRef) => string[];
-export type ExcludeBranchesResolver = (repo: RepoRef) => readonly string[];
 
 export interface DispatchOptions {
   forkDeclineCommenter?: ForkDeclineCommenter;
@@ -80,7 +77,6 @@ export interface DispatchOptions {
   replyCapturer?: CommentReplyCapturer;
   reviewCanceller?: ReviewCanceller;
   resolveAgentKeys?: AgentKeysResolver;
-  resolveExcludeBranches?: ExcludeBranchesResolver;
 }
 
 function fullName(repo: RepoRef): string {
@@ -88,15 +84,14 @@ function fullName(repo: RepoRef): string {
 }
 
 /**
- * Apply Sticky Opt-In to one normalized webhook event, performing the resulting
- * Convex side effects through {@link ReviewSink}. The decision is made by the
- * pure {@link evaluateTrigger}; this function owns only the ordering of effects:
+ * Apply manual-only triggering to one normalized webhook event, performing the
+ * resulting Convex side effects through {@link ReviewSink}. The decision is made
+ * by the pure {@link evaluateTrigger}; this function owns only the ordering of
+ * effects:
  *
  *   1. resolve the Repo (auto-provision on first sight — TODO(#5)),
- *   2. read the PR's current `reviewActive`,
- *   3. upsert the PR,
- *   4. flip / clear the flag, then enqueue — so an enqueued job always points at
- *      a PR row whose flag already reflects the opt-in.
+ *   2. upsert the PR,
+ *   3. set / clear the opt-in flag, then enqueue.
  *
  * Superseding reviews use a single Convex mutation that supersedes active stale
  * jobs and enqueues (or reuses) the new-head job atomically; any local running
@@ -116,15 +111,8 @@ export async function dispatchEvent(
 
   const { repo, pr } = event;
   const repoId = await sink.ensureRepo(repo, undefined);
-  const currentReviewActive = await sink.getReviewActive(repoId, pr.number);
 
-  const decision = evaluateTrigger(event, {
-    currentReviewActive,
-    readyForReviewSkipReason: resolveReadyForReviewSkipReason(
-      event,
-      options.resolveExcludeBranches,
-    ),
-  });
+  const decision = evaluateTrigger(event);
 
   if (decision.decline === 'fork') {
     try {
@@ -144,18 +132,6 @@ export async function dispatchEvent(
 
   if (event.kind === 'comment') {
     await captureCommentReply(event, pullRequestId, logger, options.replyCapturer);
-  }
-
-  if (decision.skip === 'base-branch-excluded') {
-    logger.info(
-      `skipped auto-review for ${fullName(repo)}#${pr.number}: base branch ${pr.baseRef} is excluded`,
-    );
-    return {
-      action: 'skipped-base-branch-excluded',
-      repo: fullName(repo),
-      number: pr.number,
-      baseRef: pr.baseRef,
-    };
   }
 
   if (decision.clearReviewActive) {
@@ -210,19 +186,6 @@ export async function dispatchEvent(
   return { action: 'enqueued', reviewJobId: enqueueResult.reviewJobId, trigger };
 }
 
-function resolveReadyForReviewSkipReason(
-  event: Exclude<ParsedEvent, { kind: 'ignored' }>,
-  resolveExcludeBranches: ExcludeBranchesResolver | undefined,
-): ReadyForReviewSkipReason | undefined {
-  if (event.kind !== 'pull_request' || event.action !== 'ready_for_review') {
-    return undefined;
-  }
-  if (!isBaseBranchExcluded(event.pr.baseRef, resolveExcludeBranches?.(event.repo))) {
-    return undefined;
-  }
-  return 'base-branch-excluded';
-}
-
 async function captureCommentReply(
   event: CommentEvent,
   pullRequestId: string,
@@ -272,7 +235,13 @@ async function enqueueReviewForTrigger(
 }
 
 function usesSupersedingEnqueue(trigger: ReviewTrigger): boolean {
-  return trigger === 'push' || trigger === 'rerun';
+  // Both manual triggers supersede: asking for a fresh Review (`@bot review` or
+  // the Re-run button) marks any in-flight Review for the PR as superseded and
+  // reuses/enqueues the current-head job. This keeps Cancel-on-Supersede working
+  // now that pushes no longer auto-trigger — a re-review after a fix cannot leave
+  // a stale run posting over the fresh one, and a double `@bot review` dedupes to
+  // one job instead of double-posting.
+  return trigger === 'mention' || trigger === 'rerun';
 }
 
 function enqueueLogMessage(

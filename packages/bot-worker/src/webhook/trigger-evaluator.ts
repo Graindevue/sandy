@@ -40,31 +40,22 @@ function isTerminal(pr: PullRequestFacts): boolean {
   return pr.state === 'closed' || pr.state === 'merged';
 }
 
-export type ReadyForReviewSkipReason = 'base-branch-excluded';
-
-export interface TriggerEvaluationContext {
-  currentReviewActive: boolean;
-  readyForReviewSkipReason: ReadyForReviewSkipReason | undefined;
-}
-
 /**
  * The trigger-evaluator's verdict for a single webhook event. At most one of
- * `enqueue` / `clearReviewActive` / `decline` / `skip` drives dispatcher work;
- * the others stay falsy. `setReviewActive` only ever pairs with `enqueue`.
+ * `enqueue` / `clearReviewActive` / `decline` drives dispatcher work; the others
+ * stay falsy. `setReviewActive` only ever pairs with `enqueue`.
  */
 export interface TriggerDecision {
   /** Enqueue a ReviewJob for this PR's current head. */
   enqueue: boolean;
-  /** Flip the PR's Sticky Opt-In flag on for explicit Review triggers. */
+  /** Mark the PR as opted into reviews (records opt-in state; see note below). */
   setReviewActive?: boolean;
-  /** Clear the Sticky Opt-In flag (PR closed). */
+  /** Clear the opt-in flag (PR closed). */
   clearReviewActive?: boolean;
   /** Why the Review was triggered; present iff `enqueue` is true. */
   trigger?: ReviewTrigger;
   /** The PR is declined without enqueuing; `'fork'` is the only v1 reason. */
   decline?: 'fork';
-  /** The Review was intentionally skipped without side effects. */
-  skip?: ReadyForReviewSkipReason;
 }
 
 const DO_NOTHING: TriggerDecision = { enqueue: false };
@@ -98,34 +89,31 @@ function enqueueLiveSameRepoPr(
 }
 
 /**
- * Sticky Opt-In, as a pure function. Decides whether a normalized webhook event
- * should enqueue a Review and how it moves the PR's `reviewActive` flag, given
- * that flag's current value. No I/O — the dispatcher applies the side effects.
+ * Trigger evaluation, as a pure function. Decides whether a normalized webhook
+ * event should enqueue a Review. No I/O — the dispatcher applies the side effects.
  *
- * Rules (CONTEXT.md "Sticky Opt-In"):
- * - opened / synchronize on a PR with `reviewActive === false` and no mention →
- *   do nothing (PRs are not auto-reviewed on open).
+ * Sandy reviews are **manual-only**: a Review starts when a human explicitly asks
+ * for one, never automatically off a push. Rules (CONTEXT.md "Review triggers"):
  * - `@bot review` comment on an open PR → enqueue + set `reviewActive = true`
  *   (trigger `mention`); on a closed or merged PR → do nothing.
- * - draft → ready transition (`ready_for_review`) → enqueue + set
- *   `reviewActive = true` (trigger `ready`) unless the dispatcher says the PR's
- *   base branch is excluded from automatic arming.
- * - push / synchronize on a `reviewActive` PR → enqueue (trigger `push`).
- *   Pushes to an opted-out, closed, or merged PR are ignored.
- * - Check Run re-run → enqueue regardless of `reviewActive` (trigger `rerun`).
+ * - Check Run re-run (the "Re-run" button on Sandy's Review Status Check) →
+ *   enqueue + set `reviewActive = true` (trigger `rerun`).
  * - PR closed → clear `reviewActive`.
+ * - Every other event — push, `synchronize`, `ready_for_review`, open/reopen →
+ *   do nothing. Pushing new commits to a PR does NOT re-review it; the author
+ *   re-runs `@bot review` (or clicks Re-run) when ready for another pass.
  * - fork PR (head Repo ≠ base Repo) → decline (`decline: 'fork'`); v1 declines
  *   forks (PRD open question) and never enqueues them.
+ *
+ * `reviewActive` is no longer a trigger gate (nothing pushes a re-review off it).
+ * It is retained only as opt-in state — a record that a PR has been put under
+ * Sandy review — for observability and possible future UI; the dispatcher keeps
+ * it in sync but never reads it to decide whether to enqueue.
  *
  * Cancel-on-Supersede is applied by the dispatcher/Convex enqueue path after
  * this pure decision; the evaluator only emits the trigger.
  */
-export function evaluateTrigger(
-  event: ParsedEvent,
-  context: TriggerEvaluationContext,
-): TriggerDecision {
-  const { currentReviewActive, readyForReviewSkipReason } = context;
-
+export function evaluateTrigger(event: ParsedEvent): TriggerDecision {
   switch (event.kind) {
     case 'ignored':
       return DO_NOTHING;
@@ -137,50 +125,23 @@ export function evaluateTrigger(
       return enqueueLiveSameRepoPr(event, 'mention', { setReviewActive: true });
     }
 
-    case 'push': {
-      if (!currentReviewActive) {
-        return DO_NOTHING;
-      }
-      return enqueueLiveSameRepoPr(event, 'push');
-    }
+    case 'push':
+      // Manual-only: pushes never auto-trigger a Review.
+      return DO_NOTHING;
 
     case 'check_run': {
       return enqueueLiveSameRepoPr(event, 'rerun', { setReviewActive: true });
     }
 
     case 'pull_request': {
-      switch (event.action) {
-        case 'closed':
-          // Close always clears the flag, fork or not — there is nothing left to
-          // review and the PR should leave the sticky set.
-          return { enqueue: false, clearReviewActive: true };
-
-        case 'ready_for_review': {
-          if (isForkPr(event.repo, event.pr)) {
-            return { enqueue: false, decline: 'fork' };
-          }
-          if (readyForReviewSkipReason !== undefined) {
-            return { enqueue: false, skip: readyForReviewSkipReason };
-          }
-          return { enqueue: true, setReviewActive: true, trigger: 'ready' };
-        }
-
-        case 'synchronize': {
-          // A push to a PR can arrive as both `push` and `synchronize`.
-          // The dispatcher uses an idempotent push enqueue, so both normalized
-          // events can safely request the same new-head review for opted-in PRs.
-          if (!currentReviewActive) {
-            return DO_NOTHING;
-          }
-          return enqueueLiveSameRepoPr(event, 'push');
-        }
-
-        case 'opened':
-        case 'reopened':
-        case 'other':
-          // Sticky Opt-In: opening (or reopening) a PR never auto-reviews it.
-          return DO_NOTHING;
+      // Close always clears the flag, fork or not — there is nothing left to
+      // review and the PR should leave the opted-in set. Every other PR action
+      // (synchronize, ready_for_review, open/reopen) is a no-op under manual-only
+      // triggering.
+      if (event.action === 'closed') {
+        return { enqueue: false, clearReviewActive: true };
       }
+      return DO_NOTHING;
     }
   }
 }

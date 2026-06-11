@@ -263,8 +263,6 @@ export async function main(): Promise<void> {
     // this set at worktree time via selectAgentsForReview.
     resolveAgentKeys: (repo) =>
       configLoader.resolveForRepo(repo.owner, repo.name)?.agents.map((agent) => agent.key) ?? [],
-    resolveExcludeBranches: (repo) =>
-      configLoader.resolveForRepo(repo.owner, repo.name)?.repo.excludeBranches ?? [],
     forkDeclineCommenter: {
       async postForkDeclined({ repo, pullNumber, body }) {
         await github.createIssueComment({

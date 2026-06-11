@@ -17,7 +17,7 @@ If 80% of the value of code-review automation is "an LLM reads the diff," Sandy 
 - Reviews any PR — code you wrote in Claude Code, manual edits, collaborator contributions. Not just bot-generated branches.
 - Multi-agent fan-out — specialized prompts (logic / security / Convex / Next.js / i18n) tend to find more than one general-purpose prompt does.
 - Cross-repo Product context — a backend rename that breaks a desktop-app consumer is visible to Sandy, invisible to a single-repo reviewer.
-- Reactive — every push retriggers automatically once you've opted a PR in. Nothing to remember.
+- On-demand — you review when you ask (`@bot review`, or the Re-run button), not on every push. Batch your fixes, then trigger one clean pass instead of a review per commit.
 - Self-hosted — runs on your hardware. No SaaS reviewer in the loop.
 
 **What Sandy doesn't claim**

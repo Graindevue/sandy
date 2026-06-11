@@ -408,7 +408,7 @@ export function parseEvent(eventName: SupportedEventName, payload: unknown): Par
  * valid review signals but do not embed full PR facts. PR Conversation comments
  * (`issue_comment`) and Sandy Check Run re-runs carry only a PR number, and
  * `push` deliveries carry a branch ref rather than a PR, so Sandy resolves the
- * PR before Sticky Opt-In evaluation.
+ * PR before trigger evaluation.
  */
 export async function parseEventForDispatch(
   eventName: SupportedEventName,

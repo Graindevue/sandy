@@ -53,19 +53,23 @@ workflow.
 
 ## 3. Subscribe to webhook events
 
-Under **Subscribe to events**, check exactly these five:
+Under **Subscribe to events**, check exactly these four:
 
 | Event | Drives |
 |-------|--------|
 | **Check run** | The **Re-run** button on Sandy's Review Status Check triggers a fresh Review for the PR's current head. |
-| **Pull request** | PR opened / closed / `draft → ready` transitions. Close clears `reviewActive`; ready-for-review is a Review trigger (Sticky Opt-In). |
-| **Issue comment** | `@bot review` mention on a PR conversation (the opt-in trigger). Gated on the **Issues** permission from step 2 — if you don't see this event in the list, you haven't granted Issues (Read-only) yet. |
+| **Pull request** | PR close clears `reviewActive`. Open / `draft → ready` / `synchronize` are received but do **not** trigger a Review (manual-only triggering — ADR 0017). |
+| **Issue comment** | `@bot review` mention on a PR conversation — the primary Review trigger. Gated on the **Issues** permission from step 2 — if you don't see this event in the list, you haven't granted Issues (Read-only) yet. |
 | **Pull request review comment** | Reactions/replies on Sandy's inline Findings (the trailer-driven reaction loop). Subscribe now so deliveries arrive from day one, but Phase 1 has no Reactions table — persisting reactions and feeding the learning loop is Phase 3. |
-| **Push** | New commits on an opted-in PR retrigger a Review automatically (Cancel-on-Supersede if one is already in flight). |
 
-These five events and the permissions above are exactly what the worker's
-webhook dispatcher expects. Adding more events is harmless but unused; removing
-any of these will silently break a trigger.
+These four events and the permissions above are exactly what the worker's webhook
+dispatcher expects. Adding more events is harmless but unused; removing any of
+these will silently break a trigger.
+
+> **Push is not subscribed.** Pushes no longer trigger Reviews (ADR 0017), so the
+> **Push** event is intentionally left unchecked. If a pre-existing install still
+> has it subscribed, that is harmless — the worker resolves the PR and then
+> no-ops — but you can safely uncheck it.
 
 ## 4. Choose installation scope
 

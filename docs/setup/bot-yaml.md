@@ -106,41 +106,19 @@ These map to Sandy's `Product` type (`slug`, `name`).
 | `owner` | string | yes | GitHub owner or org login, e.g. `tony-co`. |
 | `name` | string | yes | Repository name, e.g. `acme-backend`. |
 | `defaultBranch` | string | yes | The Repo's default branch, e.g. `main`. |
-| `excludeBranches` | list of strings | no | Glob patterns for base branches where Sandy skips automatic draft → ready Review arming. Omit or use `[]` to exclude nothing. |
+| `excludeBranches` | list of strings | no | **Inert.** Formerly gated automatic `draft → ready` arming; reviews are now manual-only (ADR 0017), so this key does nothing. Kept for config compatibility, slated for removal. |
 
 These map to Sandy's `Repo` type. The `owner`/`name` pair must match a repository
 the GitHub App is installed on. `fullName` (`owner/name`) is derived by Sandy —
 you don't write it.
 
-### Base-Branch Exclusion
+### Base-Branch Exclusion (retired)
 
-`excludeBranches` is a per-Repo denylist. It matches the PR's base branch
-(target branch), not the head branch:
-
-```yaml
-products:
-  - slug: acme
-    name: Acme
-    repos:
-      - owner: tony-co
-        name: acme-backend
-        defaultBranch: main
-        excludeBranches:
-          - release/*
-          - vendor/**
-          - sandbox
-```
-
-Exact branch names work as patterns (`sandbox` matches only `sandbox`). Glob
-patterns use Node's `matchesGlob` semantics and are case-sensitive, like Git
-refs. `release/*` matches `release/2026.06`; `vendor/**` matches nested branch
-names such as `vendor/generated/current`.
-
-The exclusion gates only automatic Sticky Opt-In from `gh pr ready`
-(`ready_for_review`). PR open/reopen behavior is unchanged, and `@bot review`
-always overrides the exclusion. After a human opts in an excluded-branch PR with
-`@bot review`, subsequent pushes retrigger Reviews normally. A skipped automatic
-trigger posts no PR comment.
+`excludeBranches` existed to keep `gh pr ready` from auto-arming Reviews on
+release-train, vendored, or sandbox base branches. With manual-only triggering
+(ADR 0017) there is no automatic arming to gate, so the key is now **inert** —
+parsing still accepts it for compatibility, but it changes no behavior and is
+slated for removal. To avoid reviewing a PR, simply don't run `@bot review` on it.
 
 ## Agent selection
 

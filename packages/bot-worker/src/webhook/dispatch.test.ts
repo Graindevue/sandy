@@ -36,11 +36,12 @@ const silentLogger = { info: vi.fn(), warn: vi.fn() };
 
 /**
  * In-memory {@link ReviewSink} that records calls and models the parts of Convex
- * the dispatcher relies on: `ensureRepo` is idempotent per `owner/name`, the PR's
- * `reviewActive` flag is stored and read back, and ids are deterministic strings.
+ * the dispatcher relies on: `ensureRepo` is idempotent per `owner/name` and ids
+ * are deterministic strings. The `reviewActive` opt-in flag is written but never
+ * read back (manual-only triggering no longer gates on it), so the fake just
+ * records the set/clear calls.
  */
 class FakeSink implements ReviewSink {
-  reviewActive: boolean;
   readonly upserts: UpsertPullRequestInput[] = [];
   readonly enqueued: EnqueueInput[] = [];
   readonly supersedingEnqueues: EnqueueInput[] = [];
@@ -49,16 +50,8 @@ class FakeSink implements ReviewSink {
   supersededJobIds: string[] = [];
   jobCounter = 0;
 
-  constructor(reviewActive = false) {
-    this.reviewActive = reviewActive;
-  }
-
   async ensureRepo(repo: RepoRef): Promise<string> {
     return `repo:${repo.owner}/${repo.name}`;
-  }
-
-  async getReviewActive(): Promise<boolean> {
-    return this.reviewActive;
   }
 
   async upsertPullRequest(input: UpsertPullRequestInput): Promise<string> {
@@ -68,12 +61,10 @@ class FakeSink implements ReviewSink {
 
   async setReviewActive(id: string, active: boolean): Promise<void> {
     this.setActiveCalls.push({ id, active });
-    this.reviewActive = active;
   }
 
   async clearOnClose(id: string): Promise<void> {
     this.clearCalls.push(id);
-    this.reviewActive = false;
   }
 
   async enqueueReviewJob(input: EnqueueInput): Promise<string> {
@@ -144,7 +135,7 @@ describe('dispatchEvent', () => {
 
   // AC: PR opened with reviewActive=false → no ReviewJob.
   it('opened on an opted-out PR upserts but enqueues nothing', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(pr('opened'), sink, silentLogger);
     expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
     expect(sink.upserts).toHaveLength(1);
@@ -152,13 +143,15 @@ describe('dispatchEvent', () => {
     expect(sink.setActiveCalls).toHaveLength(0);
   });
 
-  // AC: @bot review enqueues a ReviewJob and flips reviewActive=true.
-  it('@bot review enqueues a logic job and flips reviewActive', async () => {
-    const sink = new FakeSink(false);
+  // AC: @bot review enqueues a ReviewJob (superseding any in-flight one) and
+  // flips reviewActive=true.
+  it('@bot review enqueues a logic job through the superseding path and flips reviewActive', async () => {
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(comment('@bot review'), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
     expect(sink.setActiveCalls).toEqual([{ id: 'pr:repo:tony-co/sandy#7', active: true }]);
-    expect(sink.enqueued).toEqual([
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.supersedingEnqueues).toEqual([
       {
         pullRequestId: 'pr:repo:tony-co/sandy#7',
         repoId: 'repo:tony-co/sandy',
@@ -172,117 +165,61 @@ describe('dispatchEvent', () => {
   // The enqueued ReviewJob carries the Repo's configured candidate Agents, not a
   // hardcoded Agent, so the persisted record matches what the worker will fan out.
   it('enqueues the configured candidate Agents from the injected resolver', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const resolveAgentKeys = vi.fn(() => ['logic', 'convex', 'security']);
     const outcome = await dispatchEvent(comment('@bot review'), sink, silentLogger, {
       resolveAgentKeys,
     });
     expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
     expect(resolveAgentKeys).toHaveBeenCalledWith(BASE_REPO);
-    expect(sink.enqueued[0]?.agentKeys).toEqual(['logic', 'convex', 'security']);
+    expect(sink.supersedingEnqueues[0]?.agentKeys).toEqual(['logic', 'convex', 'security']);
   });
 
-  // The same resolver drives the push path's superseding enqueue.
-  it('threads the resolver result through the superseding push enqueue', async () => {
-    const sink = new FakeSink(true);
-    const outcome = await dispatchEvent(pr('synchronize'), sink, silentLogger, {
+  // The same resolver drives the Re-run path's superseding enqueue.
+  it('threads the resolver result through the superseding re-run enqueue', async () => {
+    const sink = new FakeSink();
+    const outcome = await dispatchEvent(checkRun(), sink, silentLogger, {
       resolveAgentKeys: () => ['logic', 'nextjs'],
     });
-    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
+    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'rerun' });
     expect(sink.supersedingEnqueues[0]?.agentKeys).toEqual(['logic', 'nextjs']);
   });
 
   // An unregistered Repo resolves to no Agents; preserve that rather than masking
   // it with a logic fallback (the worker would resolve no Agents for it too).
   it('preserves an empty resolver result instead of falling back to logic', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(comment('@bot review'), sink, silentLogger, {
       resolveAgentKeys: () => [],
     });
     expect(outcome).toMatchObject({ action: 'enqueued' });
-    expect(sink.enqueued[0]?.agentKeys).toEqual([]);
+    expect(sink.supersedingEnqueues[0]?.agentKeys).toEqual([]);
   });
 
-  // AC: subsequent push to a reviewActive PR enqueues without a new mention.
-  it('synchronize on an opted-in PR enqueues a push job without re-flipping', async () => {
-    const sink = new FakeSink(true);
-    const outcome = await dispatchEvent(pr('synchronize'), sink, silentLogger);
-    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
-    expect(sink.setActiveCalls).toHaveLength(0);
-    expect(sink.supersedingEnqueues[0]).toMatchObject({
-      trigger: 'push',
-      agentKeys: ['logic'],
-    });
-  });
-
-  it('synchronize on an opted-out PR does nothing', async () => {
-    const sink = new FakeSink(false);
+  // Manual-only triggering: a push delivered as a `synchronize` PR event never
+  // re-reviews the PR, opted in or not.
+  it('does nothing on synchronize', async () => {
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(pr('synchronize'), sink, silentLogger);
     expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
     expect(sink.enqueued).toHaveLength(0);
+    expect(sink.supersedingEnqueues).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
   });
 
-  it('skips ready_for_review on an excluded base branch without enqueuing or commenting', async () => {
-    const info = vi.fn();
-    const sink = new FakeSink(false);
-    const commenter = new FakeForkDeclineCommenter();
-    const resolveExcludeBranches = vi.fn(() => ['release/*']);
-
-    const outcome = await dispatchEvent(
-      pr('ready_for_review', { baseRef: 'release/2026.06' }),
-      sink,
-      { info, warn: vi.fn() },
-      {
-        forkDeclineCommenter: commenter,
-        resolveExcludeBranches,
-      },
-    );
-
-    expect(outcome).toEqual({
-      action: 'skipped-base-branch-excluded',
-      repo: 'tony-co/sandy',
-      number: 7,
-      baseRef: 'release/2026.06',
-    });
-    expect(resolveExcludeBranches).toHaveBeenCalledWith(BASE_REPO);
+  // draft → ready no longer auto-reviews; the author runs `@bot review` instead.
+  it('does nothing on ready_for_review', async () => {
+    const sink = new FakeSink();
+    const outcome = await dispatchEvent(pr('ready_for_review'), sink, silentLogger);
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
     expect(sink.enqueued).toHaveLength(0);
     expect(sink.supersedingEnqueues).toHaveLength(0);
     expect(sink.setActiveCalls).toHaveLength(0);
-    expect(commenter.comments).toHaveLength(0);
-    expect(
-      info.mock.calls.some(
-        ([message]) =>
-          typeof message === 'string' &&
-          message.includes('tony-co/sandy#7') &&
-          message.includes('release/2026.06'),
-      ),
-    ).toBe(true);
-  });
-
-  it('lets an @bot review mention bypass base-branch exclusion', async () => {
-    const sink = new FakeSink(false);
-    const resolveExcludeBranches = vi.fn(() => ['release/*']);
-
-    const outcome = await dispatchEvent(
-      comment('@bot review', { baseRef: 'release/2026.06' }),
-      sink,
-      silentLogger,
-      { resolveExcludeBranches },
-    );
-
-    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'mention' });
-    expect(resolveExcludeBranches).not.toHaveBeenCalled();
-    expect(sink.setActiveCalls).toEqual([{ id: 'pr:repo:tony-co/sandy#7', active: true }]);
-    expect(sink.enqueued[0]).toMatchObject({
-      headSha: 'sha-7',
-      trigger: 'mention',
-      agentKeys: ['logic'],
-    });
   });
 
   // AC: PR close clears reviewActive.
   it('close clears reviewActive and enqueues nothing', async () => {
-    const sink = new FakeSink(true);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(pr('closed'), sink, silentLogger);
     expect(outcome).toMatchObject({ action: 'cleared' });
     expect(sink.clearCalls).toEqual(['pr:repo:tony-co/sandy#7']);
@@ -292,7 +229,7 @@ describe('dispatchEvent', () => {
   });
 
   it('captures bot comment reactions when a PR closes', async () => {
-    const sink = new FakeSink(true);
+    const sink = new FakeSink();
     const captured: Array<{
       repo: RepoRef;
       pullNumber: number;
@@ -322,7 +259,7 @@ describe('dispatchEvent', () => {
   });
 
   it('passes the PR lifecycle state to the close-time signal pass', async () => {
-    const sink = new FakeSink(true);
+    const sink = new FakeSink();
     const captured: Array<{ state: PullRequestFacts['state'] }> = [];
 
     await dispatchEvent(pr('closed', { state: 'merged' }), sink, silentLogger, {
@@ -339,7 +276,7 @@ describe('dispatchEvent', () => {
   });
 
   it('captures reply feedback for a review-comment reply without enqueuing a review', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const replies: Array<{
       repo: RepoRef;
       pullNumber: number;
@@ -383,7 +320,7 @@ describe('dispatchEvent', () => {
   });
 
   it('does not send PR Conversation comments to the reply capturer', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const replies: unknown[] = [];
 
     await dispatchEvent(
@@ -410,7 +347,7 @@ describe('dispatchEvent', () => {
   // AC: a fork PR is declined with a documented-limitation message, not reviewed.
   it('declines a fork PR on mention without upserting or enqueuing', async () => {
     const warn = vi.fn();
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const commenter = new FakeForkDeclineCommenter();
     const outcome = await dispatchEvent(
       comment('@bot review', { headRepo: { owner: 'forker', name: 'sandy' } }),
@@ -430,7 +367,7 @@ describe('dispatchEvent', () => {
 
   it('still declines a fork PR when posting the courtesy comment fails', async () => {
     const warn = vi.fn();
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(
       comment('@bot review', { headRepo: { owner: 'forker', name: 'sandy' } }),
       sink,
@@ -454,15 +391,17 @@ describe('dispatchEvent', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(FORK_DECLINE_MESSAGE));
   });
 
-  it('enqueues a push job for a direct push event on an opted-in PR', async () => {
-    const sink = new FakeSink(true);
+  it('does nothing on a direct push event', async () => {
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(push(), sink, silentLogger);
-    expect(outcome).toMatchObject({ action: 'enqueued', trigger: 'push' });
-    expect(sink.supersedingEnqueues[0]).toMatchObject({ headSha: 'sha-7', trigger: 'push' });
+    expect(outcome).toEqual({ action: 'noop', reason: 'no trigger' });
+    expect(sink.enqueued).toHaveLength(0);
+    expect(sink.supersedingEnqueues).toHaveLength(0);
+    expect(sink.setActiveCalls).toHaveLength(0);
   });
 
   it('enqueues a Check Run re-run through the superseding path even when opted out', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     sink.supersededJobIds = ['job:old-running'];
     const cancelled: string[][] = [];
 
@@ -494,12 +433,12 @@ describe('dispatchEvent', () => {
     expect(cancelled).toEqual([['job:old-running']]);
   });
 
-  it('supersedes active stale jobs and requests cancellation before returning a push enqueue', async () => {
-    const sink = new FakeSink(true);
+  it('supersedes active stale jobs and requests cancellation before returning a re-run enqueue', async () => {
+    const sink = new FakeSink();
     sink.supersededJobIds = ['job:old-running', 'job:old-pending'];
     const cancelled: string[][] = [];
 
-    const outcome = await dispatchEvent(push(), sink, silentLogger, {
+    const outcome = await dispatchEvent(checkRun(), sink, silentLogger, {
       reviewCanceller: {
         cancelReviewJobs(jobIds) {
           cancelled.push(jobIds);
@@ -510,7 +449,7 @@ describe('dispatchEvent', () => {
     expect(outcome).toEqual({
       action: 'enqueued',
       reviewJobId: 'job:1',
-      trigger: 'push',
+      trigger: 'rerun',
       supersededJobIds: ['job:old-running', 'job:old-pending'],
     });
     expect(sink.enqueued).toEqual([]);
@@ -519,7 +458,7 @@ describe('dispatchEvent', () => {
         pullRequestId: 'pr:repo:tony-co/sandy#7',
         repoId: 'repo:tony-co/sandy',
         headSha: 'sha-7',
-        trigger: 'push',
+        trigger: 'rerun',
         agentKeys: ['logic'],
       },
     ]);
@@ -529,7 +468,7 @@ describe('dispatchEvent', () => {
   // Finding #3: a mention on a closed PR must not enqueue, must not flip
   // reviewActive, and must not clobber the stored state back to 'open'.
   it('does not enqueue or re-arm on an @bot review mention on a closed PR', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(
       comment('@bot review', { state: 'closed' }),
       sink,
@@ -543,7 +482,7 @@ describe('dispatchEvent', () => {
   });
 
   it('does not enqueue or re-arm on an @bot review mention on a merged PR', async () => {
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(
       comment('@bot review', { state: 'merged' }),
       sink,
@@ -559,7 +498,7 @@ describe('dispatchEvent', () => {
   // like a fork — never enqueued against an unfetchable head SHA.
   it('declines a PR with an unknown (null) head repo without upserting or enqueuing', async () => {
     const warn = vi.fn();
-    const sink = new FakeSink(false);
+    const sink = new FakeSink();
     const outcome = await dispatchEvent(comment('@bot review', { headRepo: null }), sink, {
       info: vi.fn(),
       warn,

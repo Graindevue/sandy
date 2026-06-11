@@ -22,13 +22,11 @@ import type { RepoRef } from './events.js';
 export interface ReviewSink {
   /** Resolve `owner/name` to a Convex Repo id, provisioning it on first sight. */
   ensureRepo(repo: RepoRef, defaultBranch: string | undefined): Promise<string>;
-  /** The PR's current Sticky Opt-In flag, or `false` if Sandy hasn't seen it. */
-  getReviewActive(repoId: string, number: number): Promise<boolean>;
   /** Upsert the PullRequest row and return its id. */
   upsertPullRequest(input: UpsertPullRequestInput): Promise<string>;
-  /** Flip the Sticky Opt-In flag. */
+  /** Mark the PR as opted into reviews (opt-in state record). */
   setReviewActive(pullRequestId: string, active: boolean): Promise<void>;
-  /** Clear the Sticky Opt-In flag after a PR closes. */
+  /** Clear the opt-in flag after a PR closes. */
   clearOnClose(pullRequestId: string): Promise<void>;
   /** Enqueue a pending ReviewJob and return its id. */
   enqueueReviewJob(input: EnqueueInput): Promise<string>;
@@ -101,14 +99,6 @@ export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateS
         ? { owner: repo.owner, name: repo.name }
         : { owner: repo.owner, name: repo.name, defaultBranch },
     );
-  }
-
-  async getReviewActive(repoId: string, number: number): Promise<boolean> {
-    const pr = await this.#client.query(api.pullRequests.get, {
-      repoId: repoId as never,
-      number,
-    });
-    return pr?.reviewActive ?? false;
   }
 
   async upsertPullRequest(input: UpsertPullRequestInput): Promise<string> {

@@ -16,7 +16,7 @@ A single GitHub repository. Belongs to exactly one Product. Sandy clones each Re
 
 ## Review
 
-The act of running one or more Agents over a Pull Request. A Review produces a set of Findings. Reviews are triggered by webhook events: PR opened (only when configured), push to a PR with `reviewActive = true`, `@bot review` mention, or `gh pr ready` (draft → ready transition, unless Base-Branch Exclusion applies).
+The act of running one or more Agents over a Pull Request. A Review produces a set of Findings. Reviews are **manual-only** (ADR 0017): a Review starts when a human asks for one — an `@bot review` mention, or the Re-run control on the Review Status Check. Pushes, PR open, and `draft → ready` do **not** trigger a Review.
 
 ## ReviewJob
 
@@ -135,22 +135,29 @@ temporarily unavailable, Sandy still emits `<!-- bot:finding=<id> -->` so the
 reaction webhook can map feedback back to the Finding. Load-bearing — do not
 remove.
 
-## Base-Branch Exclusion
+## Review triggers (manual-only)
 
-A per-Repo denylist in `.config/bot.yaml` (`excludeBranches`) that names base
-branch glob patterns where Sandy must not auto-arm a Review on `gh pr ready`.
-It gates only the automatic draft → ready trigger: `@bot review` is an explicit
-human request and overrides the exclusion, after which Sticky Opt-In works as
-usual and pushes retrigger Reviews. Skips are quiet on the PR page (no comment)
-and show up only in logs/dispatch outcomes.
+The trigger model (ADR 0017). Sandy reviews only when a human asks: an
+`@bot review` mention on the PR, or the **Re-run** control on the Review Status
+Check. Nothing automatic starts a Review — pushes, PR open/reopen, and
+`draft → ready` are all no-ops. A trigger sets a `reviewActive` flag in Convex
+and PR close clears it, but the flag is **opt-in state only** — a record that the
+PR has been put under review. It no longer gates triggering; pushing new commits
+never re-reviews a PR, the author re-runs `@bot review` when ready for another
+pass.
 
-## Sticky Opt-In
-
-The Review trigger model. PRs do not auto-review on open. The first `@bot review` mention or non-excluded `gh pr ready` transition flips a `reviewActive` flag in Convex for that PR. Subsequent pushes to a `reviewActive` PR retrigger Reviews automatically, including when the PR targets a base branch that would have been excluded before a human manually opted it in. PR close clears the flag.
+_History_: earlier versions were reactive ("Sticky Opt-In") — once opted in,
+every push auto-retriggered a Review. That produced runaway churn (one PR drew 68
+ReviewJobs, 46 of them push-fired), so the model was changed to manual-only. See
+ADR 0017, which also retires Base-Branch Exclusion (the `excludeBranches` key is
+now inert; there is no automatic trigger left to gate).
 
 ## Cancel-on-Supersede
 
-When a new push lands during an in-flight Review, the running ReviewJob is marked `superseded`, its Apple Containers torn down, and a fresh ReviewJob queued for the new HEAD. Avoids reviewing stale SHAs.
+When a fresh Review is triggered (a new `@bot review` or a Re-run) while one is in
+flight for the same PR, the running ReviewJob is marked `superseded`, its Apple
+Containers torn down, and a current-HEAD ReviewJob reused or queued. Avoids
+reviewing stale SHAs and dedupes a double `@bot review` to one job.
 
 ## Sandcastle
 
