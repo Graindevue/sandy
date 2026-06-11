@@ -47,7 +47,7 @@ RUN set -eux; \
 # Install the package manager used by this monorepo. Use npm rather than Corepack
 # shims so pnpm is available non-interactively inside sandbox hooks. Pin to match
 # the repo's `packageManager` field so the lockfile resolves consistently.
-RUN npm install -g pnpm@10.0.0
+RUN npm install -g pnpm@10.34.1
 
 # Install the Codex CLI (codex agents) and agent source-lookup tooling (opensrc).
 RUN npm install -g @openai/codex@0.133.0 opensrc@0.7.2
@@ -63,7 +63,11 @@ WORKDIR /home/agent
 # (after the USER switch, so it is agent-owned) keeps it writable; the runtime
 # won't re-create / re-own a directory that already exists. The pnpm store mount
 # (~/.local/share/pnpm/store) is nested the same way, so pre-create its parent too.
-RUN mkdir -p ~/.config ~/.local/share/pnpm
+# The ~/.npmrc stops pnpm 10's manage-package-manager-versions self-switch: it
+# would try to download the repo-pinned pnpm on every invocation and fail in the
+# sandbox with "pnpm@X binary missing"; the baked pnpm above is the one that runs.
+RUN mkdir -p ~/.config ~/.local/share/pnpm \
+  && printf 'manage-package-manager-versions=false\n' > ~/.npmrc
 
 # Install Cursor Agent CLI (provides the `agent` binary that sandcastle's cursor
 # provider invokes — used by the planner). The installer writes to ~/.local/bin

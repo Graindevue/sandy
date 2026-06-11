@@ -1,4 +1,14 @@
-import type { AgentProvider, RunOptions, SandboxProvider } from '@ai-hero/sandcastle';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type {
+  AgentProvider,
+  BindMountCreateOptions,
+  ExecResult,
+  RunOptions,
+  SandboxProvider,
+} from '@ai-hero/sandcastle';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import type { RunAgentInput, RunnerPullRequest } from './sandcastle-runner.js';
@@ -90,7 +100,11 @@ describe('SandcastleRunner', () => {
       expect.objectContaining({
         imageName: 'sandy-agent',
         containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
-        env: { ANTHROPIC_API_KEY: 'sk-test' },
+        env: {
+          npm_config_manage_package_manager_versions: 'false',
+          npm_config_store_dir: '/home/agent/.local/share/pnpm/store',
+          ANTHROPIC_API_KEY: 'sk-test',
+        },
         mounts: expect.arrayContaining([
           expect.objectContaining({ sandboxPath: '/home/agent/.opensrc' }),
           expect.objectContaining({
@@ -214,6 +228,352 @@ describe('SandcastleRunner', () => {
         outputTokens: 44,
       },
     });
+  });
+});
+
+describe('SandcastleRunner.installDependencies', () => {
+  async function makeWorktree(files: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'sandy-runner-install-'));
+    for (const [name, content] of Object.entries(files)) {
+      await writeFile(join(dir, name), content);
+    }
+    return dir;
+  }
+
+  interface InstallHarness {
+    runner: SandcastleRunner;
+    createCalls: unknown[];
+    createOptions: BindMountCreateOptions[];
+    execCommands: string[];
+    closeCount: () => number;
+  }
+
+  function makeHarness(
+    execResult: ExecResult | (() => Promise<ExecResult>),
+    options: { installTimeoutMs?: number; nodeModulesCacheDir?: string } = {},
+  ): InstallHarness {
+    const createCalls: unknown[] = [];
+    const createOptions: BindMountCreateOptions[] = [];
+    const execCommands: string[] = [];
+    let closed = 0;
+
+    const provider: SandboxProvider = {
+      tag: 'bind-mount',
+      name: 'apple-container',
+      env: {},
+      sandboxHomedir: '/home/agent',
+      create: async (create: BindMountCreateOptions) => {
+        createOptions.push(create);
+        return {
+          worktreePath: '/home/agent/workspace',
+          exec: async (command: string) => {
+            execCommands.push(command);
+            return typeof execResult === 'function' ? await execResult() : execResult;
+          },
+          copyFileIn: async () => {},
+          copyFileOut: async () => {},
+          close: async () => {
+            closed += 1;
+          },
+        };
+      },
+    };
+
+    const runner = new SandcastleRunner({
+      imageName: 'sandy-agent',
+      env: { ANTHROPIC_API_KEY: 'sk-test' },
+      ...(options.installTimeoutMs !== undefined
+        ? { installTimeoutMs: options.installTimeoutMs }
+        : {}),
+      ...(options.nodeModulesCacheDir !== undefined
+        ? { nodeModulesCacheDir: options.nodeModulesCacheDir }
+        : {}),
+      createAppleContainer: (containerOptions) => {
+        createCalls.push(containerOptions);
+        return provider;
+      },
+      createAgentProvider: () => fakeAgentProvider('claude'),
+    });
+
+    return { runner, createCalls, createOptions, execCommands, closeCount: () => closed };
+  }
+
+  it('runs the detected install in a one-shot VM on the worktree', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': '' });
+    const harness = makeHarness({ stdout: 'done', stderr: '', exitCode: 0 });
+
+    try {
+      const result = await harness.runner.installDependencies({ worktreePath });
+
+      expect(result).toEqual({
+        status: 'installed',
+        packageManager: 'pnpm',
+        command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+        durationMs: expect.any(Number),
+      });
+      expect(harness.execCommands).toEqual([
+        'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+      ]);
+      expect(harness.createCalls).toEqual([
+        expect.objectContaining({
+          imageName: 'sandy-agent',
+          containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
+        }),
+      ]);
+      expect(harness.createOptions).toEqual([
+        expect.objectContaining({
+          worktreePath,
+          mounts: [{ hostPath: worktreePath, sandboxPath: '/home/agent/workspace' }],
+          env: expect.objectContaining({
+            npm_config_manage_package_manager_versions: 'false',
+            npm_config_store_dir: '/home/agent/.local/share/pnpm/store',
+          }),
+        }),
+      ]);
+      expect(harness.closeCount()).toBe(1);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('mounts the parent gitdir so repo prepare scripts can run git', async () => {
+    const worktreePath = await makeWorktree({
+      'package.json': '{}',
+      'pnpm-lock.yaml': '',
+      '.git': 'gitdir: /Users/op/.sandy/repos/Acme/widget/.git/worktrees/job-1\n',
+    });
+    const harness = makeHarness({ stdout: '', stderr: '', exitCode: 0 });
+
+    try {
+      await harness.runner.installDependencies({ worktreePath });
+
+      expect(harness.createOptions[0]?.mounts).toEqual([
+        { hostPath: worktreePath, sandboxPath: '/home/agent/workspace' },
+        {
+          hostPath: '/Users/op/.sandy/repos/Acme/widget/.git',
+          sandboxPath: '/Users/op/.sandy/repos/Acme/widget/.git',
+        },
+      ]);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds the worktree from the per-Repo cache and refreshes it after install', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': 'deps: v2' });
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'sandy-nm-cache-'));
+    const seedDir = join(cacheRoot, 'acme', 'widget');
+    await mkdir(join(seedDir, 'node_modules'), { recursive: true });
+    await writeFile(join(seedDir, 'node_modules', 'seeded.txt'), 'from cache');
+    await writeFile(join(seedDir, 'lockfile.sha256'), 'stale-hash\n');
+
+    let nodeModulesSeededAtExecTime = false;
+    const harness = makeHarness(
+      async () => {
+        nodeModulesSeededAtExecTime = await stat(join(worktreePath, 'node_modules', 'seeded.txt'))
+          .then(() => true)
+          .catch(() => false);
+        // The "install" adds a file, as a real lockfile-drift patch would.
+        await writeFile(join(worktreePath, 'node_modules', 'installed.txt'), 'from install');
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+      { nodeModulesCacheDir: cacheRoot },
+    );
+
+    try {
+      const result = await harness.runner.installDependencies({
+        worktreePath,
+        cacheKey: 'acme/widget',
+      });
+
+      expect(result).toMatchObject({ status: 'installed' });
+      expect(nodeModulesSeededAtExecTime).toBe(true);
+      // The stale seed was replaced by the post-install tree and re-keyed.
+      await expect(readFile(join(seedDir, 'node_modules', 'installed.txt'), 'utf8')).resolves.toBe(
+        'from install',
+      );
+      const recordedHash = (await readFile(join(seedDir, 'lockfile.sha256'), 'utf8')).trim();
+      expect(recordedHash).toBe(createHash('sha256').update('deps: v2').digest('hex'));
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+      await rm(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not refresh the seed cache when the install fails', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': 'deps: v3' });
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'sandy-nm-cache-'));
+    const harness = makeHarness(
+      { stdout: '', stderr: 'ERR_PNPM_OUTDATED_LOCKFILE', exitCode: 1 },
+      { nodeModulesCacheDir: cacheRoot },
+    );
+
+    try {
+      await expect(
+        harness.runner.installDependencies({ worktreePath, cacheKey: 'acme/widget' }),
+      ).resolves.toMatchObject({ status: 'failed' });
+      await expect(stat(join(cacheRoot, 'acme', 'widget'))).rejects.toThrow();
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+      await rm(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed install with the command and the output tail', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': '' });
+    const harness = makeHarness({
+      stdout: '',
+      stderr: 'ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY broken lockfile',
+      exitCode: 1,
+    });
+
+    try {
+      await expect(harness.runner.installDependencies({ worktreePath })).resolves.toEqual({
+        status: 'failed',
+        command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+        error: 'ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY broken lockfile',
+      });
+      expect(harness.closeCount()).toBe(1);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('skips without creating a VM when no toolchain is detected', async () => {
+    const worktreePath = await makeWorktree({ 'README.md': 'not a JS repo' });
+    const harness = makeHarness({ stdout: '', stderr: '', exitCode: 0 });
+
+    try {
+      await expect(harness.runner.installDependencies({ worktreePath })).resolves.toEqual({
+        status: 'skipped',
+        reason: 'no package.json or supported lockfile in the worktree',
+      });
+      expect(harness.createCalls).toEqual([]);
+      expect(harness.execCommands).toEqual([]);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed install when the command exceeds the install timeout', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': '' });
+    const harness = makeHarness(() => new Promise<ExecResult>(() => {}), {
+      installTimeoutMs: 20,
+    });
+
+    try {
+      await expect(harness.runner.installDependencies({ worktreePath })).resolves.toEqual({
+        status: 'failed',
+        command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+        error: 'install exceeded 20ms',
+      });
+      expect(harness.closeCount()).toBe(1);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('rethrows the abort reason and tears the VM down when cancelled mid-install', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': '' });
+    let execStarted!: () => void;
+    const execStartedPromise = new Promise<void>((resolve) => {
+      execStarted = resolve;
+    });
+    const harness = makeHarness(() => {
+      execStarted();
+      return new Promise<ExecResult>(() => {});
+    });
+    const abortController = new AbortController();
+    const reason = new Error('superseded');
+
+    try {
+      const install = harness.runner.installDependencies({
+        worktreePath,
+        signal: abortController.signal,
+      });
+      await execStartedPromise;
+      abortController.abort(reason);
+      await expect(install).rejects.toBe(reason);
+      expect(harness.closeCount()).toBe(1);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects without creating a VM when already aborted', async () => {
+    const worktreePath = await makeWorktree({ 'package.json': '{}', 'pnpm-lock.yaml': '' });
+    const harness = makeHarness({ stdout: '', stderr: '', exitCode: 0 });
+    const abortController = new AbortController();
+    const reason = new Error('superseded');
+    abortController.abort(reason);
+
+    try {
+      await expect(
+        harness.runner.installDependencies({
+          worktreePath,
+          signal: abortController.signal,
+        }),
+      ).rejects.toBe(reason);
+      expect(harness.createOptions).toEqual([]);
+      expect(harness.closeCount()).toBe(0);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildReviewPrompt sandbox toolchain context', () => {
+  it('omits the toolchain section when no install result is present', () => {
+    expect(buildReviewPrompt(reviewPromptInput(logicAgent))).not.toContain('Sandbox toolchain');
+  });
+
+  it('tells Agents tests are runnable after a successful install', () => {
+    const prompt = buildReviewPrompt({
+      ...reviewPromptInput(logicAgent),
+      dependencyInstall: {
+        status: 'installed',
+        packageManager: 'pnpm',
+        command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+        durationMs: 42_000,
+      },
+    });
+
+    expect(prompt).toContain('Sandbox toolchain');
+    expect(prompt).toContain('Dependencies are installed');
+    expect(prompt).toContain(
+      'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+    );
+    expect(prompt).toContain('completed in 42s');
+    expect(prompt).toContain('Do NOT re-run a dependency install');
+  });
+
+  it('warns Agents off package-manager commands when the install failed', () => {
+    const prompt = buildReviewPrompt({
+      ...reviewPromptInput(logicAgent),
+      dependencyInstall: {
+        status: 'failed',
+        command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+        error: 'registry unreachable',
+      },
+    });
+
+    expect(prompt).toContain('Dependency install FAILED');
+    expect(prompt).toContain('registry unreachable');
+    expect(prompt).toContain('Do NOT run package-manager or test commands');
+    expect(prompt).toContain('mark it unverified');
+  });
+
+  it('warns Agents off package-manager commands when the install was skipped', () => {
+    const prompt = buildReviewPrompt({
+      ...reviewPromptInput(logicAgent),
+      dependencyInstall: {
+        status: 'skipped',
+        reason: 'no package.json or supported lockfile in the worktree',
+      },
+    });
+
+    expect(prompt).toContain('No dependency install ran for this Review');
+    expect(prompt).toContain('Do NOT run package-manager or test commands');
   });
 });
 

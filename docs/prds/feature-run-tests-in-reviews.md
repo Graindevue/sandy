@@ -1,6 +1,9 @@
 # Feature — Run tests inside reviews
 
-Status: Draft
+Status: Implemented 2026-06-12 (dependency install + detection + pnpm self-switch fix
++ per-Agent toolchain banner; shared-install mechanics resolved as a host-side
+node_modules seed cache — a mounted pnpm store proved unusable over virtiofs;
+Review Status Check surfacing still open)
 Owner: Tony
 Target: Review Agents can execute the target Repo's test suite inside the sandbox, so test-coverage and Convex findings are verified by running tests instead of guessed from the diff.
 

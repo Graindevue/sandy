@@ -90,6 +90,78 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
+  it('installs dependencies once per Review and threads the result into every Agent run', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const installResult = {
+      status: 'installed' as const,
+      packageManager: 'pnpm' as const,
+      command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+      durationMs: 12_000,
+    };
+    const installCalls: { worktreePath: string; cacheKey?: string }[] = [];
+    const agentInstalls: unknown[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async ({ dependencyInstall }) => {
+          agentInstalls.push(dependencyInstall);
+          return runnerOutput(findingsOutput([]));
+        },
+        installDependencies: async ({ worktreePath, cacheKey }) => {
+          installCalls.push({ worktreePath, cacheKey });
+          return installResult;
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(installCalls).toEqual([
+      { worktreePath: '/tmp/worktree/acme/widget/job-1', cacheKey: 'acme/widget' },
+    ]);
+    expect(agentInstalls).toEqual([installResult, installResult]);
+    expect(store.completed).toHaveLength(1);
+  });
+
+  it('degrades to a failed install result and still completes when the install step throws', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const warnings: string[] = [];
+    const agentInstalls: unknown[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async ({ dependencyInstall }) => {
+          agentInstalls.push(dependencyInstall);
+          return runnerOutput(findingsOutput([finding]));
+        },
+        installDependencies: async () => {
+          throw new Error('container failed to start');
+        },
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+      logger: { warn: (message) => warnings.push(message) },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(agentInstalls).toEqual([{ status: 'failed', error: 'container failed to start' }]);
+    expect(store.completed).toHaveLength(1);
+    expect(store.failed).toEqual([]);
+    expect(warnings.join('\n')).toContain('container failed to start');
+  });
+
   it('runs selected Agents concurrently and records each Agent result', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const cloneManager = new FakeCloneManager();

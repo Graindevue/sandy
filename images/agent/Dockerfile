@@ -60,7 +60,7 @@ RUN set -eux; \
 # `codex login` auth.json stays format-compatible with the in-container
 # `codex exec`. Pinned for reproducible builds; bump as needed.
 RUN CXXFLAGS="-std=c++20" npm install -g \
-  pnpm@10.0.0 \
+  pnpm@10.34.1 \
   opensrc@0.7.2 \
   tree-sitter-cli@0.26.8 \
   tree-sitter@0.21.1 \
@@ -83,6 +83,16 @@ RUN chmod 0755 /usr/local/bin/tree_sitter_query
 # missing or non-numeric, and checks that it matches the expected UID.
 USER ${AGENT_UID}:${AGENT_GID}
 WORKDIR /home/agent
+
+# pnpm 10 defaults manage-package-manager-versions=true, so every invocation
+# tries to replace itself with the reviewed Repo's pinned `packageManager`
+# version — a registry download that fails in the sandbox and surfaced as
+# "pnpm@X binary missing" during reviews. Pin the baked pnpm as the one that
+# runs. Pre-create the pnpm-store and npm-cache mount points agent-owned:
+# Apple `container` creates missing bind-mount parents as root, which would
+# leave ~/.local/share unwritable for the agent user.
+RUN printf 'manage-package-manager-versions=false\n' > /home/agent/.npmrc \
+  && mkdir -p /home/agent/.local/share/pnpm /home/agent/.npm
 
 # Sandcastle bind-mounts the git worktree at /home/agent/workspace, overrides the
 # working directory there at container start, then execs Agent commands.

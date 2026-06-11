@@ -23,6 +23,7 @@ import {
   type ReviewCancellationRegistry,
   ReviewSupersededError,
 } from './cancellation.js';
+import type { DependencyInstallResult } from './dependency-install.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
   PostedReviewResult,
@@ -160,8 +161,19 @@ export interface ReviewAgentRunner {
     apiSurfaceManifest?: string;
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
     botConfig?: ReviewBotContext;
+    dependencyInstall?: DependencyInstallResult;
     signal?: AbortSignal;
   }): Promise<AgentRunResult>;
+  /**
+   * Install the reviewed Repo's dependencies into the PR worktree, once per
+   * Review and before the Agent fan-out. Optional: runners without sandbox
+   * install support skip the step and Agents see no toolchain context.
+   */
+  installDependencies?(input: {
+    worktreePath: string;
+    cacheKey?: string;
+    signal?: AbortSignal;
+  }): Promise<DependencyInstallResult>;
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
@@ -231,6 +243,7 @@ interface AgentExecutionInput {
   workspace: AgentWorkspace;
   manifest: ApiSurfaceManifestBuildResult | undefined;
   reviewBotConfig: ReviewBotContext;
+  dependencyInstall: DependencyInstallResult | undefined;
   cancellationSignal: AbortSignal | undefined;
 }
 
@@ -362,7 +375,25 @@ export class ReviewExecutor {
       worktrees.push(...workspace.worktrees);
       await this.#store.recordSiblingShas(jobId, workspace.siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
+      // Manifest build and dependency install are independent of each other,
+      // so they run concurrently. allSettled keeps the slower one from being
+      // orphaned mid-flight (and rejecting unhandled) when the other throws.
+      const [manifestSettled, installSettled] = await Promise.allSettled([
+        this.#buildAndRecordManifest(context, workspace.manifestRepos),
+        this.#installWorkspaceDependencies(
+          workspace.prWorktree.path,
+          `${context.repo.owner}/${context.repo.name}`,
+          cancellationSignal,
+        ),
+      ]);
+      if (manifestSettled.status === 'rejected') {
+        throw manifestSettled.reason;
+      }
+      if (installSettled.status === 'rejected') {
+        throw installSettled.reason;
+      }
+      const manifest = manifestSettled.value;
+      const dependencyInstall = installSettled.value;
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const reviewBotConfig = await this.#resolveReviewBotConfig({
         context,
@@ -383,6 +414,7 @@ export class ReviewExecutor {
         workspace,
         manifest,
         reviewBotConfig,
+        dependencyInstall,
         cancellationSignal,
       });
       let postedReview: PostedReviewResult | null = null;
@@ -450,12 +482,50 @@ export class ReviewExecutor {
     });
   }
 
+  /**
+   * Run the once-per-Review dependency install when the runner supports it.
+   * Install failures degrade the Review to static analysis — loudly, via the
+   * warn log here and the toolchain banner in every Agent prompt — instead of
+   * failing it. Only abort/supersede propagates as a throw.
+   */
+  async #installWorkspaceDependencies(
+    worktreePath: string,
+    cacheKey: string,
+    signal: AbortSignal | undefined,
+  ): Promise<DependencyInstallResult | undefined> {
+    const install = this.#runner.installDependencies;
+    if (install === undefined) {
+      return undefined;
+    }
+
+    let result: DependencyInstallResult;
+    try {
+      result = await install.call(this.#runner, {
+        worktreePath,
+        cacheKey,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (error) {
+      if (isReviewSupersededError(error) || signal?.aborted === true) {
+        throw error;
+      }
+      result = { status: 'failed', error: describeError(error) };
+    }
+    if (result.status === 'failed') {
+      this.#logger.warn(
+        `Review dependency install failed; Agents will review statically: ${result.error}`,
+      );
+    }
+    return result;
+  }
+
   async #runSelectedAgents(input: {
     context: ReviewJobContext;
     agents: readonly AgentDefinition[];
     workspace: AgentWorkspace;
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
+    dependencyInstall: DependencyInstallResult | undefined;
     cancellationSignal: AbortSignal | undefined;
   }): Promise<SelectedAgentReviewResults> {
     const results = await Promise.allSettled(
@@ -753,6 +823,9 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
   }
   if (input.workspace.siblingWorktrees.length > 0) {
     runInput.siblingWorktrees = input.workspace.siblingWorktrees;
+  }
+  if (input.dependencyInstall !== undefined) {
+    runInput.dependencyInstall = input.dependencyInstall;
   }
   return runInput;
 }

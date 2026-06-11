@@ -1,14 +1,19 @@
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import {
   type AgentProvider,
+  type BindMountSandboxHandle,
   type CodexOptions,
   type CopilotOptions,
   claudeCode,
   codex,
   copilot,
   cursor,
+  type ExecResult,
   type IterationResult,
   type RunOptions,
   type RunResult,
@@ -17,6 +22,7 @@ import {
 } from '@ai-hero/sandcastle';
 import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
+import { type DependencyInstallResult, detectDependencyInstall } from './dependency-install.js';
 
 export interface AppleContainerRunnerOptions {
   readonly imageName?: string;
@@ -53,6 +59,17 @@ export interface RunAgentInput {
   apiSurfaceManifest?: string;
   siblingWorktrees?: readonly RunnerSiblingWorktree[];
   botConfig?: ReviewBotContext;
+  dependencyInstall?: DependencyInstallResult;
+  signal?: AbortSignal;
+}
+
+export interface InstallDependenciesInput {
+  worktreePath: string;
+  /**
+   * Stable per-Repo key (e.g. `owner/name`) for the host-side node_modules
+   * seed cache. Without it the install still works but never reuses a seed.
+   */
+  cacheKey?: string;
   signal?: AbortSignal;
 }
 
@@ -72,6 +89,10 @@ export interface SandcastleRunnerOptions {
   imageName?: string;
   /** Environment exposed to the Agent provider and sandbox. */
   env?: Record<string, string>;
+  /** Hard cap on the once-per-Review dependency install. Default: 15 minutes. */
+  installTimeoutMs?: number;
+  /** Root of the per-Repo node_modules seed cache. Default: ~/.sandy/node-modules-cache. */
+  nodeModulesCacheDir?: string;
   run?: SandcastleRun;
   createAppleContainer?: AppleContainerFactory;
   createAgentProvider?: AgentProviderFactory;
@@ -79,6 +100,40 @@ export interface SandcastleRunnerOptions {
 
 const DEFAULT_AGENT_IMAGE = 'sandy-agent';
 const OPEN_SRC_SANDBOX_CACHE = '/home/agent/.opensrc';
+/** Where sandcastle bind-mounts the review worktree inside every Agent VM. */
+const WORKSPACE_SANDBOX_PATH = '/home/agent/workspace';
+/**
+ * Host-side per-Repo node_modules seed cache. Bind-mounting a persistent
+ * pnpm store into the VM is unusable at real-repo scale — virtiofs per-file
+ * latency means just walking graindevue's 85k-file store takes ~53s and a
+ * warm install exceeded 10 minutes — so the package-manager store stays
+ * VM-local and dies with the install VM. Instead, a successful install seeds
+ * this cache with an APFS-clonefile copy of the worktree's node_modules, and
+ * later Reviews clone it back host-side (native FS speed) before the VM
+ * starts; the in-VM install then only verifies and patches lockfile drift.
+ */
+const NODE_MODULES_CACHE_DIR = join(homedir(), '.sandy', 'node-modules-cache');
+const PNPM_STORE_SANDBOX_PATH = '/home/agent/.local/share/pnpm/store';
+const SEED_COPY_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * pnpm settings injected into every VM, in pnpm's snake_case env form (the
+ * dashed form is silently ignored — verified against pnpm 10.34).
+ *
+ * - manage_package_manager_versions: pnpm 10 defaults this to true, making
+ *   every invocation try to replace itself with the Repo's pinned
+ *   `packageManager` version — a registry download that broke review
+ *   sandboxes with "pnpm@X binary missing" (PR graindevue#236). The baked
+ *   image also disables it via ~/.npmrc; the env covers stale images.
+ * - store_dir: pnpm keeps one store per drive, and the bind-mounted worktree
+ *   is a different device than the VM root — without the explicit VM-local
+ *   path pnpm silently creates a throwaway `.pnpm-store` inside the PR
+ *   worktree, littering it and dragging store I/O back onto virtiofs.
+ */
+const PACKAGE_MANAGER_ENV: Record<string, string> = {
+  npm_config_manage_package_manager_versions: 'false',
+  npm_config_store_dir: PNPM_STORE_SANDBOX_PATH,
+};
 const CODEX_AUTH_SANDBOX_PATH = '/home/agent/.codex/auth.json';
 const CODEX_AUTH_STAGE_DIR = join(homedir(), '.sandy', 'codex');
 const CODEX_AUTH_STAGE_FILE = join(CODEX_AUTH_STAGE_DIR, 'auth.json');
@@ -92,16 +147,108 @@ type AppleContainerProviderModule = {
 export class SandcastleRunner {
   readonly #imageName: string;
   readonly #env: Record<string, string>;
+  readonly #installTimeoutMs: number;
+  readonly #nodeModulesCacheDir: string;
   readonly #run: SandcastleRun;
   readonly #createAppleContainer: AppleContainerFactory;
   readonly #createAgentProvider: AgentProviderFactory;
 
   constructor(options: SandcastleRunnerOptions = {}) {
     this.#imageName = options.imageName ?? DEFAULT_AGENT_IMAGE;
-    this.#env = options.env ?? {};
+    this.#env = { ...PACKAGE_MANAGER_ENV, ...options.env };
+    this.#installTimeoutMs = options.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
+    this.#nodeModulesCacheDir = options.nodeModulesCacheDir ?? NODE_MODULES_CACHE_DIR;
     this.#run = options.run ?? run;
     this.#createAppleContainer = options.createAppleContainer ?? createDefaultAppleContainer;
     this.#createAgentProvider = options.createAgentProvider ?? createAgentProvider;
+  }
+
+  /**
+   * Install the reviewed Repo's dependencies into the shared worktree, once
+   * per Review and before the Agent fan-out. The worktree is seeded host-side
+   * from the per-Repo node_modules cache when one exists, then a dedicated
+   * one-shot VM (same image as the Agents) runs the lockfile-faithful install
+   * — a near-no-op verification on a fresh seed. The Linux-native
+   * node_modules lands in the bind-mounted worktree, visible to every Agent
+   * VM. Failures are reported, not thrown — the Review degrades to static
+   * analysis with a loud signal in each Agent prompt. Only an abort
+   * (cancellation/supersede) propagates as a throw.
+   */
+  async installDependencies(input: InstallDependenciesInput): Promise<DependencyInstallResult> {
+    const detected = await detectDependencyInstall(input.worktreePath);
+    if (detected === null) {
+      return { status: 'skipped', reason: 'no package.json or supported lockfile in the worktree' };
+    }
+
+    const seed = await seedCacheFor(
+      input.worktreePath,
+      input.cacheKey,
+      detected.lockfile,
+      this.#nodeModulesCacheDir,
+    );
+    if (seed !== null) {
+      await seedWorktreeFromCache(seed);
+    }
+    const provider = await this.#createAppleContainer({
+      imageName: this.#imageName,
+      containerNamePrefix: SANDY_WORKER_CONTAINER_PREFIX,
+      env: this.#env,
+    });
+    if (provider.tag !== 'bind-mount') {
+      return {
+        status: 'skipped',
+        reason: `sandbox provider ${JSON.stringify(provider.name)} does not support bind-mount installs`,
+      };
+    }
+
+    input.signal?.throwIfAborted();
+    const startedAt = Date.now();
+    let handle: BindMountSandboxHandle;
+    try {
+      handle = await provider.create({
+        worktreePath: input.worktreePath,
+        hostRepoPath: input.worktreePath,
+        mounts: [
+          { hostPath: input.worktreePath, sandboxPath: WORKSPACE_SANDBOX_PATH },
+          ...(await resolveWorktreeGitMounts(input.worktreePath)),
+        ],
+        env: this.#env,
+      });
+    } catch (error) {
+      return { status: 'failed', command: detected.command, error: describeInstallError(error) };
+    }
+
+    try {
+      const result = await execWithDeadline(handle, detected.command, {
+        timeoutMs: this.#installTimeoutMs,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      });
+      if (result === 'timeout') {
+        return {
+          status: 'failed',
+          command: detected.command,
+          error: `install exceeded ${this.#installTimeoutMs}ms`,
+        };
+      }
+      if (result.exitCode !== 0) {
+        return {
+          status: 'failed',
+          command: detected.command,
+          error: tailForError(result.stderr !== '' ? result.stderr : result.stdout),
+        };
+      }
+      if (seed !== null) {
+        await refreshSeedCache(seed);
+      }
+      return {
+        status: 'installed',
+        packageManager: detected.packageManager,
+        command: detected.command,
+        durationMs: Date.now() - startedAt,
+      };
+    } finally {
+      await handle.close();
+    }
   }
 
   async runAgent(input: RunAgentInput): Promise<AgentRunResult> {
@@ -248,6 +395,205 @@ async function stageCodexAuth(): Promise<string> {
   return CODEX_AUTH_STAGE_FILE;
 }
 
+/**
+ * Run a command in the sandbox, bounded by a deadline and an abort signal.
+ * The handle's exec has no cancellation of its own; the caller's `finally`
+ * close() tears the VM down, which terminates a still-running command. An
+ * abort rethrows the signal's reason so supersede/cancel semantics flow
+ * through unchanged; a deadline resolves to 'timeout' so the caller can
+ * report it as a failed install instead of failing the Review.
+ */
+async function execWithDeadline(
+  handle: BindMountSandboxHandle,
+  command: string,
+  options: { timeoutMs: number; signal?: AbortSignal },
+): Promise<ExecResult | 'timeout'> {
+  const execPromise = handle.exec(command);
+  // The exec settles after close() on the timeout/abort paths; without a
+  // handler its rejection would surface as an unhandled rejection.
+  execPromise.catch(() => {});
+
+  let timeout: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<ExecResult | 'timeout'>((resolve, reject) => {
+      timeout = setTimeout(() => resolve('timeout'), options.timeoutMs);
+      if (options.signal !== undefined) {
+        const signal = options.signal;
+        onAbort = () => reject(signal.reason ?? new Error('Dependency install was aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      execPromise.then(resolve, reject);
+    });
+  } finally {
+    clearTimeout(timeout);
+    if (options.signal !== undefined && onAbort !== undefined) {
+      options.signal.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+const execFileAsync = promisify(execFile);
+
+interface SeedCache {
+  /** Worktree's node_modules destination. */
+  worktreeNodeModules: string;
+  /** Per-Repo cache directory holding the seed. */
+  cacheDir: string;
+  /** Cached node_modules tree inside cacheDir. */
+  seedNodeModules: string;
+  /** File recording the lockfile hash the seed was built from. */
+  hashFile: string;
+  /** Hash of the worktree's current lockfile. */
+  lockfileHash: string;
+}
+
+async function seedCacheFor(
+  worktreePath: string,
+  cacheKey: string | undefined,
+  lockfile: string | undefined,
+  cacheRoot: string,
+): Promise<SeedCache | null> {
+  if (cacheKey === undefined || lockfile === undefined) {
+    return null;
+  }
+  const segments = cacheKey.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return null;
+  }
+  let lockfileHash: string;
+  try {
+    lockfileHash = createHash('sha256')
+      .update(await readFile(join(worktreePath, lockfile)))
+      .digest('hex');
+  } catch {
+    return null;
+  }
+  const cacheDir = join(cacheRoot, ...segments);
+  return {
+    worktreeNodeModules: join(worktreePath, 'node_modules'),
+    cacheDir,
+    seedNodeModules: join(cacheDir, 'node_modules'),
+    hashFile: join(cacheDir, 'lockfile.sha256'),
+    lockfileHash,
+  };
+}
+
+/**
+ * Clone the cached node_modules into the fresh worktree, host-side, before
+ * the install VM starts. `cp -c` clones via APFS copy-on-write, so even a
+ * multi-gigabyte seed lands in seconds; the in-VM install then verifies the
+ * tree instead of materializing it file-by-file over virtiofs. Best-effort:
+ * any failure removes the partial copy so it cannot poison the install.
+ */
+async function seedWorktreeFromCache(seed: SeedCache): Promise<void> {
+  if (!(await pathExists(seed.seedNodeModules)) || (await pathExists(seed.worktreeNodeModules))) {
+    return;
+  }
+  try {
+    await execFileAsync('cp', ['-c', '-R', seed.seedNodeModules, seed.worktreeNodeModules], {
+      timeout: SEED_COPY_TIMEOUT_MS,
+    });
+  } catch {
+    await rm(seed.worktreeNodeModules, { recursive: true, force: true });
+  }
+}
+
+/**
+ * After a successful install, clone the worktree's node_modules back into
+ * the per-Repo cache — but only when the lockfile changed since the seed was
+ * built, so unchanged Reviews skip the copy entirely. Staged into a unique
+ * sibling directory and swapped in by rename, so concurrent Reviews of the
+ * same Repo can race without corrupting the seed. Best-effort: a failed
+ * refresh leaves the previous seed in place.
+ */
+async function refreshSeedCache(seed: SeedCache): Promise<void> {
+  try {
+    const recordedHash = await readFile(seed.hashFile, 'utf8').then(
+      (content) => content.trim(),
+      () => '',
+    );
+    if (recordedHash === seed.lockfileHash && (await pathExists(seed.seedNodeModules))) {
+      return;
+    }
+    if (!(await pathExists(seed.worktreeNodeModules))) {
+      return;
+    }
+    await mkdir(seed.cacheDir, { recursive: true });
+    const unique = `${process.pid}-${Date.now()}`;
+    const staging = `${seed.seedNodeModules}.staging-${unique}`;
+    const discard = `${seed.seedNodeModules}.discard-${unique}`;
+    try {
+      await execFileAsync('cp', ['-c', '-R', seed.worktreeNodeModules, staging], {
+        timeout: SEED_COPY_TIMEOUT_MS,
+      });
+      if (await pathExists(seed.seedNodeModules)) {
+        await rename(seed.seedNodeModules, discard);
+      }
+      await rename(staging, seed.seedNodeModules);
+      await writeFile(seed.hashFile, `${seed.lockfileHash}\n`);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+      await rm(discard, { recursive: true, force: true });
+    }
+  } catch {
+    // Seeding is an accelerator, never a correctness requirement.
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Make git work inside the install VM the same way sandcastle does for the
+ * Agent VMs: a review worktree's `.git` is a file whose `gitdir:` points at
+ * the host clone's `.git/worktrees/<name>`, so mount the clone's `.git`
+ * directory at its identical host path. Repo `prepare` scripts need this —
+ * graindevue's `lefthook install` dies with "not a git repository" without
+ * it. Returns no mounts when the worktree has no git metadata at all.
+ */
+async function resolveWorktreeGitMounts(
+  worktreePath: string,
+): Promise<{ hostPath: string; sandboxPath: string }[]> {
+  const gitPath = join(worktreePath, '.git');
+  try {
+    const gitStat = await stat(gitPath);
+    if (gitStat.isDirectory()) {
+      return [];
+    }
+    const match = (await readFile(gitPath, 'utf8')).trim().match(/^gitdir:\s*(.+)$/);
+    if (match?.[1] === undefined) {
+      return [];
+    }
+    const parentGitDir = resolve(match[1], '..', '..');
+    return [{ hostPath: parentGitDir, sandboxPath: parentGitDir }];
+  } catch {
+    return [];
+  }
+}
+
+const INSTALL_ERROR_TAIL_CHARS = 2000;
+
+function tailForError(output: string): string {
+  const trimmed = output.trim();
+  if (trimmed === '') {
+    return 'install command produced no output';
+  }
+  return trimmed.length <= INSTALL_ERROR_TAIL_CHARS
+    ? trimmed
+    : `… ${trimmed.slice(-INSTALL_ERROR_TAIL_CHARS)}`;
+}
+
+function describeInstallError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function createDefaultAppleContainer(
   options?: AppleContainerRunnerOptions,
 ): Promise<SandboxProvider> {
@@ -299,6 +645,7 @@ Use this manifest as a trigger for Cross-Repo Search. It lists public surface an
 
 ${input.apiSurfaceManifest.trim()}
 `;
+  const toolchainContext = formatDependencyInstallContext(input.dependencyInstall);
   return `${input.agent.systemPrompt}
 
 Review PR #${pr.number}: ${pr.title}
@@ -309,6 +656,7 @@ Base ref: ${pr.baseRef}
 Head SHA: ${pr.headSha}
 ${siblingContext}
 ${manifestContext}
+${toolchainContext}
 ${formatReviewBotContext(input.botConfig)}
 ${AGENT_PRIOR_CONTRACT}
 ${formatSourceVerificationContract(input.agent)}
@@ -353,6 +701,43 @@ You are running inside the checked-out PR worktree. Review the diff and emit exa
 
 The finding above is an illustrative shape, not a real finding. "anchor" is REQUIRED on every finding and must be an object with repo/path/lineStart/lineEnd on an in-diff line. Omit "crossRepoReferences" unless you confirmed affected sibling-Repo consumers. Emit "findings": [] when you find nothing.
 `;
+}
+
+/**
+ * Tell every Agent, explicitly, whether the sandbox can run package scripts.
+ * When the install succeeded the Agents may execute tests for verified
+ * Findings; when it was skipped or failed they must not burn their execution
+ * budget discovering that pnpm/vitest cannot work (the pre-install failure
+ * mode behind the logic Agent's timeouts on PR graindevue#236).
+ */
+function formatDependencyInstallContext(result: DependencyInstallResult | undefined): string {
+  if (result === undefined) {
+    return '';
+  }
+  switch (result.status) {
+    case 'installed':
+      return `
+Sandbox toolchain:
+- Dependencies are installed: \`${result.command}\` completed in ${Math.round(result.durationMs / 1000)}s before this Review. node_modules is present in the worktree.
+- You MAY run the Repo's package scripts and tests directly (e.g. \`${result.packageManager} test\` or the test runner on specific files). Run the narrowest relevant test first.
+- Do NOT re-run a dependency install; it already happened.
+- In a monorepo, a test that fails to resolve a workspace package's entry needs that package built first — build only what the test imports (e.g. \`pnpm --filter <package> build\`), never the whole Repo.
+`;
+    case 'skipped':
+      return `
+Sandbox toolchain:
+- No dependency install ran for this Review: ${result.reason}.
+- node_modules is NOT available. Do NOT run package-manager or test commands (pnpm/npm/yarn/bun install, test runners, tsc) — they will fail and waste your execution budget.
+- Limit yourself to static analysis. If a Finding would need test execution to confirm, state the hypothesis with the evidence you have and mark it unverified.
+`;
+    case 'failed':
+      return `
+Sandbox toolchain:
+- Dependency install FAILED before this Review${result.command !== undefined ? ` (\`${result.command}\`)` : ''}: ${result.error}
+- node_modules is NOT available. Do NOT run package-manager or test commands (pnpm/npm/yarn/bun install, test runners, tsc) — they will fail and waste your execution budget.
+- Limit yourself to static analysis. If a Finding would need test execution to confirm, state the hypothesis with the evidence you have and mark it unverified.
+`;
+  }
 }
 
 function formatSourceVerificationContract(agent: AgentDefinition): string {
