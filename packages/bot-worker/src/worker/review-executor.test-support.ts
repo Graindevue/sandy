@@ -1,4 +1,10 @@
-import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
+import type {
+  AgentDefinition,
+  AgentRunUsage,
+  Finding,
+  ReviewJobStatus,
+  SiblingShas,
+} from '@sandy/shared-types';
 import type {
   RecordAgentRunInput,
   RecordSynthesizedReviewInput,
@@ -343,11 +349,17 @@ export class FakeDiffInspector implements ReviewDiffInspector {
 export class FakeRunner implements ReviewAgentRunner {
   calls: Array<Parameters<ReviewAgentRunner['runAgent']>[0]> = [];
 
-  constructor(private readonly stdout: string) {}
+  constructor(
+    private readonly stdout: string,
+    private readonly usage?: AgentRunUsage,
+  ) {}
 
-  async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]): Promise<string> {
+  async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]) {
     this.calls.push(input);
-    return this.stdout;
+    return {
+      stdout: this.stdout,
+      ...(this.usage !== undefined ? { usage: this.usage } : {}),
+    };
   }
 }
 

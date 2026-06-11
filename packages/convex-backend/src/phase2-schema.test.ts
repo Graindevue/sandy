@@ -167,6 +167,63 @@ describe('Phase 2 Convex schema handlers', () => {
     );
   });
 
+  it('persists optional Agent Run usage only when supplied', async () => {
+    const ctx = fakeCtx();
+
+    const reviewJobId = await invoke(enqueue, ctx, {
+      pullRequestId: 'pullRequests:1',
+      repoId: 'repos:1',
+      headSha: 'head-sha',
+      trigger: 'mention',
+      agentKeys: ['logic', 'security'],
+    });
+
+    const withUsageId = await invoke(recordAgentRun, ctx, {
+      reviewJobId,
+      agentKey: 'logic',
+      status: 'completed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 1,
+      usage: {
+        inputTokens: 11,
+        cacheCreationInputTokens: 22,
+        cacheReadInputTokens: 33,
+        outputTokens: 44,
+      },
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only local implementation changed; no cross-repo contract risk was detected.',
+      },
+    });
+    const withoutUsageId = await invoke(recordAgentRun, ctx, {
+      reviewJobId,
+      agentKey: 'security',
+      status: 'completed',
+      startedAt: 300,
+      finishedAt: 400,
+      findingCount: 0,
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only local implementation changed; no cross-repo contract risk was detected.',
+      },
+    });
+
+    expect(ctx.db.getDoc(withUsageId)).toEqual(
+      expect.objectContaining({
+        usage: {
+          inputTokens: 11,
+          cacheCreationInputTokens: 22,
+          cacheReadInputTokens: 33,
+          outputTokens: 44,
+        },
+      }),
+    );
+    expect(ctx.db.getDoc(withoutUsageId)).not.toHaveProperty('usage');
+  });
+
   it('clears reviewActive without clobbering a merged PR state', async () => {
     const ctx = fakeCtx();
     const pullRequestId = await ctx.db.insert('pullRequests', {

@@ -72,7 +72,7 @@ describe('ReviewExecutor Review Status Check', () => {
           if (agent.key === 'logic') {
             throw new Error('container exited with status 1');
           }
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       resolveAgents: () => [logicAgent, securityAgent],
@@ -171,7 +171,7 @@ describe('ReviewExecutor Review Status Check', () => {
       runner: {
         runAgent: async () => {
           store.status = 'superseded';
-          return findingsOutput([finding], 'One issue.');
+          return runnerOutput(findingsOutput([finding], 'One issue.'));
         },
       },
       now: nextNow([100, 200, 300]),
@@ -310,6 +310,10 @@ describe('ReviewExecutor Review Status Check', () => {
     );
   });
 });
+
+function runnerOutput(stdout: string) {
+  return { stdout };
+}
 
 function makeExecutor(options: {
   store?: FakeExecutionStore;

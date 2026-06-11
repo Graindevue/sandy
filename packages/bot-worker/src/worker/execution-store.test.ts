@@ -132,6 +132,12 @@ describe('ConvexExecutionStore', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 0,
+      usage: {
+        inputTokens: 11,
+        cacheCreationInputTokens: 22,
+        cacheReadInputTokens: 33,
+        outputTokens: 44,
+      },
       crossRepoSearch: {
         status: 'skipped',
         trigger: 'none',
@@ -146,12 +152,44 @@ describe('ConvexExecutionStore', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 0,
+      usage: {
+        inputTokens: 11,
+        cacheCreationInputTokens: 22,
+        cacheReadInputTokens: 33,
+        outputTokens: 44,
+      },
       crossRepoSearch: {
         status: 'skipped',
         trigger: 'none',
         rationale: 'Only CSS changed; no cross-repo contract risk was detected.',
       },
     });
+  });
+
+  it('omits Agent run usage when no usage was supplied', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordAgentRun({
+      reviewJobId: 'job-1',
+      agentKey: 'security',
+      status: 'failed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      error: 'Agent crashed',
+    });
+
+    expect(client.mutations[0]?.args).toEqual({
+      reviewJobId: 'job-1',
+      agentKey: 'security',
+      status: 'failed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      error: 'Agent crashed',
+    });
+    expect(client.mutations[0]?.args).not.toHaveProperty('usage');
   });
 });
 

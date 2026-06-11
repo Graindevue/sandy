@@ -9,12 +9,13 @@ import {
   codex,
   copilot,
   cursor,
+  type IterationResult,
   type RunOptions,
   type RunResult,
   run,
   type SandboxProvider,
 } from '@ai-hero/sandcastle';
-import type { AgentDefinition } from '@sandy/shared-types';
+import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
 
 export interface AppleContainerRunnerOptions {
@@ -55,7 +56,12 @@ export interface RunAgentInput {
   signal?: AbortSignal;
 }
 
-type SandcastleRun = (options: RunOptions) => Promise<Pick<RunResult, 'stdout'>>;
+export interface AgentRunResult {
+  stdout: string;
+  usage?: AgentRunUsage;
+}
+
+type SandcastleRun = (options: RunOptions) => Promise<Pick<RunResult, 'stdout' | 'iterations'>>;
 type AppleContainerFactory = (
   options?: AppleContainerRunnerOptions,
 ) => SandboxProvider | Promise<SandboxProvider>;
@@ -98,7 +104,7 @@ export class SandcastleRunner {
     this.#createAgentProvider = options.createAgentProvider ?? createAgentProvider;
   }
 
-  async runAgent(input: RunAgentInput): Promise<string> {
+  async runAgent(input: RunAgentInput): Promise<AgentRunResult> {
     const mounts: { hostPath: string; sandboxPath: string; readonly?: boolean }[] = [
       { hostPath: join(homedir(), '.opensrc'), sandboxPath: OPEN_SRC_SANDBOX_CACHE },
     ];
@@ -141,8 +147,38 @@ export class SandcastleRunner {
 
     const result = await this.#run(runOptions);
 
-    return result.stdout;
+    const usage = aggregateAgentRunUsage(result.iterations);
+    return {
+      stdout: result.stdout,
+      ...(usage !== undefined ? { usage } : {}),
+    };
   }
+}
+
+export function aggregateAgentRunUsage(
+  iterations: readonly Pick<IterationResult, 'usage'>[],
+): AgentRunUsage | undefined {
+  let aggregate: AgentRunUsage | undefined;
+  for (const iteration of iterations) {
+    const usage = iteration.usage;
+    if (usage === undefined) {
+      continue;
+    }
+    if (aggregate === undefined) {
+      aggregate = {
+        inputTokens: usage.inputTokens,
+        cacheCreationInputTokens: usage.cacheCreationInputTokens,
+        cacheReadInputTokens: usage.cacheReadInputTokens,
+        outputTokens: usage.outputTokens,
+      };
+      continue;
+    }
+    aggregate.inputTokens += usage.inputTokens;
+    aggregate.cacheCreationInputTokens += usage.cacheCreationInputTokens;
+    aggregate.cacheReadInputTokens += usage.cacheReadInputTokens;
+    aggregate.outputTokens += usage.outputTokens;
+  }
+  return aggregate;
 }
 
 /**

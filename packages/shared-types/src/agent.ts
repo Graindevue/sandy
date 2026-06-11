@@ -63,6 +63,14 @@ export type AgentRunId = string;
 /** Status of a single Agent's execution within a Review. */
 export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'timed_out';
 
+/** Token usage reported for one AgentRun. */
+export interface AgentRunUsage {
+  inputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  outputTokens: number;
+}
+
 /** A record of one Agent executing within a Review. */
 export interface AgentRun {
   id: AgentRunId;
@@ -78,6 +86,8 @@ export interface AgentRun {
   findingCount: number;
   /** Agent-reported Cross-Repo Search trigger/skip rationale for this run. */
   crossRepoSearch?: CrossRepoSearchRationale;
+  /** Aggregated token usage reported by the Agent runtime, when available. */
+  usage?: AgentRunUsage;
   /** Failure reason when `status === 'failed'`. */
   error?: string;
 }
