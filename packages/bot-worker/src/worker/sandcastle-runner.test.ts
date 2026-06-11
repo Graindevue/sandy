@@ -142,6 +142,46 @@ describe('SandcastleRunner', () => {
     expect(prompt).toContain('Record the verification in the Finding.evidence');
     expect(prompt).toContain('Memory or generic training knowledge is not evidence');
   });
+
+  it('adds token-discipline guidance for every Agent prompt', () => {
+    const prompts = [
+      buildReviewPrompt({
+        agent: logicAgent,
+        worktreePath: '/tmp/sandy/worktrees/job-1',
+        pullRequest: {
+          owner: 'acme',
+          repo: 'widget',
+          number: 12,
+          headSha: 'abc123',
+          baseRef: 'main',
+          title: 'Fix cache key',
+          url: 'https://github.com/acme/widget/pull/12',
+        },
+      }),
+      buildReviewPrompt({
+        agent: { ...logicAgent, key: 'nextjs', tools: ['read_file', 'rg', 'opensrc'] },
+        worktreePath: '/tmp/sandy/worktrees/job-1',
+        pullRequest: {
+          owner: 'acme',
+          repo: 'widget',
+          number: 12,
+          headSha: 'abc123',
+          baseRef: 'main',
+          title: 'Fix cache key',
+          url: 'https://github.com/acme/widget/pull/12',
+        },
+      }),
+    ];
+
+    for (const prompt of prompts) {
+      expect(prompt).toContain('Token discipline');
+      expect(prompt).toContain('Prefer locating symbols with search (`rg`) before opening files');
+      expect(prompt).toContain('Prefer reading focused line ranges over whole files');
+      expect(prompt).toContain('Prefer running the narrowest relevant test');
+      expect(prompt).toContain('Avoid pasting full command logs');
+      expect(prompt).toContain('preserve exact file paths, line numbers, and error text');
+    }
+  });
 });
 
 describe('createAgentProvider', () => {

@@ -253,6 +253,7 @@ ${manifestContext}
 ${formatReviewBotContext(input.botConfig)}
 ${formatAgentPriorContract()}
 ${formatSourceVerificationContract(input.agent)}
+${formatTokenDisciplineContract()}
 
 Cross-Repo Search contract:
 - The reviewed Repo (${pr.owner}/${pr.repo}) is your current working directory. Sibling Repos, when present, are mounted read-only at the paths listed above; each mount maps to the shown owner/name Repo at its recorded default-branch SHA.
@@ -317,6 +318,16 @@ Framework source verification:
 - Useful pattern: run \`opensrc path <package>\`, then search the returned source path for the touched API or symbol with \`rg\`.
 - Record the verification in the Finding.evidence: package name, installed version from the ApiSurfaceManifest when available, source path or symbol inspected, and the behavior confirmed.
 - Memory or generic training knowledge is not evidence for a framework-behavior claim. If installed source contradicts the suspicion, or you cannot verify enough for the Finding's confidence, suppress the Finding.`;
+}
+
+function formatTokenDisciplineContract(): string {
+  return `
+
+Token discipline:
+- Prefer locating symbols with search (\`rg\`) before opening files, then read only the relevant matches.
+- Prefer reading focused line ranges over whole files when a range is enough to verify behavior.
+- Prefer running the narrowest relevant test first, then broaden only as needed.
+- Avoid pasting full command logs into your output. Summarize noisy logs, but preserve exact file paths, line numbers, and error text needed to support Findings.`;
 }
 
 function formatReviewBotContext(config: ReviewBotContext | undefined): string {
