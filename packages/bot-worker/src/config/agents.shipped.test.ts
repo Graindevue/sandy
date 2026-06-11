@@ -19,6 +19,7 @@ const shippedAgentsDir = join(repoRoot, 'agents');
 const RTK_PROMPT_CONTRACT = [
   '## Tool Output',
   'When `rtk` is available, prefix test/log-producing shell commands with it',
+  'If `rtk` is not available, run the same commands normally',
   'Never use `rtk` on `git diff` or anywhere exact untransformed output matters',
 ] as const;
 
@@ -55,6 +56,18 @@ describe('shipped agents/', () => {
     expect(testCoverage.tools).toEqual(['read_file', 'rg', 'git_diff']);
     for (const expectedText of RTK_PROMPT_CONTRACT) {
       expect(testCoverage.systemPrompt).toContain(expectedText);
+    }
+  });
+
+  it('keeps RTK guidance scoped to the test-coverage Agent', async () => {
+    const agents = await loadAgentDefinitions(shippedAgentsDir);
+
+    for (const [agentKey, agent] of agents) {
+      if (agentKey === 'test-coverage') {
+        continue;
+      }
+
+      expect(agent.systemPrompt).not.toMatch(/\brtk\b/i);
     }
   });
 });
