@@ -9,8 +9,9 @@
 #
 # Build with `pnpm sandcastle:build-image`, which aligns the image UID/GID to the
 # host so bind-mounted worktree files share an owner. The provider verifies the
-# image's numeric USER matches the expected UID at runtime.
-FROM node:24-bookworm
+# image's numeric USER matches the expected UID at runtime. Trixie provides the
+# glibc version required by RTK's official arm64 Linux binary.
+FROM node:24-trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -63,7 +64,9 @@ RUN CXXFLAGS="-std=c++20" npm install -g \
 # PATH so Reviews never need to download it at runtime.
 ARG RTK_VERSION=0.42.3
 RUN set -eux; \
-  case "$(dpkg --print-architecture)" in \
+  arch="$(dpkg --print-architecture)"; \
+  rtk_tmp="$(mktemp -d)"; \
+  case "$arch" in \
     amd64) \
       rtk_target="x86_64-unknown-linux-musl"; \
       rtk_sha256="5df764a633709cb85d248258d085d24ec95faa8bca0e6835a93cd57cadc4eb9e"; \
@@ -73,15 +76,15 @@ RUN set -eux; \
       rtk_sha256="2b7fa09d06f8dbf334c55482fad2e7ce4a1f8564bc9ed1f65d9f5992db8e5527"; \
       ;; \
     *) \
-      echo "Unsupported architecture for rtk: $(dpkg --print-architecture)" >&2; \
+      echo "Unsupported architecture for rtk: $arch" >&2; \
       exit 1; \
       ;; \
   esac; \
-  curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${rtk_target}.tar.gz" -o /tmp/rtk.tar.gz; \
-  echo "${rtk_sha256}  /tmp/rtk.tar.gz" | sha256sum -c -; \
-  tar -xzf /tmp/rtk.tar.gz -C /usr/local/bin rtk; \
-  chmod 0755 /usr/local/bin/rtk; \
-  rm /tmp/rtk.tar.gz; \
+  curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${rtk_target}.tar.gz" -o "$rtk_tmp/rtk.tar.gz"; \
+  echo "${rtk_sha256}  $rtk_tmp/rtk.tar.gz" | sha256sum -c -; \
+  tar -xzf "$rtk_tmp/rtk.tar.gz" -C "$rtk_tmp" rtk; \
+  install -m 0755 "$rtk_tmp/rtk" /usr/local/bin/rtk; \
+  rm -rf "$rtk_tmp"; \
   rtk --version
 
 COPY tree_sitter_query.mjs /usr/local/bin/tree_sitter_query
