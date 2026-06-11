@@ -16,6 +16,8 @@ import { loadAgentDefinitions } from './agents.js';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 const shippedAgentsDir = join(repoRoot, 'agents');
 
+const RTK_TRIAL_AGENT_KEY = 'test-coverage';
+const RTK_PROMPT_REFERENCE = /\brtk\b/i;
 const RTK_PROMPT_CONTRACT = [
   '## Tool Output',
   'When `rtk` is available, prefix test/log-producing shell commands with it',
@@ -48,7 +50,7 @@ describe('shipped agents/', () => {
 
   it('ships RTK guidance in the test-coverage Agent without changing its runtime contract', async () => {
     const agents = await loadAgentDefinitions(shippedAgentsDir);
-    const testCoverage = requireAgent(agents, 'test-coverage');
+    const testCoverage = requireAgent(agents, RTK_TRIAL_AGENT_KEY);
 
     expect(testCoverage.vendor).toBe('claude');
     expect(testCoverage.model).toBe('haiku');
@@ -61,14 +63,11 @@ describe('shipped agents/', () => {
 
   it('keeps RTK guidance scoped to the test-coverage Agent', async () => {
     const agents = await loadAgentDefinitions(shippedAgentsDir);
+    const agentsMentioningRtk = Array.from(agents.values())
+      .filter((agent) => RTK_PROMPT_REFERENCE.test(agent.systemPrompt))
+      .map((agent) => agent.key);
 
-    for (const [agentKey, agent] of agents) {
-      if (agentKey === 'test-coverage') {
-        continue;
-      }
-
-      expect(agent.systemPrompt).not.toMatch(/\brtk\b/i);
-    }
+    expect(agentsMentioningRtk).toEqual([RTK_TRIAL_AGENT_KEY]);
   });
 });
 
