@@ -67,11 +67,11 @@ describe('ReviewExecutor', () => {
       { id: 'finding-1', archetypeId: 'archetype-1', finding },
     ]);
     expect(poster.results[0]?.siblingShas).toEqual({});
-    expect(poster.results[0]?.summary).toContain('Confidence score: 2/5');
+    expect(poster.results[0]?.summary).toContain('Confidence score: 3/5');
     expect(poster.results[0]?.summary).toContain(
       'Cross-repo search:\n- logic: skipped (none) - No cross-repo contract risk was detected.',
     );
-    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 2 }]);
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 3 }]);
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
       {
@@ -193,7 +193,7 @@ describe('ReviewExecutor', () => {
         finding: duplicateSecurityFinding,
       }),
     ]);
-    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 5 }]);
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 0 }]);
     expect(poster.results).toHaveLength(1);
     expect(poster.results[0]?.findings).toEqual([
       { id: 'finding-1', archetypeId: 'archetype-1', finding: duplicateSecurityFinding },

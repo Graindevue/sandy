@@ -32,7 +32,7 @@ const target: PullRequestTarget = {
   headSha: 'abc123',
 };
 
-const noFindingsSummary = 'Confidence score: 0/5\n\nSandy review: no findings posted.';
+const noFindingsSummary = 'Confidence score: 5/5\n\nSandy review: no findings posted.';
 const oneFindingSummary = 'Confidence score: 3/5\n\nSandy review posted 1 finding.';
 const twoFindingsSummary = 'Confidence score: 3/5\n\nSandy review posted 2 findings.';
 const consumerReference: CrossRepoReference = {

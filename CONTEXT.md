@@ -61,6 +61,13 @@ A single issue raised by an Agent during a Review. Carries:
 
 Stored in Convex; persists across PRs for learning purposes.
 
+## Confidence Score
+
+A single Review-level score, 0–5, expressing how confident Sandy is that the reviewed code is good: **5 means clean** (no findings, or nothing worth lowering it for), **0 means many or severe findings**. The Synthesizer computes it from the Review's Findings and persists it on the ReviewJob; it is rendered on the summary comment and reported by `@bot status`. A larger or cross-repo blast radius pushes it **down**.
+
+Its direction is the **opposite** of a Finding's per-`confidence` field: a Finding's `confidence` rises as Sandy grows more sure that finding is a *real problem* (bad for the PR), whereas the Confidence Score rises as the *whole change* looks safer. Both render as `X/5` — do not conflate them, and do not re-align one to match the other.
+_Avoid_: risk score (it used to be inverted — higher meant worse; it no longer does)
+
 ## Archetype
 
 A cluster of Findings that are semantically similar. Identified via embedding
