@@ -257,6 +257,28 @@ async function createDefaultAppleContainer(
   return appleContainer(options);
 }
 
+const AGENT_PRIOR_CONTRACT = `
+
+Agent priors and active Rules:
+- Treat Agent-specific examples in the system prompt as non-exhaustive seed knowledge, not as a complete checklist.
+- Product Rules and Repo-local Rules in this prompt are active, version-controlled instructions for this Review. If an active Rule conflicts with a seed example, follow the Rule.
+- If a Rule and a seed example point at the same issue, emit at most one Finding and cite the strongest concrete evidence.`;
+const SOURCE_VERIFICATION_CONTRACT = `
+
+Framework source verification:
+- Do not fetch dependency source preemptively. First inspect the diff, local code, ApiSurfaceManifest, and available local types/config.
+- Before emitting a Finding whose correctness depends on framework or library behavior, verify that behavior against the installed version's source with opensrc. Local types/config can guide the search, but training memory or type-shape guesses do not prove runtime behavior.
+- Useful pattern: run \`opensrc path <package>\`, then search the returned source path for the touched API or symbol with \`rg\`.
+- Record the verification in the Finding.evidence: package name, installed version from the ApiSurfaceManifest when available, source path or symbol inspected, and the behavior confirmed.
+- Memory or generic training knowledge is not evidence for a framework-behavior claim. If installed source contradicts the suspicion, or you cannot verify enough for the Finding's confidence, suppress the Finding.`;
+const TOKEN_DISCIPLINE_CONTRACT = `
+
+Token discipline:
+- Prefer locating symbols with search (\`rg\`) before opening files, then read only the relevant matches.
+- Prefer reading focused line ranges over whole files when a range is enough to verify behavior.
+- Prefer running the narrowest relevant test first, then broaden only as needed.
+- Avoid pasting full command logs into your output. Summarize noisy logs, but preserve exact file paths, line numbers, and error text needed to support Findings.`;
+
 export function buildReviewPrompt(input: RunAgentInput): string {
   const pr = input.pullRequest;
   const siblingContext =
@@ -288,8 +310,9 @@ Head SHA: ${pr.headSha}
 ${siblingContext}
 ${manifestContext}
 ${formatReviewBotContext(input.botConfig)}
-${formatAgentPriorContract()}
+${AGENT_PRIOR_CONTRACT}
 ${formatSourceVerificationContract(input.agent)}
+${TOKEN_DISCIPLINE_CONTRACT}
 
 Cross-Repo Search contract:
 - The reviewed Repo (${pr.owner}/${pr.repo}) is your current working directory. Sibling Repos, when present, are mounted read-only at the paths listed above; each mount maps to the shown owner/name Repo at its recorded default-branch SHA.
@@ -332,28 +355,12 @@ The finding above is an illustrative shape, not a real finding. "anchor" is REQU
 `;
 }
 
-function formatAgentPriorContract(): string {
-  return `
-
-Agent priors and active Rules:
-- Treat Agent-specific examples in the system prompt as non-exhaustive seed knowledge, not as a complete checklist.
-- Product Rules and Repo-local Rules in this prompt are active, version-controlled instructions for this Review. If an active Rule conflicts with a seed example, follow the Rule.
-- If a Rule and a seed example point at the same issue, emit at most one Finding and cite the strongest concrete evidence.`;
-}
-
 function formatSourceVerificationContract(agent: AgentDefinition): string {
   if (!agent.tools.includes('opensrc')) {
     return '';
   }
 
-  return `
-
-Framework source verification:
-- Do not fetch dependency source preemptively. First inspect the diff, local code, ApiSurfaceManifest, and available local types/config.
-- Before emitting a Finding whose correctness depends on framework or library behavior, verify that behavior against the installed version's source with opensrc. Local types/config can guide the search, but training memory or type-shape guesses do not prove runtime behavior.
-- Useful pattern: run \`opensrc path <package>\`, then search the returned source path for the touched API or symbol with \`rg\`.
-- Record the verification in the Finding.evidence: package name, installed version from the ApiSurfaceManifest when available, source path or symbol inspected, and the behavior confirmed.
-- Memory or generic training knowledge is not evidence for a framework-behavior claim. If installed source contradicts the suspicion, or you cannot verify enough for the Finding's confidence, suppress the Finding.`;
+  return SOURCE_VERIFICATION_CONTRACT;
 }
 
 function formatReviewBotContext(config: ReviewBotContext | undefined): string {
