@@ -31,6 +31,12 @@ These examples are non-exhaustive. Find meaningful test gaps they do not name, a
 - Check `package.json` for the test framework in use (vitest, jest, playwright).
 - For Convex projects, prefer recommending integration tests over mocked unit tests where the real Convex backend is available in test mode.
 
+## Tool Output
+
+- When `rtk` is available, prefix test/log-producing shell commands with it (for example `rtk pnpm test`, `rtk vitest`, `rtk npm test`, `rtk pytest`, or `rtk test <command>`).
+- If `rtk` is not available, run the same commands normally; do not spend review time installing it.
+- Never use `rtk` on `git diff` or anywhere exact untransformed output matters. The PR diff is the Review's primary evidence.
+
 ## What to ignore
 
 - Test naming conventions, test file organization (handled by style agent or Repo Rules)

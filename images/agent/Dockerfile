@@ -3,8 +3,9 @@
 # Purpose-built per ADR 0009 (NOT copied from graindevue). A lean image that
 # sandcastle launches via @sandy/apple-container-provider to run review Agents.
 # Ships the tools the default Agents declare (rg, tree-sitter, git, gh), plus
-# `opensrc` for framework-source lookup (ADR 0008) and the agent CLIs the review
-# Agents use — claude-code (vendor: claude) and codex (vendor: codex).
+# `opensrc` for framework-source lookup (ADR 0008), `rtk` for the test-coverage
+# output-compression trial, and the agent CLIs the review Agents use —
+# claude-code (vendor: claude) and codex (vendor: codex).
 #
 # Build with `pnpm sandcastle:build-image`, which aligns the image UID/GID to the
 # host so bind-mounted worktree files share an owner. The provider verifies the
@@ -57,6 +58,31 @@ RUN CXXFLAGS="-std=c++20" npm install -g \
   @anthropic-ai/claude-code@2.1.153 \
   @openai/codex@0.134.0 \
   && CXXFLAGS="-std=c++20" npm rebuild -g tree-sitter tree-sitter-javascript tree-sitter-typescript
+
+# RTK trial for the test-coverage Agent: install the CLI proxy into the global
+# PATH so Reviews never need to download it at runtime.
+ARG RTK_VERSION=0.42.3
+RUN set -eux; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) \
+      rtk_target="x86_64-unknown-linux-musl"; \
+      rtk_sha256="5df764a633709cb85d248258d085d24ec95faa8bca0e6835a93cd57cadc4eb9e"; \
+      ;; \
+    arm64) \
+      rtk_target="aarch64-unknown-linux-gnu"; \
+      rtk_sha256="2b7fa09d06f8dbf334c55482fad2e7ce4a1f8564bc9ed1f65d9f5992db8e5527"; \
+      ;; \
+    *) \
+      echo "Unsupported architecture for rtk: $(dpkg --print-architecture)" >&2; \
+      exit 1; \
+      ;; \
+  esac; \
+  curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${rtk_target}.tar.gz" -o /tmp/rtk.tar.gz; \
+  echo "${rtk_sha256}  /tmp/rtk.tar.gz" | sha256sum -c -; \
+  tar -xzf /tmp/rtk.tar.gz -C /usr/local/bin rtk; \
+  chmod 0755 /usr/local/bin/rtk; \
+  rm /tmp/rtk.tar.gz; \
+  rtk --version
 
 COPY tree_sitter_query.mjs /usr/local/bin/tree_sitter_query
 RUN chmod 0755 /usr/local/bin/tree_sitter_query

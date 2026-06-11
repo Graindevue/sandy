@@ -29,6 +29,18 @@ describe('shipped agents/', () => {
     expect(logic?.vendor).toBe('codex');
     expect(logic?.tools.length).toBeGreaterThan(0);
     expect(logic?.systemPrompt.length).toBeGreaterThan(0);
+    const testCoverage = agents.get('test-coverage');
+    expect(testCoverage?.vendor).toBe('claude');
+    expect(testCoverage?.model).toBe('haiku');
+    expect(testCoverage?.maxIterations).toBe(15);
+    expect(testCoverage?.tools).toEqual(['read_file', 'rg', 'git_diff']);
+    expect(testCoverage?.systemPrompt).toContain('## Tool Output');
+    expect(testCoverage?.systemPrompt).toContain(
+      'When `rtk` is available, prefix test/log-producing shell commands with it',
+    );
+    expect(testCoverage?.systemPrompt).toContain(
+      'Never use `rtk` on `git diff` or anywhere exact untransformed output matters',
+    );
     // Each definition carries the required fields.
     for (const agent of agents.values()) {
       expect(agent.name.length).toBeGreaterThan(0);
