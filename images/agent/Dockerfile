@@ -9,9 +9,19 @@
 #
 # Build with `pnpm sandcastle:build-image`, which aligns the image UID/GID to the
 # host so bind-mounted worktree files share an owner. The provider verifies the
-# image's numeric USER matches the expected UID at runtime. Trixie provides the
-# glibc version required by RTK's official arm64 Linux binary.
-FROM node:24-trixie
+# image's numeric USER matches the expected UID at runtime.
+
+# rtk is compiled from source because upstream publishes no static (musl) arm64
+# Linux binary, and its prebuilt aarch64-gnu binary wants a newer glibc than
+# Bookworm ships. Building on the same Bookworm generation links rtk against the
+# runtime image's own glibc instead of upgrading the base OS for every Agent.
+# The commit pin is tag v0.42.3; Cargo.lock at that commit makes --locked
+# reproducible.
+FROM rust:1-bookworm AS rtk-builder
+ARG RTK_COMMIT=de78d70aee86fe6b7b5c2462820a1b6c250d425b
+RUN cargo install --locked --git https://github.com/rtk-ai/rtk --rev "${RTK_COMMIT}" rtk --root /opt/rtk
+
+FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -60,32 +70,11 @@ RUN CXXFLAGS="-std=c++20" npm install -g \
   @openai/codex@0.134.0 \
   && CXXFLAGS="-std=c++20" npm rebuild -g tree-sitter tree-sitter-javascript tree-sitter-typescript
 
-# RTK trial for the test-coverage Agent: install the CLI proxy into the global
-# PATH so Reviews never need to download it at runtime.
-ARG RTK_VERSION=0.42.3
-RUN set -eux; \
-  arch="$(dpkg --print-architecture)"; \
-  rtk_tmp="$(mktemp -d)"; \
-  case "$arch" in \
-    amd64) \
-      rtk_target="x86_64-unknown-linux-musl"; \
-      rtk_sha256="5df764a633709cb85d248258d085d24ec95faa8bca0e6835a93cd57cadc4eb9e"; \
-      ;; \
-    arm64) \
-      rtk_target="aarch64-unknown-linux-gnu"; \
-      rtk_sha256="2b7fa09d06f8dbf334c55482fad2e7ce4a1f8564bc9ed1f65d9f5992db8e5527"; \
-      ;; \
-    *) \
-      echo "Unsupported architecture for rtk: $arch" >&2; \
-      exit 1; \
-      ;; \
-  esac; \
-  curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${rtk_target}.tar.gz" -o "$rtk_tmp/rtk.tar.gz"; \
-  echo "${rtk_sha256}  $rtk_tmp/rtk.tar.gz" | sha256sum -c -; \
-  tar -xzf "$rtk_tmp/rtk.tar.gz" -C "$rtk_tmp" rtk; \
-  install -m 0755 "$rtk_tmp/rtk" /usr/local/bin/rtk; \
-  rm -rf "$rtk_tmp"; \
-  rtk --version
+# RTK trial for the test-coverage Agent: install the CLI proxy onto the global
+# PATH so Reviews never need to download it at runtime. Compiled in the
+# rtk-builder stage above (see that stage for why it is built from source).
+COPY --from=rtk-builder /opt/rtk/bin/rtk /usr/local/bin/rtk
+RUN rtk --version
 
 COPY tree_sitter_query.mjs /usr/local/bin/tree_sitter_query
 RUN chmod 0755 /usr/local/bin/tree_sitter_query

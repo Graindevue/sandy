@@ -85,7 +85,7 @@ pnpm sandcastle:build-image
 
 This builds from the Sandy-owned Dockerfile at `images/agent/Dockerfile` — a
 self-hosting agent image that bakes in `opensrc`, `rtk`, and Sandy's review
-toolchain on top of a Node 24 Trixie base. The script passes
+toolchain on top of a Node 24 Bookworm base. The script passes
 `--build-arg AGENT_UID=$(id -u)` and
 `--build-arg AGENT_GID=$(id -g)` so the image's `agent` user matches your host
 UID/GID and bind-mounted worktree files share an owner, then tags the result
@@ -94,8 +94,10 @@ spawn an Agent.
 
 The RTK trial for the `test-coverage` Agent is image-backed, so pullers must
 rebuild the image with `pnpm sandcastle:build-image` before expecting `rtk` to be
-available inside Review containers. The image uses a Trixie base because RTK's
-official arm64 Linux binary requires glibc 2.39 or newer.
+available inside Review containers. `rtk` is compiled from source in a builder
+stage (upstream ships no static arm64 Linux binary, and its prebuilt
+aarch64-gnu binary wants a newer glibc than Bookworm's), so the first rebuild
+after this change takes a few extra minutes for the Rust compile.
 
 ## 4. Verify
 
