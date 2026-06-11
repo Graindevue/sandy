@@ -289,7 +289,12 @@ export interface ReviewExecutorOptions {
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
-const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+// 10 minutes: now that the sandbox has node_modules, Agents execute real
+// test suites and type-checks; the heaviest Agent (logic) ran 4 scoped
+// vitest suites + a cross-package type-check and could not fit 5 minutes.
+// Reviews are manual-only (ADR 0017), so wall-clock is worth a complete run
+// — a timeout discards the Agent's entire work product.
+const DEFAULT_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class ReviewExecutor {
   readonly #store: ReviewExecutionStore;
