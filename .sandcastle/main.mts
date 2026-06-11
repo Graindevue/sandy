@@ -443,7 +443,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       // providers would run the merger's Linux `pnpm install` against the
       // host's macOS worktree.
       branchStrategy: { type: 'merge-to-head' },
-      agent: sandcastle.codex('gpt-5.5', { effort: 'high' }),
+      agent: sandcastle.codex('gpt-5.5', { effort: 'low' }),
       promptFile: './.sandcastle/merge-prompt.md',
       // Stop once the structured result block is complete.
       completionSignal: '</merge-result>',

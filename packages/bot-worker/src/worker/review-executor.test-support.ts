@@ -1,4 +1,10 @@
-import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
+import type {
+  AgentDefinition,
+  AgentRunUsage,
+  Finding,
+  ReviewJobStatus,
+  SiblingShas,
+} from '@sandy/shared-types';
 import type {
   RecordAgentRunInput,
   RecordSynthesizedReviewInput,
@@ -69,6 +75,13 @@ export const skippedCrossRepoSearch = {
   rationale: 'No cross-repo contract risk was detected.',
 };
 
+export const agentRunUsage: AgentRunUsage = {
+  inputTokens: 11,
+  cacheCreationInputTokens: 22,
+  cacheReadInputTokens: 33,
+  outputTokens: 44,
+};
+
 export function makeContext(
   options: { productRepos?: ReviewJobContext['product']['repos']; agentKeys?: string[] } = {},
 ): ReviewJobContext {
@@ -131,6 +144,13 @@ export function findingsOutput(findings: Finding[], summary?: string): string {
     payload.summary = summary;
   }
   return `<findings>${JSON.stringify(payload)}</findings>`;
+}
+
+export function runnerOutput(stdout: string, usage?: AgentRunUsage) {
+  return {
+    stdout,
+    ...(usage !== undefined ? { usage } : {}),
+  };
 }
 
 export class FakeExecutionStore implements ReviewExecutionStore {
@@ -343,11 +363,14 @@ export class FakeDiffInspector implements ReviewDiffInspector {
 export class FakeRunner implements ReviewAgentRunner {
   calls: Array<Parameters<ReviewAgentRunner['runAgent']>[0]> = [];
 
-  constructor(private readonly stdout: string) {}
+  constructor(
+    private readonly stdout: string,
+    private readonly usage?: AgentRunUsage,
+  ) {}
 
-  async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]): Promise<string> {
+  async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]) {
     this.calls.push(input);
-    return this.stdout;
+    return runnerOutput(this.stdout, this.usage);
   }
 }
 

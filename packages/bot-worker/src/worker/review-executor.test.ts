@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ReviewCancellationCoordinator } from './cancellation.js';
 import { ReviewExecutor } from './review-executor.js';
 import {
+  agentRunUsage,
   deferred,
   FakeArchetypeAssigner,
   FakeCloneManager,
@@ -15,6 +16,7 @@ import {
   logicAgent,
   makeContext,
   nextNow,
+  runnerOutput,
   securityAgent,
   securityFinding,
   skippedCrossRepoSearch,
@@ -27,7 +29,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const diffInspector = new FakeDiffInspector(42);
-    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'));
+    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'), agentRunUsage);
     const botConfig = {
       repoRules: '- Keep cache keys tenant-scoped.',
       productRules: '- API errors expose stable codes.',
@@ -79,6 +81,7 @@ describe('ReviewExecutor', () => {
         startedAt: 100,
         finishedAt: 200,
         findingCount: 1,
+        usage: agentRunUsage,
         crossRepoSearch: skippedCrossRepoSearch,
       },
     ]);
@@ -104,10 +107,10 @@ describe('ReviewExecutor', () => {
           runnerCalls.push(agent.key);
           if (agent.key === 'logic') {
             await securityStarted.promise;
-            return findingsOutput([finding]);
+            return runnerOutput(findingsOutput([finding]));
           }
           securityStarted.resolve();
-          return findingsOutput([securityFinding]);
+          return runnerOutput(findingsOutput([securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -169,9 +172,11 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           if (agent.key === 'logic') {
-            return findingsOutput([finding], 'Logic saw the cache issue.');
+            return runnerOutput(findingsOutput([finding], 'Logic saw the cache issue.'));
           }
-          return findingsOutput([duplicateSecurityFinding], 'Security saw the cache issue.');
+          return runnerOutput(
+            findingsOutput([duplicateSecurityFinding], 'Security saw the cache issue.'),
+          );
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -214,7 +219,7 @@ describe('ReviewExecutor', () => {
       archetypeAssigner: new FakeArchetypeAssigner([0.7, 0.69]),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding, unsuppressedFinding]),
+        runAgent: async () => runnerOutput(findingsOutput([finding, unsuppressedFinding])),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -249,7 +254,7 @@ describe('ReviewExecutor', () => {
           if (agent.key === 'logic') {
             throw new Error('container exited with status 1');
           }
-          return findingsOutput([securityFinding]);
+          return runnerOutput(findingsOutput([securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -290,9 +295,9 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           if (agent.key === 'logic') {
-            return await new Promise<string>(() => {});
+            return await new Promise<never>(() => {});
           }
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -351,7 +356,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async (input) => {
           runnerInput = input;
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       manifestBuilder: {
@@ -443,7 +448,9 @@ describe('ReviewExecutor', () => {
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
-      runner: { runAgent: async () => '<findings>[]</findings>' },
+      runner: {
+        runAgent: async () => runnerOutput('<findings>[]</findings>', agentRunUsage),
+      },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
     });
@@ -461,6 +468,7 @@ describe('ReviewExecutor', () => {
     });
     expect(store.agentRuns[0]).toMatchObject({
       error: expect.stringContaining('FindingsPayload must be an object'),
+      usage: agentRunUsage,
     });
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
@@ -481,7 +489,7 @@ describe('ReviewExecutor', () => {
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding], 'One issue.'),
+        runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -552,7 +560,7 @@ describe('ReviewExecutor', () => {
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ signal }) =>
-          new Promise<string>((_resolve, reject) => {
+          new Promise<never>((_resolve, reject) => {
             runnerStarted.resolve();
             signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
           }),
@@ -588,7 +596,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async () => {
           store.status = 'superseded';
-          return findingsOutput([finding], 'One issue.');
+          return runnerOutput(findingsOutput([finding], 'One issue.'));
         },
       },
       resolveAgent: () => logicAgent,
@@ -625,7 +633,7 @@ describe('ReviewExecutor', () => {
       cancellationRegistry: cancellations,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding], 'One issue.'),
+        runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -662,7 +670,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async () => {
           runnerCalls += 1;
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       resolveAgent: () => logicAgent,

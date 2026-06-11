@@ -40,6 +40,11 @@ Agents are NOT software components — they are configuration data. Adding a new
 A configuration choice that changes an existing Agent's runtime selection — vendor, model, and optionally reasoning effort — without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime. The override is the complete runtime selection: an override that omits `effort` runs the Agent at the vendor CLI default, regardless of the Agent file's own `effort`.
 _Avoid_: Agent override, custom Agent
 
+## Agent Run
+
+One Agent's execution within a Review — the unit that consumes LLM quota and produces that Agent's Findings. A Review fans out into one Agent Run per enabled Agent. Each Agent Run records its token **Usage** as reported by the vendor runtime; Usage exists to manage subscription-quota headroom (how many Reviews fit in a usage window), not billing.
+_Avoid_: session (overloaded — vendor CLIs have their own session concept), job (that's the ReviewJob)
+
 ## Finding
 
 A single issue raised by an Agent during a Review. Carries:

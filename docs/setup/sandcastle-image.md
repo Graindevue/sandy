@@ -3,7 +3,7 @@
 Every Agent in a Review runs inside an [Apple Container][apple-container] spawned
 by [Sandcastle][sandcastle]. Sandy ships its own purpose-built image — leaner
 than upstream and including the toolset Sandy's Agents actually use (`opensrc`,
-`rg`, `gh`, etc.). Sandy does **not** reuse Sandcastle's Docker image and does
+`rg`, `gh`, `rtk`, etc.). Sandy does **not** reuse Sandcastle's Docker image and does
 **not** ship the Apple Container provider's original Dockerfile (ADR
 [0009](../adr/0009-apple-container-provider-copied-from-graindevue.md)).
 
@@ -84,12 +84,20 @@ pnpm sandcastle:build-image
 ```
 
 This builds from the Sandy-owned Dockerfile at `images/agent/Dockerfile` — a
-self-hosting agent image that bakes in `opensrc` and Sandy's review toolchain on
-top of a Node 24 base. The script passes `--build-arg AGENT_UID=$(id -u)` and
+self-hosting agent image that bakes in `opensrc`, `rtk`, and Sandy's review
+toolchain on top of a Node 24 Bookworm base. The script passes
+`--build-arg AGENT_UID=$(id -u)` and
 `--build-arg AGENT_GID=$(id -g)` so the image's `agent` user matches your host
 UID/GID and bind-mounted worktree files share an owner, then tags the result
 `sandy-agent` — the local image the worker references when it asks Sandcastle to
 spawn an Agent.
+
+The RTK trial for the `test-coverage` Agent is image-backed, so pullers must
+rebuild the image with `pnpm sandcastle:build-image` before expecting `rtk` to be
+available inside Review containers. `rtk` is compiled from source in a builder
+stage (upstream ships no static arm64 Linux binary, and its prebuilt
+aarch64-gnu binary wants a newer glibc than Bookworm's), so the first rebuild
+after this change takes a few extra minutes for the Rust compile.
 
 ## 4. Verify
 
@@ -109,6 +117,7 @@ pass the tool's own flags after the image name:
 container run --rm --entrypoint opensrc sandy-agent --version
 container run --rm --entrypoint rg sandy-agent --version
 container run --rm --entrypoint tree_sitter_query sandy-agent --help
+container run --rm --entrypoint rtk sandy-agent --version
 container run --rm --entrypoint codex sandy-agent --version
 ```
 

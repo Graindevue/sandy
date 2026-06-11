@@ -65,6 +65,13 @@ export const agentRunStatus = v.union(
   v.literal('timed_out' satisfies AgentRunStatus),
 );
 
+export const agentRunUsage = v.object({
+  inputTokens: v.number(),
+  cacheCreationInputTokens: v.number(),
+  cacheReadInputTokens: v.number(),
+  outputTokens: v.number(),
+});
+
 export const reactionKind = v.union(
   v.literal('👍' satisfies ReactionKind),
   v.literal('👎' satisfies ReactionKind),

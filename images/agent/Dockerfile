@@ -3,12 +3,24 @@
 # Purpose-built per ADR 0009 (NOT copied from graindevue). A lean image that
 # sandcastle launches via @sandy/apple-container-provider to run review Agents.
 # Ships the tools the default Agents declare (rg, tree-sitter, git, gh), plus
-# `opensrc` for framework-source lookup (ADR 0008) and the agent CLIs the review
-# Agents use — claude-code (vendor: claude) and codex (vendor: codex).
+# `opensrc` for framework-source lookup (ADR 0008), `rtk` for the test-coverage
+# output-compression trial, and the agent CLIs the review Agents use —
+# claude-code (vendor: claude) and codex (vendor: codex).
 #
 # Build with `pnpm sandcastle:build-image`, which aligns the image UID/GID to the
 # host so bind-mounted worktree files share an owner. The provider verifies the
 # image's numeric USER matches the expected UID at runtime.
+
+# rtk is compiled from source because upstream publishes no static (musl) arm64
+# Linux binary, and its prebuilt aarch64-gnu binary wants a newer glibc than
+# Bookworm ships. Building on the same Bookworm generation links rtk against the
+# runtime image's own glibc instead of upgrading the base OS for every Agent.
+# The commit pin is tag v0.42.3; Cargo.lock at that commit makes --locked
+# reproducible.
+FROM rust:1-bookworm AS rtk-builder
+ARG RTK_COMMIT=de78d70aee86fe6b7b5c2462820a1b6c250d425b
+RUN cargo install --locked --git https://github.com/rtk-ai/rtk --rev "${RTK_COMMIT}" rtk --root /opt/rtk
+
 FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -57,6 +69,12 @@ RUN CXXFLAGS="-std=c++20" npm install -g \
   @anthropic-ai/claude-code@2.1.153 \
   @openai/codex@0.134.0 \
   && CXXFLAGS="-std=c++20" npm rebuild -g tree-sitter tree-sitter-javascript tree-sitter-typescript
+
+# RTK trial for the test-coverage Agent: install the CLI proxy onto the global
+# PATH so Reviews never need to download it at runtime. Compiled in the
+# rtk-builder stage above (see that stage for why it is built from source).
+COPY --from=rtk-builder /opt/rtk/bin/rtk /usr/local/bin/rtk
+RUN rtk --version
 
 COPY tree_sitter_query.mjs /usr/local/bin/tree_sitter_query
 RUN chmod 0755 /usr/local/bin/tree_sitter_query

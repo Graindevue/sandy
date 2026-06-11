@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { mutation } from './_generated/server.js';
-import { agentRunStatus, crossRepoSearchRationale } from './validators.js';
+import { agentRunStatus, agentRunUsage, crossRepoSearchRationale } from './validators.js';
 
 /** Record the terminal outcome of one Agent execution within a ReviewJob. */
 export const record = mutation({
@@ -12,6 +12,7 @@ export const record = mutation({
     finishedAt: v.number(),
     findingCount: v.number(),
     crossRepoSearch: v.optional(crossRepoSearchRationale),
+    usage: v.optional(agentRunUsage),
     error: v.optional(v.string()),
   },
   returns: v.id('agentRuns'),

@@ -1,6 +1,7 @@
 import type {
   AgentDefinition,
   AgentRunStatus,
+  AgentRunUsage,
   ApiSurfaceManifestBuildResult,
   ApiSurfaceRepoInput,
   Confidence,
@@ -51,7 +52,11 @@ import {
   type ReviewCloneManager,
   type ReviewWorktree,
 } from './review-workspace.js';
-import type { RunnerPullRequest, RunnerSiblingWorktree } from './sandcastle-runner.js';
+import type {
+  AgentRunResult,
+  RunnerPullRequest,
+  RunnerSiblingWorktree,
+} from './sandcastle-runner.js';
 
 export type {
   ProductRepoForReview,
@@ -108,6 +113,7 @@ interface RecordAgentRunBaseInput {
   agentKey: string;
   startedAt: number;
   finishedAt: number;
+  usage?: AgentRunUsage;
 }
 
 export type RecordAgentRunInput =
@@ -155,7 +161,7 @@ export interface ReviewAgentRunner {
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
     botConfig?: ReviewBotContext;
     signal?: AbortSignal;
-  }): Promise<string>;
+  }): Promise<AgentRunResult>;
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
@@ -165,12 +171,14 @@ type AgentExecutionOutcome =
       startedAt: number;
       finishedAt: number;
       payload: FindingsPayload;
+      usage?: AgentRunUsage;
     }
   | {
       status: FailedAgentRunStatus;
       startedAt: number;
       finishedAt: number;
       error: string;
+      usage?: AgentRunUsage;
     };
 
 type SelectedAgentReviewResult =
@@ -181,6 +189,34 @@ interface SelectedAgentReviewResults {
   outputs: AgentReviewOutput[];
   failedAgentCount: number;
   selectedAgentCount: number;
+}
+
+function agentRunRecordInput(
+  reviewJobId: string,
+  agentKey: string,
+  outcome: AgentExecutionOutcome,
+): RecordAgentRunInput {
+  const base = {
+    reviewJobId,
+    agentKey,
+    startedAt: outcome.startedAt,
+    finishedAt: outcome.finishedAt,
+    ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+  };
+  if (outcome.status !== 'completed') {
+    return {
+      ...base,
+      status: outcome.status,
+      findingCount: 0,
+      error: outcome.error,
+    };
+  }
+  return {
+    ...base,
+    status: 'completed',
+    findingCount: outcome.payload.findings.length,
+    crossRepoSearch: outcome.payload.crossRepoSearch,
+  };
 }
 
 interface AgentWorkspace {
@@ -448,28 +484,10 @@ export class ReviewExecutor {
   async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
+    await this.#store.recordAgentRun(agentRunRecordInput(context.job.id, agent.key, outcome));
     if (outcome.status !== 'completed') {
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey: agent.key,
-        status: outcome.status,
-        startedAt: outcome.startedAt,
-        finishedAt: outcome.finishedAt,
-        findingCount: 0,
-        error: outcome.error,
-      });
       return { status: 'failed' };
     }
-
-    await this.#store.recordAgentRun({
-      reviewJobId: context.job.id,
-      agentKey: agent.key,
-      status: 'completed',
-      startedAt: outcome.startedAt,
-      finishedAt: outcome.finishedAt,
-      findingCount: outcome.payload.findings.length,
-      crossRepoSearch: outcome.payload.crossRepoSearch,
-    });
 
     return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
   }
@@ -478,16 +496,19 @@ export class ReviewExecutor {
     const { context, agent, cancellationSignal } = input;
     const startedAt = this.#now();
     const runInput = agentRunInput(input);
+    let usage: AgentRunUsage | undefined;
 
     try {
-      const stdout = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      const result = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      usage = result.usage;
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
-      const payload = parseFindingsPayload(stdout);
+      const payload = parseFindingsPayload(result.stdout);
       return {
         status: 'completed',
         startedAt,
         finishedAt: this.#now(),
         payload,
+        ...(usage !== undefined ? { usage } : {}),
       };
     } catch (error) {
       if (isReviewSupersededError(error)) {
@@ -503,6 +524,7 @@ export class ReviewExecutor {
         startedAt,
         finishedAt: this.#now(),
         error: describeError(error),
+        ...(usage !== undefined ? { usage } : {}),
       };
     }
   }
@@ -511,7 +533,7 @@ export class ReviewExecutor {
     input: ReviewAgentRunInput,
     agentKey: string,
     parentSignal: AbortSignal | undefined,
-  ): Promise<string> {
+  ): Promise<AgentRunResult> {
     parentSignal?.throwIfAborted();
 
     const controller = new AbortController();

@@ -123,6 +123,9 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     if (input.crossRepoSearch !== undefined) {
       args.crossRepoSearch = input.crossRepoSearch;
     }
+    if (input.usage !== undefined) {
+      args.usage = input.usage;
+    }
     await this.#client.mutation(refs.agentRuns.record, args);
   }
 
