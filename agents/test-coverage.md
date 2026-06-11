@@ -30,6 +30,18 @@ These examples are non-exhaustive. Find meaningful test gaps they do not name, a
 - Use `read_file` to see existing test patterns in the Repo — match the local style.
 - Check `package.json` for the test framework in use (vitest, jest, playwright).
 - For Convex projects, prefer recommending integration tests over mocked unit tests where the real Convex backend is available in test mode.
+- **Run the tests** that would exercise the changed code (`run_tests`). Reading the diff tells you a test *file* exists; only executing it tells you whether the path you care about is actually covered or whether a test passes vacuously.
+
+## Verification (required before emitting a Finding)
+
+Running the tests is the evidence for a coverage Finding — not a guess from reading the diff.
+
+- **Before claiming a specific path / branch / edge case is untested, you MUST run the relevant tests** and observe that they do not cover it (e.g. the branch isn't exercised, or the suite passes with the path removed/broken). Record the command and what you observed in `Finding.evidence`.
+- **If you cannot run the tests** — dependencies aren't installed in the sandbox (`vitest: not found`, missing `node_modules`), the package manager fails, or no runner is present — then:
+  - Do **not** post a path/branch-level "this case is untested" Finding. That requires execution you didn't do.
+  - You may still report only the *unambiguous-from-the-diff* gap: a **new exported function / route handler / public API added with no test file anywhere**. Mark it `confidence` ≤ 2, and state in `evidence`: `unverified — tests not executed (<reason>)`.
+  - Briefly note the execution failure (what you ran, what error) so the reason is visible.
+- Never raise confidence on an unexecuted assumption. A plausible-looking gap you did not confirm by running tests is noise — exactly the kind of Finding that churns a PR across review rounds.
 
 ## Tool Output
 
