@@ -396,6 +396,8 @@ export class ReviewExecutor {
       }
       const manifest = manifestSettled.value;
       const dependencyInstall = installSettled.value;
+      const testSummary = reviewTestSummary(dependencyInstall);
+      this.#logger.info?.(testSummary);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const reviewBotConfig = await this.#resolveReviewBotConfig({
         context,
@@ -429,18 +431,26 @@ export class ReviewExecutor {
           changedLineCount: changedLines,
           siblingShas: workspace.siblingShas,
           cancellationSignal,
+          testSummary,
         });
       }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
-      const statusCheckCompletion: CompleteReviewStatusCheckRunInput = {
-        outcome: completedReviewStatusCheckOutcome({
-          selectedAgentCount: agentResults.selectedAgentCount,
-          failedAgentCount: agentResults.failedAgentCount,
-          postedFindingCount: postedReview?.postedFindings.length ?? 0,
-        }),
-      };
+      const outcome = completedReviewStatusCheckOutcome({
+        selectedAgentCount: agentResults.selectedAgentCount,
+        failedAgentCount: agentResults.failedAgentCount,
+        postedFindingCount: postedReview?.postedFindings.length ?? 0,
+      });
+      if (
+        outcome.conclusion === 'success' &&
+        !(dependencyInstall?.status === 'installed' && dependencyInstall.testStatus === 'passed')
+      ) {
+        outcome.conclusion = 'neutral';
+        outcome.verdict = 'Sandy completed review';
+      }
+      outcome.verdict += `. ${testSummary.replace(/\.$/, '')}`;
+      const statusCheckCompletion: CompleteReviewStatusCheckRunInput = { outcome };
       if (postedReview !== null) {
         statusCheckCompletion.summaryComment = postedReview.summaryComment;
       }
@@ -712,6 +722,7 @@ export class ReviewExecutor {
     changedLineCount: number;
     siblingShas: SiblingShas;
     cancellationSignal: AbortSignal | undefined;
+    testSummary: string;
   }): Promise<PostedReviewResult> {
     const synthesized = synthesizeAgentOutputs({
       agentOutputs: input.agentOutputs,
@@ -738,7 +749,7 @@ export class ReviewExecutor {
       input.target,
       postable.findings,
       input.siblingShas,
-      postable.summary,
+      `${input.testSummary}\n\n${postable.summary}`,
     );
   }
 
@@ -837,6 +848,21 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reviewTestSummary(result: DependencyInstallResult | undefined): string {
+  if (result?.status === 'failed') {
+    return 'Tests unavailable: dependency installation failed. Review used static analysis.';
+  }
+  if (result?.status === 'skipped') {
+    return 'Tests not run: no supported project test setup.';
+  }
+  if (result?.status === 'installed') {
+    if (result.testStatus === 'passed') return 'Tests passed: the project test suite ran once.';
+    if (result.testStatus === 'failed') return 'Tests failed: the project test suite did not pass.';
+    if (result.testStatus === 'skipped') return 'Tests not run: no project test script is defined.';
+  }
+  return 'Tests unavailable: no test-suite result was recorded.';
 }
 
 async function resolveEmptyReviewBotContext(): Promise<ReviewBotContext> {

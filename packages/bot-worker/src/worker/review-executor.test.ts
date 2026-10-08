@@ -22,6 +22,7 @@ import {
   skippedCrossRepoSearch,
   withTimeout,
 } from './review-executor.test-support.js';
+import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
   it('runs the Agent, persists findings, posts comments, and completes the job', async () => {
@@ -97,6 +98,8 @@ describe('ReviewExecutor', () => {
       packageManager: 'pnpm' as const,
       command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
       durationMs: 12_000,
+      testStatus: 'passed' as const,
+      testResult: 'pnpm test exited 0.',
     };
     const installCalls: { worktreePath: string; cacheKey?: string }[] = [];
     const agentInstalls: unknown[] = [];
@@ -130,20 +133,29 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
   });
 
-  it('degrades to a failed install result and still completes when the install step throws', async () => {
+  it('qualifies a clean static review and uses a neutral check when dependency installation fails', async () => {
     const store = new FakeExecutionStore(makeContext());
+    const poster = new FakePoster();
     const warnings: string[] = [];
+    const statusLines: string[] = [];
+    const completedChecks: Array<Parameters<ReviewStatusCheckReporter['complete']>[0]> = [];
     const agentInstalls: unknown[] = [];
     const executor = new ReviewExecutor({
       store,
       cloneManager: new FakeCloneManager(),
-      poster: new FakePoster(),
+      poster,
+      statusChecks: {
+        createInProgress: async () => ({ id: 1200 }),
+        complete: async (input) => {
+          completedChecks.push(input);
+        },
+      },
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: new FakeDiffInspector(42),
       runner: {
         runAgent: async ({ dependencyInstall }) => {
           agentInstalls.push(dependencyInstall);
-          return runnerOutput(findingsOutput([finding]));
+          return runnerOutput(findingsOutput([]));
         },
         installDependencies: async () => {
           throw new Error('container failed to start');
@@ -151,7 +163,10 @@ describe('ReviewExecutor', () => {
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
-      logger: { warn: (message) => warnings.push(message) },
+      logger: {
+        warn: (message) => warnings.push(message),
+        info: (message) => statusLines.push(message),
+      },
     });
 
     await executor.executeClaimedJob('job-1');
@@ -160,6 +175,17 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
     expect(store.failed).toEqual([]);
     expect(warnings.join('\n')).toContain('container failed to start');
+    const testSummary =
+      'Tests unavailable: dependency installation failed. Review used static analysis.';
+    expect(poster.results[0]?.summary).toMatch(
+      /^Tests unavailable: dependency installation failed\. Review used static analysis\.\n\nConfidence score: 5\/5/,
+    );
+    expect(poster.results[0]?.summary).not.toContain('container failed to start');
+    expect(statusLines).toEqual([testSummary]);
+    expect(completedChecks[0]).toMatchObject({
+      conclusion: 'neutral',
+      verdict: `Sandy completed review. ${testSummary.slice(0, -1)}`,
+    });
   });
 
   it('runs selected Agents serially and records each Agent result', async () => {

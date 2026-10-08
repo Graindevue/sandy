@@ -267,10 +267,140 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it('reports failed tests from the exit code even when reviewed output claims they passed', async () => {
+    const f = await fixture(`
+      const command = process.argv.at(-1);
+      if (command.includes(' ci ')) process.stdout.write('dependencies ready');
+      else { process.stdout.write('Tests passed'); process.exitCode = 1; }
+    `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node test.js' } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({
+      status: 'installed',
+      testStatus: 'failed',
+      testResult: 'npm test exited 1.\nTests passed',
+    });
+  });
+
+  it('preserves the sandbox startup error before a long diagnostic tail', async () => {
+    const f = await fixture(`
+      process.stderr.write('Fatal error: ripgrep unreadable glob scan failed for /proc\\n' + 'namespace permission denied\\n'.repeat(300) + 'last namespace diagnostic');
+      process.exitCode = 2;
+    `);
+    await writeFile(join(f.input.worktreePath, 'package.json'), '{}');
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+    expect(result.status).toBe('failed');
+    if (result.status !== 'failed') throw new Error('Expected sandbox startup failure');
+    expect(result.error).toContain('Fatal error: ripgrep unreadable glob scan failed for /proc');
+    expect(result.error).toContain('last namespace diagnostic');
+    expect(result.error.length).toBeLessThan(4100);
+  });
+
+  it.skipIf(process.platform !== 'linux' || process.env.SANDY_NATIVE_SANDBOX_TEST !== '1')(
+    'runs one native Linux npm install and test with credentials inaccessible',
+    async () => {
+      const f = await fixture('throw new Error("Native probe must use the installed Codex CLI");');
+      const keyPath = join(f.root, 'app.pem');
+      const sandboxHome = join(f.root, 'sandy-sandbox-home');
+      await writeFile(keyPath, 'dummy-probe-key');
+      await writeFile(join(f.codexHome, 'auth.json'), '{"dummy":"probe-login"}');
+      await mkdir(sandboxHome);
+      await writeFile(join(sandboxHome, 'config.toml'), '');
+      await writeFile(
+        join(f.input.worktreePath, 'package.json'),
+        JSON.stringify({
+          name: 'sandy-native-sandbox-probe',
+          version: '1.0.0',
+          scripts: { postinstall: 'node probe.mjs install', test: 'node probe.mjs test' },
+        }),
+      );
+      await writeFile(
+        join(f.input.worktreePath, 'package-lock.json'),
+        JSON.stringify({
+          name: 'sandy-native-sandbox-probe',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          packages: {
+            '': { name: 'sandy-native-sandbox-probe', version: '1.0.0', hasInstallScript: true },
+          },
+        }),
+      );
+      await writeFile(
+        join(f.input.worktreePath, 'probe.mjs'),
+        `import assert from 'node:assert/strict';
+         import fs from 'node:fs';
+         for (const path of ${JSON.stringify([join(f.codexHome, 'auth.json'), keyPath, `/proc/${process.pid}/environ`, `/proc/${process.pid}/mem`])}) {
+           assert.throws(() => fs.openSync(path, 'r'), 'Credential path readable: ' + path);
+         }
+         assert.throws(() => fs.writeFileSync(${JSON.stringify(join(sandboxHome, 'config.toml'))}, 'malicious override'));
+         assert.equal(process.env.GH_TOKEN, undefined);
+         assert.equal(process.env.CODEX_AUTH_JSON, undefined);
+         const countsPath = 'probe-counts.json';
+         const counts = fs.existsSync(countsPath) ? JSON.parse(fs.readFileSync(countsPath, 'utf8')) : {install:0,test:0};
+         const stage = process.argv[2];
+         counts[stage]++;
+         assert.equal(counts.install, 1);
+         assert.equal(counts.test, stage === 'test' ? 1 : 0);
+         fs.writeFileSync(countsPath, JSON.stringify(counts));
+         console.log(stage + ' verified');`,
+      );
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        protectedPaths: [keyPath],
+        env: { GH_TOKEN: 'dummy-probe-token', CODEX_AUTH_JSON: 'dummy-probe-auth' },
+      });
+      const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+      expect(result).toMatchObject({
+        status: 'installed',
+        testStatus: 'passed',
+        testResult: expect.stringContaining('npm test exited 0.'),
+      });
+      if (result.status === 'installed') expect(result.testResult).toContain('test verified');
+      expect(
+        JSON.parse(await readFile(join(f.input.worktreePath, 'probe-counts.json'), 'utf8')),
+      ).toEqual({ install: 1, test: 1 });
+      console.info(
+        'Native Linux sandbox: npm ci and npm test passed once; auth, app key, parent proc credentials, and helper configuration protected.',
+      );
+    },
+    60_000,
+  );
+
+  it('keeps Linux process credential denials within their two-level procfs scan', async () => {
+    const f = await fixture(`
+      const args = process.argv.slice(2);
+      const profile = args.find(value => value.startsWith('permissions.sandy='));
+      if (!profile?.includes('"/proc/*/environ"="deny"') || !profile.includes('"/proc/*/mem"="deny"')) throw new Error('Missing process credential denials');
+      if (!profile.includes('glob_scan_max_depth=2')) throw new Error('Recursive procfs scan reaches inaccessible fd and namespace directories');
+      process.stdout.write('dependencies ready');
+    `);
+    await writeFile(join(f.input.worktreePath, 'package.json'), '{}');
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      await expect(
+        runner.installDependencies({ worktreePath: f.input.worktreePath }),
+      ).resolves.toMatchObject({ status: 'installed', testStatus: 'skipped' });
+    } finally {
+      if (platform !== undefined) Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it('installs dependencies with no credential environment and supplies one test-suite result to reviewers', async () => {
     const f = await fixture(`
       const args = process.argv.slice(2);
       if (args[0] !== 'sandbox') throw new Error('Install/test must be sandboxed');
+      if (!(await import('node:fs')).existsSync(process.env.HOME)) throw new Error('Writable tool home must exist before Linux constructs its mounts');
       if (process.env.GH_TOKEN || process.env.CODEX_AUTH_JSON || process.env.SANDY_APP_PRIVATE_KEY) throw new Error('Credentials inherited');
       if (process.env.CODEX_HOME.endsWith('/ci-codex')) throw new Error('Sandbox utility uses authenticated home');
       const command = args.at(-1);
@@ -297,6 +427,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       command:
         'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@10.34.1 install --frozen-lockfile --prefer-offline',
       durationMs: expect.any(Number),
+      testStatus: 'passed',
       testResult: 'npx --yes pnpm@10.34.1 test exited 0.\n1 passed',
     });
   });

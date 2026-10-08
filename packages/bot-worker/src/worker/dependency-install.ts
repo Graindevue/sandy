@@ -25,6 +25,8 @@ export type DependencyInstallResult =
       packageManager: DetectedPackageManager;
       command: string;
       durationMs: number;
+      /** Structured outcome; never inferred from reviewed stdout/stderr. */
+      testStatus?: 'passed' | 'failed' | 'skipped';
       /** The test suite is run once, before Agents, with a bounded diagnostic tail. */
       testResult?: string;
     }

@@ -129,6 +129,7 @@ export class CodexExecRunner {
           error: installed.output || `install exited ${installed.exitCode}`,
         };
       const durationMs = Date.now() - startedAt;
+      let testStatus: 'passed' | 'failed' | 'skipped' = 'skipped';
       let testResult = 'No test script is defined in package.json; test suite skipped.';
       const manifest = JSON.parse(
         await readFile(join(input.worktreePath, 'package.json'), 'utf8'),
@@ -141,9 +142,11 @@ export class CodexExecRunner {
             testCommand,
             this.#options.testTimeoutMs ?? 10 * 60 * 1000,
           );
+          testStatus = tests.exitCode === 0 ? 'passed' : 'failed';
           testResult = `${testCommand} exited ${tests.exitCode}.\n${tests.output}`;
         } catch (error) {
           input.signal?.throwIfAborted();
+          testStatus = 'failed';
           testResult = `${testCommand} failed: ${error instanceof Error ? error.message : String(error)}`;
         }
       }
@@ -152,6 +155,7 @@ export class CodexExecRunner {
         packageManager: detected.packageManager,
         command,
         durationMs,
+        testStatus,
         testResult,
       };
     } catch (error) {
@@ -171,6 +175,8 @@ export class CodexExecRunner {
   ): Promise<{ exitCode: number; output: string }> {
     const sandboxHome = this.#sandboxHome;
     await mkdir(sandboxHome, { recursive: true });
+    // Linux skips writable bind roots that do not yet exist.
+    await mkdir(this.#toolHome, { recursive: true });
     const args = [
       'sandbox',
       '--permission-profile',
@@ -194,7 +200,9 @@ export class CodexExecRunner {
         stdio: 'pipe',
         detached: true,
       });
-      let output = '';
+      let outputStart = '';
+      let outputTail = '';
+      let outputLength = 0;
       let failure: unknown;
       let descendants: number[] = [];
       let killTimer: NodeJS.Timeout | undefined;
@@ -215,7 +223,9 @@ export class CodexExecRunner {
       input.signal?.addEventListener('abort', onAbort, { once: true });
       if (input.signal?.aborted) onAbort();
       const append = (chunk: string) => {
-        output = (output + chunk).slice(-4000);
+        outputStart = (outputStart + chunk).slice(0, 2000);
+        outputTail = (outputTail + chunk).slice(-4000);
+        outputLength += chunk.length;
       };
       child.stdout.setEncoding('utf8').on('data', append);
       child.stderr.setEncoding('utf8').on('data', append);
@@ -228,7 +238,13 @@ export class CodexExecRunner {
         input.signal?.removeEventListener('abort', onAbort);
         killTree(child.pid, descendants, 'SIGKILL');
         if (failure !== undefined) reject(failure);
-        else resolve({ exitCode: code ?? 1, output: output.trim() });
+        else {
+          const output =
+            outputLength <= 4000
+              ? outputTail
+              : `${outputStart}\n... [output truncated] ...\n${outputTail.slice(-2000)}`;
+          resolve({ exitCode: code ?? 1, output: output.trim() });
+        }
       });
       child.stdin.on('error', () => {});
       child.stdin.end();
@@ -453,8 +469,12 @@ export class CodexExecRunner {
     const opensrcHome = this.#options.env?.OPENSRC_HOME ?? process.env.OPENSRC_HOME;
     if (opensrcHome !== undefined)
       filesystem.push(`${JSON.stringify(resolvePath(opensrcHome))}="write"`);
-    if (process.platform === 'linux')
-      filesystem.push('"/proc/*/environ"="deny"', '"/proc/*/mem"="deny"');
+    if (process.platform === 'linux') {
+      // These patterns only match /proc/<pid>/<file>. Unbounded expansion also
+      // enters other users' fd/ns/task directories, which makes Linux sandbox
+      // construction fail before the reviewed command starts.
+      filesystem.push('glob_scan_max_depth=2', '"/proc/*/environ"="deny"', '"/proc/*/mem"="deny"');
+    }
     const shellEnvironment = {
       HOME: this.#toolHome,
       CI: 'true',
