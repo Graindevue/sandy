@@ -358,6 +358,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         env: { GH_TOKEN: 'dummy-probe-token', CODEX_AUTH_JSON: 'dummy-probe-auth' },
       });
       const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+      if (result.status === 'failed') throw new Error(result.error);
       expect(result).toMatchObject({
         status: 'installed',
         testStatus: 'passed',

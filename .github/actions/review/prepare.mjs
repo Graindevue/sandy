@@ -1,4 +1,12 @@
-import { appendFile, copyFile, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { assertTrustedRequest, positiveInteger, reviewRequest } from './request.mjs';
 
@@ -44,6 +52,9 @@ const sandyPackage = JSON.parse(await readFile(join(sandyRoot, 'package.json'), 
 const pnpmVersion = sandyPackage.packageManager?.match(/^pnpm@(\d+\.\d+\.\d+)$/)?.[1];
 if (!pnpmVersion) throw new Error('Sandy must pin an exact pnpm packageManager version');
 const scratch = await mkdtemp(join(required('RUNNER_TEMP'), 'sandy-review-'));
+// Linux only grants sandbox writes to roots that already exist.
+const opensrcHome = join(required('RUNNER_TEMP'), 'sandy-opensrc');
+await mkdir(opensrcHome, { recursive: true });
 const configPath = join(scratch, 'bot.yaml');
 if (env.SANDY_INPUT_CONFIG_PATH) {
   if (isAbsolute(env.SANDY_INPUT_CONFIG_PATH)) {
@@ -101,7 +112,7 @@ await appendFile(required('GITHUB_OUTPUT'), `sandy-root=${sandyRoot}\n`);
 await appendFile(required('GITHUB_OUTPUT'), `pnpm-version=${pnpmVersion}\n`);
 for (const [name, value] of Object.entries({
   CODEX_HOME: join(scratch, 'codex'),
-  OPENSRC_HOME: join(required('RUNNER_TEMP'), 'sandy-opensrc'),
+  OPENSRC_HOME: opensrcHome,
   SANDY_CONFIG_PATH: configPath,
   SANDY_CLONE_DIR: join(scratch, 'repos'),
   SANDY_ACTION_SCRATCH: scratch,
