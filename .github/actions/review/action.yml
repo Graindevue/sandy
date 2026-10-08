@@ -80,6 +80,20 @@ runs:
         npm install --global opensrc@0.7.3
         opensrc --version
 
+    - name: Prepare Linux sandbox prerequisites
+      if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}
+      shell: bash
+      run: |
+        # Ubuntu 24.04 restricts user namespaces. Load bubblewrap's dedicated
+        # AppArmor profile before restoring credentials rather than disabling
+        # the restriction for every process on the runner.
+        sudo apt-get update
+        sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+        sudo install -m 0644 \
+          /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+          /etc/apparmor.d/bwrap-userns-restrict
+        sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+
     - name: Verify native sandbox for the audited smoke run
       if: ${{ inputs.trusted-workflow-sha != '' }}
       shell: bash

@@ -98,14 +98,17 @@ The action validates a human requester with repository write access, an open PR,
 a private caller, and a same-repository PR head. Fork PRs are declined. Reviewed
 package scripts run in a credential-free sandbox; review agents use a filesystem
 profile that denies access to auth files, the App key, and other credential
-directories.
+directories. On Ubuntu, the action installs bubblewrap and its AppArmor profile
+before materializing Codex auth so the native sandbox can create its isolated
+user namespace.
 
 ## 4. Choose Product configuration
 
 Without `SANDY_CONFIG_PATH`, the action creates one Product for the caller Repo
 and selects `logic` at `xhigh`, `security` at `high`, and `convex` at
-`high` only for Convex changes. One test-suite run contributes its results to
-the review. Optional repository variables:
+`high` only for Convex changes. When dependency installation succeeds and a
+test script exists, Sandy runs the project test suite once and includes its
+result in the review. Optional repository variables:
 
 | Variable | Purpose |
 |----------|---------|
@@ -135,6 +138,10 @@ gh run list --repo Graindevue/graindevue --workflow sandy-review.yml --limit 5
 
 Verify Findings/the summary and the advisory **Sandy** Check Run on the PR, a
 completed ReviewJob and Agent Runs in Convex, and successful auth persistence.
+Inspect the summary's test status: a confidence score of 5/5 or successful
+Actions run does not prove tests ran. An otherwise successful review receives
+a neutral Sandy Check Run when tests are unavailable, failed, or skipped.
+The review can still complete with static analysis.
 You can subsequently request reviews with `@sandy review` or
 `@agent-sandy review`. The Check Run's Re-run event is best-effort because GitHub
 can suppress Actions-origin check events; use a mention or dispatch if no run
