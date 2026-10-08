@@ -40,6 +40,9 @@ if (!/^[\w.-]+$/.test(authEnvironment)) {
   throw new Error('The auth environment must be a simple GitHub Environment name');
 }
 const sandyRoot = await realpath(resolve(required('GITHUB_ACTION_PATH'), '../../..'));
+const sandyPackage = JSON.parse(await readFile(join(sandyRoot, 'package.json'), 'utf8'));
+const pnpmVersion = sandyPackage.packageManager?.match(/^pnpm@(\d+\.\d+\.\d+)$/)?.[1];
+if (!pnpmVersion) throw new Error('Sandy must pin an exact pnpm packageManager version');
 const scratch = await mkdtemp(join(required('RUNNER_TEMP'), 'sandy-review-'));
 const configPath = join(scratch, 'bot.yaml');
 if (env.SANDY_INPUT_CONFIG_PATH) {
@@ -95,6 +98,7 @@ if (env.SANDY_INPUT_CONFIG_PATH) {
 }
 
 await appendFile(required('GITHUB_OUTPUT'), `sandy-root=${sandyRoot}\n`);
+await appendFile(required('GITHUB_OUTPUT'), `pnpm-version=${pnpmVersion}\n`);
 for (const [name, value] of Object.entries({
   CODEX_HOME: join(scratch, 'codex'),
   OPENSRC_HOME: join(required('RUNNER_TEMP'), 'sandy-opensrc'),

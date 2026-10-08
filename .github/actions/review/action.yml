@@ -57,7 +57,7 @@ runs:
     - name: Install pnpm
       uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        package_json_file: ${{ steps.prepare.outputs.sandy-root }}/package.json
+        version: ${{ steps.prepare.outputs.pnpm-version }}
 
     - name: Set up Node
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -126,7 +126,13 @@ runs:
         GITHUB_APP_ID: ${{ inputs.app-id }}
       # Finish this step before the caller's 120-minute job timeout so the
       # always() persistence steps still have time to preserve refreshed auth.
-      run: timeout --signal=TERM --kill-after=60s 90m pnpm review
+      run: |
+        # Reviewed package output must remain log text, even when an install
+        # failure includes strings resembling GitHub workflow commands.
+        sandy_log_guard="$(node -p 'require("node:crypto").randomUUID()')"
+        printf '::stop-commands::%s\n' "$sandy_log_guard"
+        trap 'printf "::%s::\n" "$sandy_log_guard"' EXIT
+        timeout --signal=TERM --kill-after=60s 90m pnpm review
 
     # Tokens last an hour. Mint another token after the review so a long review
     # never loses the auth write-back because its initial installation token expired.
