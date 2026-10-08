@@ -488,6 +488,8 @@ export class CodexExecRunner {
       LEFTHOOK: '0',
       HUSKY: '0',
       CONVEX_AGENT_MODE: 'anonymous',
+      pnpm_config_verify_deps_before_run: 'false',
+      pnpm_config_manage_package_manager_versions: 'false',
       npm_config_manage_package_manager_versions: 'false',
       ...(opensrcHome !== undefined ? { OPENSRC_HOME: opensrcHome } : {}),
     };
@@ -553,6 +555,8 @@ function safeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     LEFTHOOK: '0',
     HUSKY: '0',
     CONVEX_AGENT_MODE: 'anonymous',
+    pnpm_config_verify_deps_before_run: 'false',
+    pnpm_config_manage_package_manager_versions: 'false',
     npm_config_manage_package_manager_versions: 'false',
   };
 }

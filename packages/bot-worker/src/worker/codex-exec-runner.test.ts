@@ -11,11 +11,12 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CodexExecRunner, type RunAgentInput } from './codex-exec-runner.js';
+import { readPackageJson } from './dependency-install.js';
 
 const exec = promisify(execFile);
 const directories: string[] = [];
@@ -42,8 +43,8 @@ afterEach(async () => {
   );
 });
 
-async function fixture(program: string) {
-  const root = await mkdtemp(join(tmpdir(), 'sandy-codex-runner-'));
+async function fixture(program: string, temporaryDirectory = tmpdir()) {
+  const root = await mkdtemp(join(temporaryDirectory, 'sandy-codex-runner-'));
   directories.push(root);
   const worktreePath = join(root, 'repo');
   const codexHome = join(root, 'ci-codex');
@@ -86,6 +87,10 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-5.5' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
+      const shellPolicy = args.find(value => value.startsWith('shell_environment_policy.set='));
+      for (const name of ['pnpm_config_verify_deps_before_run', 'pnpm_config_manage_package_manager_versions']) {
+        if (!shellPolicy?.includes(name + '="false"') || process.env[name] !== 'false') throw new Error('Native pnpm command could reinstall or switch package-manager versions');
+      }
       if (!prompt.includes('-export const before = true;') || !prompt.includes('+export const after = false;')) throw new Error('Missing PR diff');
       if (args.at(-1) !== '-') throw new Error('Prompt must be stdin');
       process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'thread-one'}) + '\\n');
@@ -480,6 +485,76 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     60_000,
   );
 
+  it.skipIf(
+    process.platform !== 'linux' ||
+      process.env.SANDY_NATIVE_SANDBOX_TEST !== '1' ||
+      process.env.SANDY_NATIVE_REVIEW_WORKTREE === undefined,
+  )(
+    'runs the target checkout install and tests inside a protected linked Git worktree',
+    async () => {
+      const checkoutPath = process.env.SANDY_NATIVE_REVIEW_WORKTREE;
+      if (checkoutPath === undefined || !isAbsolute(checkoutPath))
+        throw new Error('SANDY_NATIVE_REVIEW_WORKTREE must be an absolute trusted checkout path');
+      const f = await fixture(
+        'throw new Error("Target checkout probe must use the installed Codex CLI");',
+        process.env.RUNNER_TEMP ?? tmpdir(),
+      );
+      await rm(f.input.worktreePath, { recursive: true, force: true });
+      await exec('git', ['worktree', 'add', '--detach', f.input.worktreePath, 'HEAD'], {
+        cwd: checkoutPath,
+      });
+      try {
+        const originalManifest = await readPackageJson(f.input.worktreePath);
+        const protectedPaths = [
+          ...['GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'].flatMap(
+            (key) => {
+              const path = process.env[key];
+              return path === undefined ? [] : [dirname(path)];
+            },
+          ),
+          ...(process.env.GITHUB_APP_PRIVATE_KEY_PATH
+            ? [process.env.GITHUB_APP_PRIVATE_KEY_PATH]
+            : []),
+          ...(process.env.SANDY_CONFIG_PATH ? [process.env.SANDY_CONFIG_PATH] : []),
+          ...(process.env.SANDY_ROOT ? [join(process.env.SANDY_ROOT, '.config')] : []),
+          ...(process.env.RUNNER_TEMP
+            ? [join(process.env.RUNNER_TEMP, '_runner_file_commands')]
+            : []),
+        ];
+        const runner = new CodexExecRunner({ codexHome: f.codexHome, protectedPaths });
+        const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+        expect(
+          (await readPackageJson(f.input.worktreePath)).bytes.equals(originalManifest.bytes),
+        ).toBe(true);
+        const boundedDiagnostic = (output: string) =>
+          output.length <= 4000
+            ? output
+            : `${output.slice(0, 2000)}\n... [output truncated] ...\n${output.slice(-2000)}`;
+        if (result.status === 'failed')
+          throw new Error(
+            `Native target dependency installation failed:\n${boundedDiagnostic(result.error)}`,
+          );
+        if (result.status !== 'installed' || result.testStatus !== 'passed')
+          throw new Error(
+            `Native target project tests did not pass:\n${boundedDiagnostic(
+              result.status === 'installed'
+                ? (result.testResult ?? 'No test diagnostics available.')
+                : result.reason,
+            )}`,
+          );
+        expect(result).toMatchObject({ status: 'installed', testStatus: 'passed' });
+        console.info(
+          'Native target checkout: dependency installation and the project test suite passed inside a protected linked Git worktree.',
+        );
+      } finally {
+        await exec('git', ['worktree', 'remove', '--force', f.input.worktreePath], {
+          cwd: checkoutPath,
+        });
+      }
+    },
+    26 * 60 * 1000,
+  );
+
   it('keeps Linux process credential denials within their two-level procfs scan', async () => {
     const f = await fixture(`
       const args = process.argv.slice(2);
@@ -508,6 +583,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       if (args[0] !== 'sandbox') throw new Error('Install/test must be sandboxed');
       if (!(await import('node:fs')).existsSync(process.env.HOME)) throw new Error('Writable tool home must exist before Linux constructs its mounts');
       if (process.env.GH_TOKEN || process.env.CODEX_AUTH_JSON || process.env.SANDY_APP_PRIVATE_KEY) throw new Error('Credentials inherited');
+      if (process.env.pnpm_config_verify_deps_before_run !== 'false' || process.env.pnpm_config_manage_package_manager_versions !== 'false') throw new Error('Test command could repeat dependency installation');
       if (process.env.CODEX_HOME.endsWith('/ci-codex')) throw new Error('Sandbox utility uses authenticated home');
       const command = args.at(-1);
       if (command.includes(' install ')) process.stdout.write('dependencies ready');

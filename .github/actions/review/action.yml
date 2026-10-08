@@ -100,7 +100,11 @@ runs:
       working-directory: ${{ steps.prepare.outputs.sandy-root }}
       env:
         SANDY_NATIVE_SANDBOX_TEST: '1'
-      run: pnpm --filter @sandy/bot-worker exec vitest run src/worker/codex-exec-runner.test.ts
+      run: |
+        sandy_log_guard="$(node -p 'require("node:crypto").randomUUID()')"
+        printf '::stop-commands::%s\n' "$sandy_log_guard"
+        trap 'printf "::%s::\n" "$sandy_log_guard"' EXIT
+        pnpm --filter @sandy/bot-worker exec vitest run src/worker/codex-exec-runner.test.ts
 
     - name: Restore framework source cache
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

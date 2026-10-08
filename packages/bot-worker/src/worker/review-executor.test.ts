@@ -133,6 +133,40 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
   });
 
+  it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
+    const statusLines: string[] = [];
+    const poster = new FakePoster();
+    const diagnostics = `pnpm test exited 1.\nFIRST ERROR\n${'untrusted output\n'.repeat(1000)}LAST ERROR`;
+    const executor = new ReviewExecutor({
+      store: new FakeExecutionStore(makeContext()),
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async () => runnerOutput(findingsOutput([])),
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install --frozen-lockfile',
+          durationMs: 100,
+          testStatus: 'failed',
+          testResult: diagnostics,
+        }),
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+      logger: { warn: () => {}, info: (message) => statusLines.push(message) },
+    });
+    await executor.executeClaimedJob('job-1');
+    expect(statusLines[0]).toBe('Tests failed: the project test suite did not pass.');
+    expect(statusLines[1]).toContain('FIRST ERROR');
+    expect(statusLines[1]).toContain('LAST ERROR');
+    expect(statusLines[1]?.length).toBeLessThan(4100);
+    expect(poster.results[0]?.summary).not.toContain('FIRST ERROR');
+    expect(poster.results[0]?.summary).not.toContain('LAST ERROR');
+  });
+
   it('qualifies a clean static review and uses a neutral check when dependency installation fails', async () => {
     const store = new FakeExecutionStore(makeContext());
     const poster = new FakePoster();

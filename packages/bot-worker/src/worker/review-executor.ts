@@ -398,6 +398,20 @@ export class ReviewExecutor {
       const dependencyInstall = installSettled.value;
       const testSummary = reviewTestSummary(dependencyInstall);
       this.#logger.info?.(testSummary);
+      if (
+        dependencyInstall?.status === 'installed' &&
+        dependencyInstall.testStatus === 'failed' &&
+        dependencyInstall.testResult !== undefined
+      ) {
+        const diagnostics = dependencyInstall.testResult;
+        this.#logger.info?.(
+          `Project test diagnostics:\n${
+            diagnostics.length <= 4000
+              ? diagnostics
+              : `${diagnostics.slice(0, 2000)}\n... [output truncated] ...\n${diagnostics.slice(-2000)}`
+          }`,
+        );
+      }
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const reviewBotConfig = await this.#resolveReviewBotConfig({
         context,
