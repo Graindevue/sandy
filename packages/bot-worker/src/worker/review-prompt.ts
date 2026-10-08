@@ -114,15 +114,26 @@ function formatDependencyInstallContext(result: DependencyInstallResult | undefi
     return '';
   }
   switch (result.status) {
-    case 'installed':
+    case 'installed': {
+      const testStatusContext = {
+        passed:
+          '- Sandy ran the project test suite once and it passed. Do NOT rerun the full suite.',
+        failed:
+          '- Sandy attempted the project test suite once and it failed. Do NOT rerun the full suite.',
+        skipped:
+          '- Sandy did not run the project test suite because no project test script is defined.',
+        unavailable: '- Test-suite status was not recorded for this Review.',
+      }[result.testStatus ?? 'unavailable'];
       return `
 Review toolchain:
 - Dependencies are installed: \`${result.command}\` completed in ${Math.round(result.durationMs / 1000)}s before this Review. node_modules is present in the worktree.
 - You MAY run a targeted package script or test needed to verify a concrete Finding. Use the same package manager and exact version shown in the install command above; use its pinned npx invocation for pnpm scripts.
 - Do NOT re-run a dependency install; it already happened.
 - In a monorepo, a test that fails to resolve a workspace package's entry needs that package built first — build only what the test imports, never the whole Repo.
-${result.testResult !== undefined ? `- Sandy already ran the test suite once. Do NOT rerun the full suite. Run a targeted test only when needed to verify a concrete Finding.\n\nTest-suite result:\n${result.testResult}\n` : ''}
+${testStatusContext}
+${result.testResult !== undefined ? `\nTest-suite result:\n${result.testResult}\n` : ''}
 `;
+    }
     case 'skipped':
       return `
 Review toolchain:

@@ -52,8 +52,9 @@ workflow dispatch.
 Keys are filenames without `.md` in `agents/` and `.config/agents/`.
 The current generated Actions configuration uses `logic`, `security`, and
 conditional `convex`. The Convex persona runs only when the reviewed diff
-touches a `convex/` directory. The test suite runs once, with its result included
-in reviewer context; a separate coverage persona is not part of the generated
+touches a `convex/` directory. When dependencies install and a project test script
+is available, Sandy runs the suite once and includes its result in reviewer
+context; a separate coverage persona is not part of the generated
 selection. Next.js, style, and other legacy personas remain available for
 explicit custom selection.
 

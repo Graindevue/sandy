@@ -203,6 +203,7 @@ export class CodexExecRunner {
           ...safeEnvironment({ ...process.env, ...this.#options.env }),
           HOME: this.#toolHome,
           CODEX_HOME: sandboxHome,
+          TURBO_CACHE_DIR: join(resolvePath(input.worktreePath), '.turbo', 'cache'),
         },
         stdio: 'pipe',
         detached: true,
@@ -353,6 +354,7 @@ export class CodexExecRunner {
           ...safeEnvironment({ ...process.env, ...this.#options.env }),
           HOME: this.#toolHome,
           CODEX_HOME: resolvePath(this.#options.codexHome),
+          TURBO_CACHE_DIR: join(resolvePath(input.worktreePath), '.turbo', 'cache'),
         },
         stdio: 'pipe',
         detached: true,
@@ -484,6 +486,7 @@ export class CodexExecRunner {
     }
     const shellEnvironment = {
       HOME: this.#toolHome,
+      TURBO_CACHE_DIR: join(resolvePath(worktreePath), '.turbo', 'cache'),
       CI: 'true',
       LEFTHOOK: '0',
       HUSKY: '0',

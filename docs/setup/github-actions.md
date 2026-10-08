@@ -104,6 +104,8 @@ user namespace. During dependency installation, Sandy skips only a root
 `prepare` script whose exact command is `lefthook install`, in the isolated
 reviewed worktree. It restores the original `package.json` bytes before tests
 and review; other dependency lifecycle scripts still run.
+Turbo's cache lives inside the reviewed worktree so linked-worktree cache sharing
+does not write to the protected parent clone.
 
 ## 4. Choose Product configuration
 

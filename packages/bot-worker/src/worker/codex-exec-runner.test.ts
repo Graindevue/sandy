@@ -82,12 +82,55 @@ async function fixture(program: string, temporaryDirectory = tmpdir()) {
 }
 
 describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
+  it.each([
+    {
+      testStatus: 'passed' as const,
+      expected: 'Sandy ran the project test suite once and it passed. Do NOT rerun the full suite.',
+    },
+    {
+      testStatus: 'failed' as const,
+      expected:
+        'Sandy attempted the project test suite once and it failed. Do NOT rerun the full suite.',
+    },
+    {
+      testStatus: 'skipped' as const,
+      expected:
+        'Sandy did not run the project test suite because no project test script is defined.',
+    },
+  ])('describes the structured $testStatus test outcome accurately in the review prompt', async ({
+    testStatus,
+    expected,
+  }) => {
+    const f = await fixture(`
+      let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
+      if (!prompt.includes(${JSON.stringify(expected)})) throw new Error('Incorrect test-suite status in review context');
+      if (prompt.includes('Sandy already ran the test suite once.')) throw new Error('Test result text was used as proof of execution');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    f.input.dependencyInstall = {
+      status: 'installed',
+      packageManager: 'npm',
+      command: 'npm ci',
+      durationMs: 1000,
+      testStatus,
+      ...(testStatus === 'skipped'
+        ? { testResult: 'No test script is defined in package.json; test suite skipped.' }
+        : {}),
+    };
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
+
   it('reviews the actual PR diff in one invocation and records final-message usage without double-counting cached input', async () => {
     const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-5.5' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
       const shellPolicy = args.find(value => value.startsWith('shell_environment_policy.set='));
+      const path = await import('node:path');
+      const turboCache = process.env.TURBO_CACHE_DIR;
+      const cacheRoot = turboCache === undefined ? undefined : (await import('node:fs')).realpathSync(path.dirname(path.dirname(turboCache)));
+      if (turboCache === undefined || !path.isAbsolute(turboCache) || cacheRoot !== process.cwd() || turboCache !== path.join(path.dirname(path.dirname(turboCache)), '.turbo', 'cache') || !shellPolicy?.includes('TURBO_CACHE_DIR=' + JSON.stringify(turboCache))) throw new Error('Turbo cache must stay inside this reviewed worktree');
       for (const name of ['pnpm_config_verify_deps_before_run', 'pnpm_config_manage_package_manager_versions']) {
         if (!shellPolicy?.includes(name + '="false"') || process.env[name] !== 'false') throw new Error('Native pnpm command could reinstall or switch package-manager versions');
       }
@@ -101,7 +144,11 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:1000,cached_input_tokens:800,output_tokens:70,reasoning_output_tokens:20}}));
     `);
 
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      env: { TURBO_CACHE_DIR: join(f.root, 'outside-cache') },
+    });
     await expect(runner.runAgent(f.input)).resolves.toEqual({
       stdout: findings,
       usage: {
@@ -581,6 +628,9 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     const f = await fixture(`
       const args = process.argv.slice(2);
       if (args[0] !== 'sandbox') throw new Error('Install/test must be sandboxed');
+      const turboCache = (await import('node:path')).join(args[args.indexOf('--cd') + 1], '.turbo', 'cache');
+      const shellPolicy = args.find(value => value.startsWith('shell_environment_policy.set='));
+      if (process.env.TURBO_CACHE_DIR !== turboCache || !shellPolicy?.includes('TURBO_CACHE_DIR=' + JSON.stringify(turboCache))) throw new Error('Install/test Turbo cache must stay inside this reviewed worktree');
       if (!(await import('node:fs')).existsSync(process.env.HOME)) throw new Error('Writable tool home must exist before Linux constructs its mounts');
       if (process.env.GH_TOKEN || process.env.CODEX_AUTH_JSON || process.env.SANDY_APP_PRIVATE_KEY) throw new Error('Credentials inherited');
       if (process.env.pnpm_config_verify_deps_before_run !== 'false' || process.env.pnpm_config_manage_package_manager_versions !== 'false') throw new Error('Test command could repeat dependency installation');
@@ -598,7 +648,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     const runner = new CodexExecRunner({
       codexHome: f.codexHome,
       executable: f.executable,
-      env: { GH_TOKEN: 'never-inherit', CODEX_AUTH_JSON: 'never-inherit' },
+      env: {
+        GH_TOKEN: 'never-inherit',
+        CODEX_AUTH_JSON: 'never-inherit',
+        TURBO_CACHE_DIR: join(f.root, 'outside-cache'),
+      },
     });
 
     await expect(
