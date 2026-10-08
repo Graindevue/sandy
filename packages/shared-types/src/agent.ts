@@ -1,11 +1,11 @@
 import type { CrossRepoSearchRationale } from './finding.js';
 import type { ReviewJobId } from './review-job.js';
 
-/** The LLM vendor an Agent dispatches to via Sandcastle. */
+/** Runtime vendor metadata; the GitHub Actions runner supports Codex only. */
 export type AgentVendor = 'claude' | 'codex' | 'cursor' | 'copilot';
 
 /**
- * Reasoning effort passed to the vendor CLI via Sandcastle. The union covers
+ * Reasoning effort passed to the configured vendor CLI. The union covers
  * every vendor's vocabulary; which levels a given vendor accepts is a
  * vendor-scoped subset, validated at config load against the per-vendor
  * tables in the bot-worker config layer.
@@ -20,8 +20,8 @@ export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type AgentDefaultEnabled = boolean | 'auto';
 
 /**
- * A reviewer persona: a system prompt plus a vendor/model selection, a tool
- * allowlist, and a completion signal. Sourced from a markdown file in `agents/`
+ * A reviewer persona: a system prompt plus a vendor/model selection and a
+ * completion signal. Sourced from a markdown file in `agents/`
  * (defaults) or `.config/agents/` (per-instance). Agents are configuration
  * data, not code — adding one requires no changes to Sandy.
  *
@@ -45,10 +45,10 @@ export interface AgentDefinition {
    * the vendor CLI's own default applies — exactly the pre-effort behavior.
    */
   effort?: AgentEffort;
-  /** Allowed tool names inside the Agent's sandbox. */
-  tools: string[];
-  /** Maximum agent loop iterations before Sandcastle stops the run. */
-  maxIterations: number;
+  /** Deprecated configuration metadata; native Codex tools are not filtered by this list. */
+  tools?: string[];
+  /** Deprecated configuration metadata; the runner performs one turn and at most one resume. */
+  maxIterations?: number;
   /** String whose appearance in Agent output marks the run complete. */
   completionSignal: string;
   /** Whether this Agent runs by default (frontmatter `defaultEnabled`). */

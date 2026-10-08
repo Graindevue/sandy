@@ -1,6 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { ReviewCancellationCoordinator } from './cancellation.js';
+import { ReviewSupersededError } from './review-errors.js';
 import { ReviewExecutor } from './review-executor.js';
 import {
   agentRunUsage,
@@ -162,11 +162,12 @@ describe('ReviewExecutor', () => {
     expect(warnings.join('\n')).toContain('container failed to start');
   });
 
-  it('runs selected Agents concurrently and records each Agent result', async () => {
+  it('runs selected Agents serially and records each Agent result', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const securityStarted = deferred<void>();
+    let activeAgents = 0;
+    let peakAgents = 0;
     const runnerCalls: string[] = [];
     const executor = new ReviewExecutor({
       store,
@@ -177,12 +178,11 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           runnerCalls.push(agent.key);
-          if (agent.key === 'logic') {
-            await securityStarted.promise;
-            return runnerOutput(findingsOutput([finding]));
-          }
-          securityStarted.resolve();
-          return runnerOutput(findingsOutput([securityFinding]));
+          activeAgents += 1;
+          peakAgents = Math.max(peakAgents, activeAgents);
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          activeAgents -= 1;
+          return runnerOutput(findingsOutput([agent.key === 'logic' ? finding : securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -190,9 +190,12 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 0,
+    });
 
-    expect(runnerCalls.sort()).toEqual(['logic', 'security']);
+    expect(runnerCalls).toEqual(['logic', 'security']);
+    expect(peakAgents).toBe(1);
     expect(store.recordedFindings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -378,7 +381,9 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 1,
+    });
 
     expect(store.agentRuns).toEqual(
       expect.arrayContaining([
@@ -500,7 +505,6 @@ describe('ReviewExecutor', () => {
           repo: 'acme/desktop',
           sha: 'def456',
           hostPath: '/tmp/worktree/acme/desktop/job-1',
-          sandboxPath: '/workspace/acme/desktop',
         },
       ],
     });
@@ -621,14 +625,14 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const runnerStarted = deferred<void>();
     const executor = new ReviewExecutor({
       store,
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ signal }) =>
@@ -643,7 +647,7 @@ describe('ReviewExecutor', () => {
 
     const execution = executor.executeClaimedJob('job-1');
     await runnerStarted.promise;
-    cancellations.cancelReviewJobs(['job-1']);
+    cancellations.abort(new ReviewSupersededError('job-1'));
     await execution;
 
     expect(poster.results).toEqual([]);
@@ -688,12 +692,12 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     let statusChecks = 0;
     store.getReviewJobStatus = async () => {
       statusChecks += 1;
       if (statusChecks === 4) {
-        cancellations.cancelReviewJobs(['job-1']);
+        cancellations.abort(new ReviewSupersededError('job-1'));
       }
       return store.status;
     };
@@ -702,7 +706,7 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
@@ -724,11 +728,11 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const originalCreateWorktree = cloneManager.createWorktree.bind(cloneManager);
     cloneManager.createWorktree = async (repo, request) => {
       const worktree = await originalCreateWorktree(repo, request);
-      cancellations.cancelReviewJobs(['job-1']);
+      cancellations.abort(new ReviewSupersededError('job-1'));
       return worktree;
     };
     let runnerCalls = 0;
@@ -737,7 +741,7 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => {

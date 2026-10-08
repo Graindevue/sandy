@@ -6,8 +6,10 @@ export type DetectedPackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun';
 
 export interface DetectedDependencyInstall {
   packageManager: DetectedPackageManager;
-  /** Shell command that performs a lockfile-faithful install inside the sandbox. */
+  /** Shell command that performs a lockfile-faithful install inside the native sandbox. */
   command: string;
+  /** Runtime command using the reviewed Repo's package-manager pin when present. */
+  packageManagerCommand?: string;
   /** Lockfile present in the worktree, when one exists — keys the node_modules seed cache. */
   lockfile?: string;
 }
@@ -23,6 +25,8 @@ export type DependencyInstallResult =
       packageManager: DetectedPackageManager;
       command: string;
       durationMs: number;
+      /** The test suite is run once, before Agents, with a bounded diagnostic tail. */
+      testResult?: string;
     }
   | { status: 'skipped'; reason: string }
   | { status: 'failed'; error: string; command?: string };
@@ -36,9 +40,8 @@ export type DependencyInstallResult =
  *
  * Every command runs with a frozen lockfile, so the install can never
  * rewrite the lockfile under review, plus `CI=true LEFTHOOK=0 HUSKY=0`:
- * git-hook installers run from `prepare` scripts need the host gitdir, which
- * is not mounted in the install VM (observed: graindevue's `lefthook install`
- * fails with "not a git repository" — lefthook ignores CI=true).
+ * hook installers are unnecessary during review and may otherwise alter shared
+ * worktree git metadata (lefthook ignores CI=true, so disable it explicitly).
  */
 export async function detectDependencyInstall(
   worktreePath: string,
@@ -58,11 +61,41 @@ export async function detectDependencyInstall(
     fromLockfile !== null && fromLockfile.packageManager === packageManager
       ? fromLockfile.lockfile
       : null;
+  const runtimeCommand = await packageManagerCommand(packageManager, worktreePath);
   return {
     packageManager,
-    command: await installCommand(packageManager, worktreePath),
+    command: (await installCommand(packageManager, worktreePath)).replace(
+      `${packageManager} `,
+      `${runtimeCommand} `,
+    ),
+    ...(runtimeCommand !== packageManager ? { packageManagerCommand: runtimeCommand } : {}),
     ...(lockfile !== null ? { lockfile } : {}),
   };
+}
+
+async function packageManagerCommand(
+  packageManager: DetectedPackageManager,
+  worktreePath: string,
+): Promise<string> {
+  // pnpm's own version auto-install can replace the executing CLI. An explicit
+  // npx pin keeps Sandy's tooling separate from the reviewed Repo's version.
+  if (packageManager !== 'pnpm') return packageManager;
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await readFile(join(worktreePath, 'package.json'), 'utf8'));
+  } catch {
+    return packageManager;
+  }
+  if (typeof manifest !== 'object' || manifest === null) return packageManager;
+  const pin = (manifest as { packageManager?: unknown }).packageManager;
+  if (typeof pin !== 'string' || !pin.startsWith('pnpm@')) return packageManager;
+  const match =
+    /^pnpm@(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?)(?:\+sha(?:224|256|384|512)\.[a-fA-F0-9]+)?$/.exec(
+      pin,
+    );
+  if (match?.[1] === undefined)
+    throw new Error('packageManager pnpm pin must be an exact semantic version');
+  return `npx --yes pnpm@${match[1]}`;
 }
 
 async function packageManagerFromManifest(
@@ -109,8 +142,7 @@ async function installCommand(
 ): Promise<string> {
   switch (packageManager) {
     case 'pnpm':
-      // --prefer-offline skips registry metadata re-checks for anything the
-      // VM-local store already has (e.g. on a seeded near-no-op install).
+      // Reuse the runner's package-manager cache without rewriting the lockfile.
       return 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline';
     case 'npm':
       return 'CI=true LEFTHOOK=0 HUSKY=0 npm ci --prefer-offline --no-audit --no-fund';

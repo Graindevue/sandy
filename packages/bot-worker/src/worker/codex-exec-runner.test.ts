@@ -1,0 +1,303 @@
+import { execFile } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import type { AgentDefinition } from '@sandy/shared-types';
+import { afterEach, describe, expect, it } from 'vitest';
+import { CodexExecRunner, type RunAgentInput } from './codex-exec-runner.js';
+
+const exec = promisify(execFile);
+const directories: string[] = [];
+const findings =
+  '<findings>{"findings":[],"crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"Local change"}}</findings>';
+const agent: AgentDefinition = {
+  key: 'logic',
+  name: 'Logic',
+  description: 'Find bugs',
+  category: 'logic',
+  vendor: 'codex',
+  model: 'gpt-5.5',
+  effort: 'xhigh',
+  tools: [],
+  maxIterations: 30,
+  completionSignal: '</findings>',
+  defaultEnabled: true,
+  systemPrompt: 'Find concrete bugs.',
+};
+
+afterEach(async () => {
+  await Promise.all(
+    directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
+
+async function fixture(program: string) {
+  const root = await mkdtemp(join(tmpdir(), 'sandy-codex-runner-'));
+  directories.push(root);
+  const worktreePath = join(root, 'repo');
+  const codexHome = join(root, 'ci-codex');
+  await mkdir(worktreePath);
+  await mkdir(codexHome);
+  await exec('git', ['init', '-b', 'main'], { cwd: worktreePath });
+  await exec('git', ['config', 'user.name', 'Test'], { cwd: worktreePath });
+  await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreePath });
+  await writeFile(join(worktreePath, 'review.ts'), 'export const before = true;\n');
+  await exec('git', ['add', '.'], { cwd: worktreePath });
+  await exec('git', ['commit', '-m', 'base'], { cwd: worktreePath });
+  await exec('git', ['remote', 'add', 'origin', worktreePath], { cwd: worktreePath });
+  await exec('git', ['checkout', '-b', 'feature'], { cwd: worktreePath });
+  await writeFile(join(worktreePath, 'review.ts'), 'export const after = false;\n');
+  await exec('git', ['commit', '-am', 'change'], { cwd: worktreePath });
+  await exec('git', ['fetch', 'origin'], { cwd: worktreePath });
+  const headSha = (await exec('git', ['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();
+  const executable = join(root, 'codex');
+  await writeFile(executable, `#!/usr/bin/env node\n${program}`);
+  await chmod(executable, 0o755);
+  const input: RunAgentInput = {
+    agent,
+    worktreePath,
+    pullRequest: {
+      owner: 'acme',
+      repo: 'widget',
+      number: 42,
+      headSha,
+      baseRef: 'main',
+      title: 'Fix behavior',
+      url: 'https://github.com/acme/widget/pull/42',
+    },
+  };
+  return { root, input, codexHome, executable };
+}
+
+describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
+  it('reviews the actual PR diff in one invocation and records final-message usage without double-counting cached input', async () => {
+    const f = await fixture(`
+      let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
+      const args = process.argv.slice(2);
+      if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-5.5' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
+      if (!prompt.includes('-export const before = true;') || !prompt.includes('+export const after = false;')) throw new Error('Missing PR diff');
+      if (args.at(-1) !== '-') throw new Error('Prompt must be stdin');
+      process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'thread-one'}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Checking the diff'}}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'command_execution',aggregated_output:'</findings>'}}) + '\\n');
+      const line = JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n';
+      process.stdout.write(line.slice(0,23)); process.stdout.write(line.slice(23));
+      process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:1000,cached_input_tokens:800,output_tokens:70,reasoning_output_tokens:20}}));
+    `);
+
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({
+      stdout: findings,
+      usage: {
+        inputTokens: 200,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 800,
+        outputTokens: 70,
+      },
+    });
+  });
+
+  it('resumes only the explicit review thread once and adds both turns of usage', async () => {
+    const f = await fixture(`
+      let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
+      const args = process.argv.slice(2);
+      const resumed = args.includes('resume');
+      if (resumed && (!args.includes('review-thread') || args.includes('--last') || prompt.includes('PR diff:'))) throw new Error('Wrong resume context');
+      process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'review-thread'}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:resumed ? ${JSON.stringify(findings)} : 'I inspected the change.'}}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'turn.completed',usage:resumed ? {input_tokens:600,cached_input_tokens:500,output_tokens:10} : {input_tokens:1000,cached_input_tokens:800,output_tokens:70}}) + '\\n');
+    `);
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({
+      stdout: findings,
+      usage: {
+        inputTokens: 300,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 1300,
+        outputTokens: 80,
+      },
+    });
+  });
+
+  it('serializes agents across runner instances sharing a rotating Codex login', async () => {
+    const f = await fixture(`
+      const fs = await import('node:fs/promises');
+      const lock = process.env.CODEX_HOME + '/in-use';
+      await fs.writeFile(lock, 'active', {flag:'wx'});
+      for await (const chunk of process.stdin) {}
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await fs.unlink(lock);
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n');
+    `);
+    const first = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const second = new CodexExecRunner({
+      codexHome: join(f.codexHome, '..', 'ci-codex'),
+      executable: f.executable,
+    });
+    await expect(Promise.all([first.runAgent(f.input), second.runAgent(f.input)])).resolves.toEqual(
+      [{ stdout: findings }, { stdout: findings }],
+    );
+  });
+
+  it('kills the agent process tree on cancellation, including a detached child ignoring SIGTERM', async () => {
+    const f = await fixture(`
+      const {spawn} = await import('node:child_process');
+      const {writeFile} = await import('node:fs/promises');
+      for await (const chunk of process.stdin) {}
+      const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},100)'], {stdio:'ignore',detached:true});
+      await writeFile('child.pid', String(child.pid));
+      process.on('SIGTERM',()=>{}); setInterval(()=>{},100);
+    `);
+    const controller = new AbortController();
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const pending = runner.runAgent({ ...f.input, signal: controller.signal });
+    const rejected = expect(pending).rejects.toThrow('Review cancelled');
+    const pidFile = join(f.input.worktreePath, 'child.pid');
+    let pid: number | undefined;
+    for (let tries = 0; tries < 100; tries++) {
+      try {
+        pid = Number(await readFile(pidFile, 'utf8'));
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    expect(pid).toBeTypeOf('number');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort(new Error('Review cancelled'));
+    await rejected;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(() => process.kill(pid ?? 0, 0)).toThrow();
+  });
+
+  it('ends a hung agent at its deadline instead of starting another invocation', async () => {
+    const f = await fixture(
+      'for await (const chunk of process.stdin) {} setInterval(()=>{}, 100);',
+    );
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      agentTimeoutMs: 100,
+    });
+    await expect(runner.runAgent(f.input)).rejects.toThrow('Codex agent exceeded 100ms');
+  });
+
+  it('keeps write credentials out of the agent environment and enforces denied credential paths', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      const args = process.argv.slice(2);
+      if (process.env.GH_TOKEN || process.env.SANDY_APP_PRIVATE_KEY || process.env.OPENAI_API_KEY) throw new Error('Write credentials inherited');
+      if (args.includes('--dangerously-bypass-approvals-and-sandbox') || args.includes('--sandbox')) throw new Error('Filesystem denies bypassed');
+      if (!args.includes('default_permissions="sandy"')) throw new Error('Missing enforced permissions');
+      const profile = args.find(arg => arg.startsWith('permissions.sandy='));
+      if (!profile?.includes(process.env.CODEX_HOME) || !profile.includes('app.pem') || !profile.includes('"deny"')) throw new Error('Missing protected paths');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n');
+    `);
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      protectedPaths: [join(f.root, 'app.pem')],
+      env: {
+        GH_TOKEN: 'do-not-inherit',
+        SANDY_APP_PRIVATE_KEY: 'do-not-inherit',
+        OPENAI_API_KEY: 'do-not-inherit',
+      },
+    });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
+
+  it('fails a rejected Codex turn even if the stream contains a findings-shaped message', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'failed-thread'}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'turn.failed',error:{message:'Subscription limit reached'}}) + '\\n');
+    `);
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).rejects.toThrow('Subscription limit reached');
+  });
+
+  it('excludes ignored generated diff content before preparing the prompt while preserving negated ignore patterns', async () => {
+    const f = await fixture(`
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(prompt.includes('PRIVATE_GENERATED_DIFF'))throw new Error('Ignored diff leaked');
+      if(!prompt.includes('REVIEW_THIS_GENERATED_FILE'))throw new Error('Negated pattern lost');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    await mkdir(join(f.input.worktreePath, 'generated'));
+    await writeFile(
+      join(f.input.worktreePath, 'generated', 'large.ts'),
+      'PRIVATE_GENERATED_DIFF\n',
+    );
+    await writeFile(
+      join(f.input.worktreePath, 'generated', 'keep.ts'),
+      'REVIEW_THIS_GENERATED_FILE\n',
+    );
+    await exec('git', ['add', '.'], { cwd: f.input.worktreePath });
+    await exec('git', ['commit', '-m', 'generated changes'], { cwd: f.input.worktreePath });
+    f.input.pullRequest.headSha = (
+      await exec('git', ['rev-parse', 'HEAD'], { cwd: f.input.worktreePath })
+    ).stdout.trim();
+    f.input.botConfig = {
+      productRules: null,
+      repoRules: null,
+      ignorePatterns: ['generated/**', '!generated/keep.ts'],
+    };
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
+
+  it('preserves deleted names in a renamed file so cross-repo reviewers can search old consumers', async () => {
+    const f = await fixture(`
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt.includes('rename from review.ts')||!prompt.includes('rename to renamed.ts'))throw new Error('Rename context lost');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    await exec('git', ['mv', 'review.ts', 'renamed.ts'], { cwd: f.input.worktreePath });
+    // Keep enough shared lines for Git's independent rename detection.
+    await writeFile(join(f.input.worktreePath, 'renamed.ts'), 'export const before = true;\n');
+    await exec('git', ['commit', '-am', 'rename'], { cwd: f.input.worktreePath });
+    f.input.pullRequest.headSha = (
+      await exec('git', ['rev-parse', 'HEAD'], { cwd: f.input.worktreePath })
+    ).stdout.trim();
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
+});
+
+describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it('installs dependencies with no credential environment and supplies one test-suite result to reviewers', async () => {
+    const f = await fixture(`
+      const args = process.argv.slice(2);
+      if (args[0] !== 'sandbox') throw new Error('Install/test must be sandboxed');
+      if (process.env.GH_TOKEN || process.env.CODEX_AUTH_JSON || process.env.SANDY_APP_PRIVATE_KEY) throw new Error('Credentials inherited');
+      if (process.env.CODEX_HOME.endsWith('/ci-codex')) throw new Error('Sandbox utility uses authenticated home');
+      const command = args.at(-1);
+      if (command.includes(' install ')) process.stdout.write('dependencies ready');
+      else if (command === 'npx --yes pnpm@10.34.1 test') process.stdout.write('1 passed');
+      else throw new Error('Unexpected command: ' + command);
+    `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ packageManager: 'pnpm@10.34.1', scripts: { test: 'vitest run' } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      env: { GH_TOKEN: 'never-inherit', CODEX_AUTH_JSON: 'never-inherit' },
+    });
+
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toEqual({
+      status: 'installed',
+      packageManager: 'pnpm',
+      command:
+        'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@10.34.1 install --frozen-lockfile --prefer-offline',
+      durationMs: expect.any(Number),
+      testResult: 'npx --yes pnpm@10.34.1 test exited 0.\n1 passed',
+    });
+  });
+});

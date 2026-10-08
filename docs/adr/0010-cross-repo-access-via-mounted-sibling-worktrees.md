@@ -2,7 +2,9 @@
 
 Date: 2026-05-30
 
-Status: Accepted
+Status: Accepted; workspace access amended by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Current amendment (2026-10-09).** Agents still read actual sibling source pinned to its default-branch SHA. In Actions it is available in runner worktrees; Apple Container mount plumbing and sandbox paths below are historical.
 
 ## Context
 

@@ -1,5 +1,8 @@
 # Feature — Run tests inside reviews
 
+> **Historical plan (May–June 2026).** Preserved as the original implementation record, including its original status and unchecked criteria. Current execution is GitHub Actions with serial Codex Agent Runs; containers, host services, reactive workers, and learning provisioning below are retired. See [ADR 0018](../adr/0018-github-actions-codex-runtime.md) and the [current setup guide](../setup/README.md).
+
+
 Status: Implemented 2026-06-12 (dependency install + detection + pnpm self-switch fix
 + per-Agent toolchain banner; shared-install mechanics resolved as a host-side
 node_modules seed cache — a mounted pnpm store proved unusable over virtiofs;

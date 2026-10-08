@@ -4,6 +4,8 @@ Date: 2026-06-04
 
 Status: Accepted
 
+> **Runtime amendment (2026-10-09).** The advisory Check Run and outcome mapping remain. ADR 0018 moves execution to Actions and retires push-driven superseding cancellation. Check Run re-request is a best-effort trigger under GitHub's Actions event restrictions; mentions and manual dispatch remain available.
+
 ## Context
 
 While a Review runs, the PR page shows nothing. Sandy's only PR-page artifacts are the inline Finding comments and the summary issue comment (`poster.ts`), and those appear only *after* a Review finishes. A Review can take minutes (clone, manifest build, N agents in Apple Containers, synthesis), during which an operator looking at the PR has no signal that Sandy is working, queued, or done — let alone what it concluded. The reviewed-PR merge box is where that "is anything happening?" signal belongs.

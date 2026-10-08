@@ -16,15 +16,6 @@ import { loadAgentDefinitions } from './agents.js';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 const shippedAgentsDir = join(repoRoot, 'agents');
 
-const RTK_TRIAL_AGENT_KEY = 'test-coverage';
-const RTK_PROMPT_REFERENCE = /\brtk\b/i;
-const RTK_PROMPT_CONTRACT = [
-  '## Tool Output',
-  'When `rtk` is available, prefix test/log-producing shell commands with it',
-  'If `rtk` is not available, run the same commands normally',
-  'Never use `rtk` on `git diff` or anywhere exact untransformed output matters',
-] as const;
-
 describe('shipped agents/', () => {
   it('every shipped Agent file loads and includes the logic Agent', async () => {
     const onDisk = (await readdir(shippedAgentsDir)).filter((f) => f.endsWith('.md'));
@@ -37,37 +28,26 @@ describe('shipped agents/', () => {
     // Phase 1's active Agent is present and well-formed.
     const logic = requireAgent(agents, 'logic');
     expect(logic.vendor).toBe('codex');
-    expect(logic.tools.length).toBeGreaterThan(0);
     expect(logic.systemPrompt.length).toBeGreaterThan(0);
     // Each definition carries the required fields.
     for (const agent of agents.values()) {
       expect(agent.name.length).toBeGreaterThan(0);
       expect(agent.description.length).toBeGreaterThan(0);
       expect(agent.model.length).toBeGreaterThan(0);
-      expect(agent.maxIterations).toBeGreaterThan(0);
+      expect(agent.vendor).toBe('codex');
+      expect(agent.tools).toBeUndefined();
+      expect(agent.maxIterations).toBeUndefined();
     }
   });
 
-  it('ships RTK guidance in the test-coverage Agent without changing its runtime contract', async () => {
+  it('keeps specialized optional agents disabled and directs effort to the core reviewers', async () => {
     const agents = await loadAgentDefinitions(shippedAgentsDir);
-    const testCoverage = requireAgent(agents, RTK_TRIAL_AGENT_KEY);
-
-    expect(testCoverage.vendor).toBe('claude');
-    expect(testCoverage.model).toBe('haiku');
-    expect(testCoverage.maxIterations).toBe(15);
-    expect(testCoverage.tools).toEqual(['read_file', 'rg', 'git_diff', 'run_tests']);
-    for (const expectedText of RTK_PROMPT_CONTRACT) {
-      expect(testCoverage.systemPrompt).toContain(expectedText);
+    expect(requireAgent(agents, 'logic').effort).toBe('xhigh');
+    expect(requireAgent(agents, 'security').effort).toBe('high');
+    expect(requireAgent(agents, 'convex').defaultEnabled).toBe('auto');
+    for (const key of ['test-coverage', 'style', 'nextjs', 'i18n']) {
+      expect(requireAgent(agents, key).defaultEnabled).toBe(false);
     }
-  });
-
-  it('keeps RTK guidance scoped to the test-coverage Agent', async () => {
-    const agents = await loadAgentDefinitions(shippedAgentsDir);
-    const agentsMentioningRtk = Array.from(agents.values())
-      .filter((agent) => RTK_PROMPT_REFERENCE.test(agent.systemPrompt))
-      .map((agent) => agent.key);
-
-    expect(agentsMentioningRtk).toEqual([RTK_TRIAL_AGENT_KEY]);
   });
 });
 

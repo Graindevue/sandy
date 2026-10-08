@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: Accepted
+Status: Accepted; provisioning amended by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Current amendment (2026-10-09).** `opensrc` and finding-gated source verification remain. The composite action installs and caches the CLI on the Linux runner; host/container installation and bind mounts below are historical.
 
 ## Context
 

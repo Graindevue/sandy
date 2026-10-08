@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: Accepted
+Status: Superseded by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Historical decision.** ADR 0018 replaces Sandcastle and Apple Container with GitHub Actions and Codex CLI. The original runtime rationale below is preserved for history.
 
 ## Context
 

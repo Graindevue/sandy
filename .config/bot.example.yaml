@@ -23,20 +23,17 @@ products:
       - owner: your-org
         name: acme-desktop
         defaultBranch: main
-        # Optional: skip automatic `gh pr ready` Review arming for PRs targeting
-        # these base branches. A human `@bot review` mention still overrides it.
-        # excludeBranches:
-        #   - release/*
-        #   - vendor/**
     # Optional: choose which Agents run for this Product, by Agent key (the file
     # name without .md in agents/ or .config/agents/). List form is an exact
     # Product Agent set. Omit `agents` to use the default selection (every
     # shipped Agent whose `defaultEnabled` is not false).
     #
-    # Phase 1 runs only `logic` regardless of what you list here; listing more
-    # does no harm but won't fan out until a later phase.
+    # Agents run sequentially using one dedicated Codex login. Convex is
+    # skipped when the PR changes no convex/ paths.
     agents:
       - logic
+      - security
+      - convex
 
     # Object form supports the same exact Product selection plus instance-owned
     # runtime overrides. Override entries must include both `vendor` and `model`;
@@ -49,7 +46,7 @@ products:
     #   overrides:
     #     logic:
     #       vendor: codex
-    #       model: gpt-5.6
+    #       model: gpt-5.5
     #       effort: xhigh
 
   # A second, unrelated Product. This one omits `agents`, so the default

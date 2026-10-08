@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: Accepted
+Status: Superseded by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Historical decision.** ADR 0018 removes the copied provider and container images. The original packaging and licensing decision below is preserved for history.
 
 ## Context
 

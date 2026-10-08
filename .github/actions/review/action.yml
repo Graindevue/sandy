@@ -1,0 +1,153 @@
+name: Sandy review
+description: Review an authorized private-repository PR with a serialized Codex subscription session.
+
+inputs:
+  pr-number:
+    description: Open pull request number in the caller repository.
+    required: true
+  app-id:
+    description: Sandy GitHub App ID.
+    required: true
+  app-private-key:
+    description: Sandy GitHub App PEM private key.
+    required: true
+  convex-url:
+    description: Convex deployment URL.
+    required: true
+  codex-auth-json:
+    description: CODEX_AUTH_JSON from the sandy-codex GitHub Environment; never a repository secret.
+    required: true
+  auth-environment:
+    description: GitHub Environment holding the rotating CODEX_AUTH_JSON secret.
+    default: sandy-codex
+  config-path:
+    description: Optional bot.yaml in the caller's trusted default-branch checkout; relative to GITHUB_WORKSPACE.
+    default: ''
+  product-slug:
+    description: Stable product slug when generating configuration; defaults to the repository name.
+    default: ''
+  product-name:
+    description: Product display name when generating configuration.
+    default: ''
+  model:
+    description: Codex model for the generated logic/security/conditional-convex agent configuration.
+    default: gpt-5.5
+  trusted-workflow-sha:
+    description: Optional audited workflow commit for a manual pre-release smoke test; comments and check reruns cannot use it.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Validate the authorized request and prepare trusted configuration
+      id: prepare
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SANDY_INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+        SANDY_INPUT_APP_ID: ${{ inputs.app-id }}
+        SANDY_INPUT_CONFIG_PATH: ${{ inputs.config-path }}
+        SANDY_INPUT_PRODUCT_SLUG: ${{ inputs.product-slug }}
+        SANDY_INPUT_PRODUCT_NAME: ${{ inputs.product-name }}
+        SANDY_INPUT_MODEL: ${{ inputs.model }}
+        SANDY_INPUT_TRUSTED_WORKFLOW_SHA: ${{ inputs.trusted-workflow-sha }}
+        SANDY_AUTH_ENVIRONMENT: ${{ inputs.auth-environment }}
+      run: node "$GITHUB_ACTION_PATH/prepare.mjs"
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        package_json_file: ${{ steps.prepare.outputs.sandy-root }}/package.json
+
+    - name: Set up Node
+      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      with:
+        node-version: 24
+        cache: pnpm
+        cache-dependency-path: ${{ steps.prepare.outputs.sandy-root }}/pnpm-lock.yaml
+
+    # Only Sandy's pinned, trusted source is installed and built on the host.
+    # Reviewed package scripts are handled by the runner's credential-free sandbox.
+    - name: Install and build Sandy
+      shell: bash
+      working-directory: ${{ steps.prepare.outputs.sandy-root }}
+      run: |
+        pnpm install --frozen-lockfile --ignore-scripts
+        pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+        npm install --global --ignore-scripts @openai/codex@0.162.0
+        # This trusted pinned tool downloads its native binary before any
+        # credentials are materialized. Reviewed dependency scripts stay disabled.
+        npm install --global opensrc@0.7.3
+        opensrc --version
+
+    - name: Restore framework source cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ runner.temp }}/sandy-opensrc
+        key: sandy-opensrc-v1-${{ runner.os }}-${{ github.repository }}-${{ hashFiles('repository/pnpm-lock.yaml', 'repository/package-lock.json', 'repository/yarn.lock', 'repository/bun.lock') }}
+        restore-keys: |
+          sandy-opensrc-v1-${{ runner.os }}-${{ github.repository }}-
+
+    - name: Check permission to persist the rotating session
+      id: auth-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-environments: write
+
+    - name: Restore the current session if missing
+      id: auth
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.auth-token.outputs.token }}
+        CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+        SANDY_APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+        SANDY_AUTH_ENVIRONMENT: ${{ inputs.auth-environment }}
+      run: node "$GITHUB_ACTION_PATH/auth.mjs" seed
+
+    - name: Warm up Codex and allow its built-in session refresh
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      run: >-
+        timeout --signal=TERM --kill-after=30s 5m
+        codex exec --json --skip-git-repo-check --sandbox read-only
+        -c cli_auth_credentials_store='"file"'
+        "Reply with the single word OK. Do not use tools." >/dev/null
+
+    - name: Review the pull request
+      shell: bash
+      working-directory: ${{ steps.prepare.outputs.sandy-root }}
+      env:
+        SANDY_ROOT: ${{ steps.prepare.outputs.sandy-root }}
+        SANDY_REPOSITORY: ${{ github.repository }}
+        SANDY_PR_NUMBER: ${{ inputs.pr-number }}
+        CONVEX_URL: ${{ inputs.convex-url }}
+        GITHUB_APP_ID: ${{ inputs.app-id }}
+      # Finish this step before the caller's 120-minute job timeout so the
+      # always() persistence steps still have time to preserve refreshed auth.
+      run: timeout --signal=TERM --kill-after=60s 90m pnpm review
+
+    # Tokens last an hour. Mint another token after the review so a long review
+    # never loses the auth write-back because its initial installation token expired.
+    - name: Create a fresh session persistence token
+      if: ${{ always() && steps.auth.outcome == 'success' }}
+      id: persist-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-environments: write
+
+    - name: Persist the session even after a failed review
+      if: ${{ always() && steps.auth.outcome == 'success' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.persist-token.outputs.token }}
+        SANDY_AUTH_ENVIRONMENT: ${{ inputs.auth-environment }}
+      run: node "$GITHUB_ACTION_PATH/auth.mjs" persist
+
+    - name: Remove local credentials
+      if: ${{ always() && steps.prepare.outcome == 'success' }}
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/auth.mjs" cleanup

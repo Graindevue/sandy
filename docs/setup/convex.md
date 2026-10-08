@@ -1,95 +1,50 @@
 # Deploying the Convex backend
 
-Sandy keeps its queue and review state in **Convex Cloud** (ADR
-[0004](../adr/0004-convex-cloud-for-state.md)). The schema and functions live in
-[`packages/convex-backend`](../../packages/convex-backend); this walkthrough
-creates a deployment and pushes that schema to it.
+Convex Cloud holds ReviewJobs, Findings, manifests, and Agent Run history.
+The Actions entry point uses `ConvexHttpClient` for the same mutations and
+queries that back this state; no persistent subscription worker is required.
 
-This is also a prerequisite for type-checking the rest of the workspace:
-`convex codegen` writes `convex/_generated/`, which dependent packages import.
-See the package's own [`README.md`](../../packages/convex-backend/README.md) for
-the function inventory — this doc covers the deployment steps and does not
-restate it.
+## Create or link a project
 
-## 1. Log in and create a deployment
-
-From the repo root. The first `convex dev` run prompts you to log in (browser
-OAuth) and to create or link a deployment, then writes the deployment name into
-`packages/convex-backend/.env.local` (gitignored):
+From the Sandy root:
 
 ```bash
+pnpm install
 pnpm --filter @sandy/convex-backend exec convex dev --once
 ```
 
-Choose a new project (e.g. `sandy`) when prompted. `--once` performs a single
-codegen + push and exits, which is what you want for setup; drop it to keep a
-watcher running while developing the backend.
+Follow the Convex login/project prompts. This writes the development deployment
+configuration to `packages/convex-backend/.env.local` and regenerates
+`convex/_generated/`.
 
-> **Where the URL goes.** `convex dev` records `CONVEX_DEPLOYMENT` in
-> `.env.local`. The worker reads its own `CONVEX_URL` from `.config/.env` — copy
-> the deployment URL Convex prints (the `https://<name>.convex.cloud` value)
-> there. [`github-app.md`](./github-app.md) creates `.config/.env` with the full
-> set of keys (a `CONVEX_URL=` line included); set that line to the value here.
-> If you reached this doc first and the file doesn't exist yet, create it with
-> just this line and `github-app.md` will fill in the rest:
->
-> ```bash
-> # .config/.env — set this line (github-app.md adds the GitHub keys)
-> CONVEX_URL=https://your-deployment.convex.cloud
-> ```
+## Deploy and configure the caller
 
-Finding evidence is embedded by the bot worker through local Ollama, so Convex
-does not need an embedding API key.
-
-## 2. Generate types and deploy the schema
-
-`convex dev --once` already generated `convex/_generated/` and pushed the schema
-to your **dev** deployment. To regenerate types explicitly, type-check, and push
-to the deployment:
+Review and commit generated type changes alongside backend changes, then deploy:
 
 ```bash
-# Regenerate convex/_generated (also runs continuously under `convex dev`).
-pnpm --filter @sandy/convex-backend build
-
-# Type-check against the generated types.
 pnpm --filter @sandy/convex-backend type-check
-
-# Deploy schema + functions.
 pnpm --filter @sandy/convex-backend deploy
 ```
 
-`convex deploy` pushes to your **production** deployment for the project. For a
-solo self-hosted setup the dev deployment is usually sufficient; point the
-worker's `CONVEX_URL` at whichever deployment you intend to run against.
+`convex deploy` targets the project's production deployment. Use its printed
+`https://<deployment>.convex.cloud` URL for the caller's `CONVEX_URL` secret:
 
-> Commit `convex/_generated/` once generated — this is the Convex convention and
-> lets dependent packages type-check without a live deployment. The
-> `convex-backend` README says the same; don't delete it from version control.
+```bash
+gh secret set CONVEX_URL --repo Graindevue/graindevue
+```
 
-## 3. What gets deployed
+The prompt accepts the deployment URL. For local development, it can also live
+in gitignored `.config/.env`. Ordinary CI and reviews use committed generated
+types, so neither requires a deploy key or a running anonymous backend.
+See [the package codegen guide](../../packages/convex-backend/README.md).
 
-The schema tables and the worker's mutations/queries/actions — `enqueue`/
-`claim`/`record`-style functions and learning-loop assignment functions — are
-inventoried in the package's own
-[`README.md`](../../packages/convex-backend/README.md) and
-[`convex/schema.ts`](../../packages/convex-backend/convex/schema.ts). This doc
-deploys them; it doesn't restate the list. Phase 3 learning-loop tables
-(`archetypes`, `reactions`, and `suggestedRules`) are present.
+## Verify
 
-The `reapStuckJobs` cron runs every 5 minutes and marks ReviewJobs left
-`running` for more than 30 minutes as `failed`. The SuggestedRule inference cron
-runs daily after reactions have accumulated.
+Inspect the [Convex dashboard](https://dashboard.convex.dev) for the schema
+tables and the `reviewJobs`, `pullRequests`, `findings`, and `agentRuns`
+functions. After a review, verify its ReviewJob and Agent Runs are stored.
 
-## 4. Verify
-
-The Convex dashboard (`npx convex dashboard` from
-`packages/convex-backend`, or <https://dashboard.convex.dev>) should show the
-schema tables under **Data** and the `pullRequests` / `reviewJobs` / `findings`
-functions under **Functions**, plus the `reapStuckJobs` and SuggestedRule
-inference crons under **Cron Jobs**. The tables are empty until Sandy observes
-its first PR.
-
-## Next
-
-Register the [GitHub App](./github-app.md) (if you haven't), then expose the
-worker via [`tailscale.md`](./tailscale.md).
+The reaper cron marks abandoned running Reviews as failed; the
+SuggestedRule-inference cron remains for historical learning data. New Finding
+embeddings and Archetype assignment are disabled in the Actions runtime, so
+there is no embedding service or embedding API key to configure.

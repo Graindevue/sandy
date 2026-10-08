@@ -2,9 +2,11 @@
 
 Date: 2026-06-11
 
-Status: Accepted
+Status: Accepted; scheduling amended by [0018](./0018-github-actions-codex-runtime.md)
 
 Supersedes [0016](0016-base-branch-exclusion.md)
+
+> **Current amendment (2026-10-09).** Manual-only cadence remains and `workflow_dispatch` adds a third explicit request path. Actions serializes Reviews without cancelling a running job; the superseding container-cancellation path below is historical. Check Run re-request delivery is subject to GitHub's Actions event restrictions, so mentions and dispatch remain the dependable fallback.
 
 ## Context
 

@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: Accepted
 
+> **Runtime amendment (2026-10-09).** MCP remains deferred. The Actions runtime disables learning and its reactive promotion worker; dashboard edits do not automatically publish Rule PRs. The workflow below records the earlier learning-loop design, retained for history.
+
 ## Context
 
 The original design proposed a v1 MCP server exposing tools like `list_suggested_rules`, `promote_suggested_rule`, and `trigger_review`. The rationale was that learning-loop promotion needs an operator surface, and MCP integrates naturally with Claude Code.

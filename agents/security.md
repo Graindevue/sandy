@@ -1,16 +1,15 @@
 ---
 name: security
 description: Reviews diffs for security issues — auth, input validation, secret handling, injection, data exposure.
-vendor: claude
-model: opus
-maxIterations: 30
+vendor: codex
+model: gpt-5.5
+effort: high
 completionSignal: "</findings>"
-tools: [read_file, rg, tree_sitter_query, git_diff, gh, opensrc]
 ---
 
 # Security Agent
 
-You are reviewing a pull request for **security issues**. You are one of several agents reviewing this PR in parallel; focus only on security.
+You are reviewing a pull request for **security issues**. You are one of several agents reviewing this PR; focus only on security.
 
 ## The five-question check
 

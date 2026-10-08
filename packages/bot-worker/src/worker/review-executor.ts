@@ -18,11 +18,11 @@ import {
   synthesizePostableReview,
 } from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
-import {
-  isReviewSupersededError,
-  type ReviewCancellationRegistry,
-  ReviewSupersededError,
-} from './cancellation.js';
+import type {
+  AgentRunResult,
+  RunnerPullRequest,
+  RunnerSiblingWorktree,
+} from './codex-exec-runner.js';
 import type { DependencyInstallResult } from './dependency-install.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
@@ -32,6 +32,7 @@ import type {
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
+import { isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
 import type {
   ArchetypeAssignedFinding,
   PersistedFinding,
@@ -53,11 +54,6 @@ import {
   type ReviewCloneManager,
   type ReviewWorktree,
 } from './review-workspace.js';
-import type {
-  AgentRunResult,
-  RunnerPullRequest,
-  RunnerSiblingWorktree,
-} from './sandcastle-runner.js';
 
 export type {
   ProductRepoForReview,
@@ -151,6 +147,7 @@ export interface ReviewExecutionStore {
 
 export interface ReviewDiffInspector {
   changedLineCount(target: PullRequestTarget, ignorePatterns?: readonly string[]): Promise<number>;
+  changedPaths?(target: PullRequestTarget): Promise<string[]>;
 }
 
 export interface ReviewAgentRunner {
@@ -281,7 +278,7 @@ export interface ReviewExecutorOptions {
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
   manifestBuilder?: ReviewManifestBuilder;
   resolveReviewBotConfig?: (input: ResolveReviewBotConfigInput) => Promise<ReviewBotContext>;
-  cancellationRegistry?: ReviewCancellationRegistry;
+  signal?: AbortSignal;
   maxChangedLines?: number;
   agentTimeoutMs?: number;
   now?: () => number;
@@ -310,7 +307,7 @@ export class ReviewExecutor {
   readonly #resolveReviewBotConfig: (
     input: ResolveReviewBotConfigInput,
   ) => Promise<ReviewBotContext>;
-  readonly #cancellationRegistry: ReviewCancellationRegistry | null;
+  readonly #signal: AbortSignal | undefined;
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
   readonly #now: () => number;
@@ -328,19 +325,19 @@ export class ReviewExecutor {
     this.#resolveAgents = options.resolveAgents ?? null;
     this.#manifestBuilder = options.manifestBuilder ?? null;
     this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? resolveEmptyReviewBotContext;
-    this.#cancellationRegistry = options.cancellationRegistry ?? null;
+    this.#signal = options.signal;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
     this.#logger = options.logger ?? console;
   }
 
-  async executeClaimedJob(jobId: string): Promise<void> {
+  async executeClaimedJob(jobId: string): Promise<{ failedAgentCount: number }> {
+    let failedAgentCount = 0;
     let context: ReviewJobContext | null = null;
     let statusCheck: ReviewStatusCheckRun | null = null;
     const worktrees: ReviewWorktree[] = [];
-    const cancellation = this.#cancellationRegistry?.register(jobId);
-    const cancellationSignal = cancellation?.signal;
+    const cancellationSignal = this.#signal;
 
     try {
       cancellationSignal?.throwIfAborted();
@@ -373,7 +370,7 @@ export class ReviewExecutor {
           outcome: REVIEW_STATUS_CHECK_OUTCOMES.scopeDeclined,
           summaryComment,
         });
-        return;
+        return { failedAgentCount };
       }
 
       const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
@@ -422,6 +419,7 @@ export class ReviewExecutor {
         dependencyInstall,
         cancellationSignal,
       });
+      failedAgentCount = agentResults.failedAgentCount;
       let postedReview: PostedReviewResult | null = null;
       if (agentResults.outputs.length > 0) {
         postedReview = await this.#synthesizePersistAndPostReview({
@@ -450,21 +448,21 @@ export class ReviewExecutor {
     } catch (error) {
       if (isReviewSupersededError(error)) {
         await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
-        return;
+        return { failedAgentCount };
       }
       const message = describeError(error);
       const markedFailed = await this.#store.markFailed(jobId, this.#now(), message);
       if (!markedFailed && (await this.#reviewWasSuperseded(jobId, cancellationSignal))) {
         await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
-        return;
+        return { failedAgentCount };
       }
       await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed });
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
-      cancellation?.dispose();
     }
+    return { failedAgentCount };
   }
 
   async #selectAgents(
@@ -481,6 +479,11 @@ export class ReviewExecutor {
     return await selectAgentsForReview({
       agents: candidates,
       reviewRepoFullName: `${context.repo.owner}/${context.repo.name}`,
+      ...(this.#diffInspector.changedPaths === undefined
+        ? {}
+        : {
+            changedPaths: await this.#diffInspector.changedPaths(pullRequestTarget(context)),
+          }),
       productRepos: manifestRepos.map((manifestRepo) =>
         agentSelectionRepo(manifestRepo, reviewBotConfig),
       ),
@@ -533,21 +536,18 @@ export class ReviewExecutor {
     dependencyInstall: DependencyInstallResult | undefined;
     cancellationSignal: AbortSignal | undefined;
   }): Promise<SelectedAgentReviewResults> {
-    const results = await Promise.allSettled(
-      input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
-    );
-
     const outputs: AgentReviewOutput[] = [];
     let failedAgentCount = 0;
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        throw result.reason;
-      }
-      if (result.value.status === 'failed') {
+    // One managed Codex auth file belongs to one execution stream. Starting
+    // the timeout here also gives each Agent its full budget after the prior
+    // Agent has finished, rather than consuming it while waiting for auth.
+    for (const agent of input.agents) {
+      const result = await this.#runSelectedAgent({ ...input, agent });
+      if (result.status === 'failed') {
         failedAgentCount += 1;
         continue;
       }
-      outputs.push(result.value.output);
+      outputs.push(result.output);
     }
     return {
       outputs,

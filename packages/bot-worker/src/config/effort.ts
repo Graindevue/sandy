@@ -1,14 +1,9 @@
 import type { AgentEffort, AgentVendor } from '@sandy/shared-types';
 
 /**
- * The per-vendor reasoning-effort vocabularies — the single place they live.
- * Each list mirrors what the pinned Sandcastle (0.6.5) provider options accept
- * for the vendor CLI versions baked into the agent image, so a value that
- * passes validation here is guaranteed to render as a CLI flag (codex
- * `-c model_reasoning_effort="…"`, claude/copilot `--effort …`). Cursor has no
- * effort support in Sandcastle, so its vocabulary is empty and any configured
- * effort is a load-time error. A CLI/Sandcastle bump that adds a level is a
- * one-line update here.
+ * Config validation retains legacy vendor vocabularies for existing instance
+ * files. The GitHub Actions runtime rejects non-Codex Agents before execution.
+ * Codex effort is passed as `model_reasoning_effort` in its CLI config.
  */
 export const VENDOR_EFFORTS: Record<AgentVendor, readonly AgentEffort[]> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
