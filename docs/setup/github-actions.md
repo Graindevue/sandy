@@ -100,7 +100,10 @@ package scripts run in a credential-free sandbox; review agents use a filesystem
 profile that denies access to auth files, the App key, and other credential
 directories. On Ubuntu, the action installs bubblewrap and its AppArmor profile
 before materializing Codex auth so the native sandbox can create its isolated
-user namespace.
+user namespace. During dependency installation, Sandy skips only a root
+`prepare` script whose exact command is `lefthook install`, in the isolated
+reviewed worktree. It restores the original `package.json` bytes before tests
+and review; other dependency lifecycle scripts still run.
 
 ## 4. Choose Product configuration
 

@@ -1,12 +1,17 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
 import { isIgnoredPath } from '../config/ignore.js';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
-import { type DependencyInstallResult, detectDependencyInstall } from './dependency-install.js';
+import {
+  type DependencyInstallResult,
+  detectDependencyInstall,
+  installWithoutHookOnlyPrepare,
+  readPackageJson,
+} from './dependency-install.js';
 import { buildReviewPrompt } from './review-prompt.js';
 
 export interface RunnerPullRequest {
@@ -117,10 +122,12 @@ export class CodexExecRunner {
         };
       command = detected.command;
       const startedAt = Date.now();
-      const installed = await this.#sandboxCommand(
-        input,
-        command,
-        this.#options.installTimeoutMs ?? 15 * 60 * 1000,
+      const installed = await installWithoutHookOnlyPrepare(input.worktreePath, () =>
+        this.#sandboxCommand(
+          input,
+          detected.command,
+          this.#options.installTimeoutMs ?? 15 * 60 * 1000,
+        ),
       );
       if (installed.exitCode !== 0)
         return {
@@ -132,7 +139,7 @@ export class CodexExecRunner {
       let testStatus: 'passed' | 'failed' | 'skipped' = 'skipped';
       let testResult = 'No test script is defined in package.json; test suite skipped.';
       const manifest = JSON.parse(
-        await readFile(join(input.worktreePath, 'package.json'), 'utf8'),
+        (await readPackageJson(input.worktreePath)).bytes.toString('utf8'),
       ) as { scripts?: { test?: unknown } };
       if (typeof manifest.scripts?.test === 'string') {
         const testCommand = `${detected.packageManagerCommand ?? detected.packageManager} test`;

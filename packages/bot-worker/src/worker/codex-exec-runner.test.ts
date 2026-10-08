@@ -1,5 +1,15 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -267,6 +277,96 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it('rejects a reviewed manifest symlink without reading its outside target', async () => {
+    const f = await fixture('throw new Error("Install must not start");');
+    const outside = join(f.root, 'outside-secret');
+    await writeFile(outside, 'private sentinel must not appear in an error');
+    await symlink(outside, join(f.input.worktreePath, 'package.json'));
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toEqual({ status: 'failed', error: 'package.json must be a regular file' });
+  });
+
+  it('restores over a malicious manifest symlink without overwriting its outside target', async () => {
+    const f = await fixture(`
+      const fs = await import('node:fs/promises');
+      await fs.unlink('package.json');
+      await fs.symlink('../outside-secret', 'package.json');
+      process.exitCode = 1;
+    `);
+    const manifest = '{\n "scripts": {"prepare":"lefthook install"}\n}\n';
+    const outside = join(f.root, 'outside-secret');
+    await writeFile(outside, 'private sentinel');
+    await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
+    await chmod(join(f.input.worktreePath, 'package.json'), 0o640);
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({ status: 'failed' });
+    expect(await readFile(outside, 'utf8')).toBe('private sentinel');
+    expect(await readFile(join(f.input.worktreePath, 'package.json'), 'utf8')).toBe(manifest);
+    expect((await stat(join(f.input.worktreePath, 'package.json'))).mode & 0o777).toBe(0o640);
+    expect(
+      (await readdir(f.root)).filter((name) => name.startsWith('.sandy-package-json-')),
+    ).toEqual([]);
+  });
+
+  it('restores the original manifest when the install process times out', async () => {
+    const f = await fixture('setInterval(() => {}, 100);');
+    const manifest = '{\n "scripts": {"prepare":"lefthook install"}\n}\n';
+    await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      installTimeoutMs: 300,
+    });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({ status: 'failed', error: 'command exceeded 300ms' });
+    expect(await readFile(join(f.input.worktreePath, 'package.json'), 'utf8')).toBe(manifest);
+  });
+
+  it('omits a hook-only prepare during installation and restores exact manifest bytes before tests', async () => {
+    const manifest =
+      '{\n  "scripts": {"prepare": "lefthook install", "postinstall": "node setup.js", "test": "node test.js"}\n}\n';
+    const f = await fixture(`
+      const fs = await import('node:fs/promises');
+      const raw = await fs.readFile('package.json', 'utf8');
+      const scripts = JSON.parse(raw).scripts;
+      if (process.argv.at(-1).includes(' ci ')) {
+        if (scripts.prepare !== undefined) throw new Error('Hook-only prepare would mutate shared Git metadata');
+        if (scripts.postinstall !== 'node setup.js') throw new Error('Dependency lifecycle was changed');
+      } else if (raw !== ${JSON.stringify(manifest)}) throw new Error('Manifest not restored before tests');
+      process.stdout.write('verified');
+    `);
+    await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({ status: 'installed', testStatus: 'passed' });
+    expect(await readFile(join(f.input.worktreePath, 'package.json'), 'utf8')).toBe(manifest);
+  });
+
+  it('preserves a compound prepare script and the original manifest during installation', async () => {
+    const manifest = '{\n "scripts": {"prepare":"node build.js && lefthook install"}\n}\n';
+    const f = await fixture(`
+      const raw = await (await import('node:fs/promises')).readFile('package.json', 'utf8');
+      if (raw !== ${JSON.stringify(manifest)}) throw new Error('Required prepare lifecycle was changed');
+    `);
+    await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({ status: 'installed', testStatus: 'skipped' });
+    expect(await readFile(join(f.input.worktreePath, 'package.json'), 'utf8')).toBe(manifest);
+  });
+
   it('reports failed tests from the exit code even when reviewed output claims they passed', async () => {
     const f = await fixture(`
       const command = process.argv.at(-1);
@@ -314,14 +414,16 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       await writeFile(join(f.codexHome, 'auth.json'), '{"dummy":"probe-login"}');
       await mkdir(sandboxHome);
       await writeFile(join(sandboxHome, 'config.toml'), '');
-      await writeFile(
-        join(f.input.worktreePath, 'package.json'),
-        JSON.stringify({
-          name: 'sandy-native-sandbox-probe',
-          version: '1.0.0',
-          scripts: { postinstall: 'node probe.mjs install', test: 'node probe.mjs test' },
-        }),
-      );
+      const manifest = JSON.stringify({
+        name: 'sandy-native-sandbox-probe',
+        version: '1.0.0',
+        scripts: {
+          prepare: 'lefthook install',
+          postinstall: 'node probe.mjs install',
+          test: 'node probe.mjs test',
+        },
+      });
+      await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
       await writeFile(
         join(f.input.worktreePath, 'package-lock.json'),
         JSON.stringify({
@@ -346,6 +448,8 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
          const countsPath = 'probe-counts.json';
          const counts = fs.existsSync(countsPath) ? JSON.parse(fs.readFileSync(countsPath, 'utf8')) : {install:0,test:0};
          const stage = process.argv[2];
+         const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+         assert.equal(manifest.scripts.prepare, stage === 'install' ? undefined : 'lefthook install');
          counts[stage]++;
          assert.equal(counts.install, 1);
          assert.equal(counts.test, stage === 'test' ? 1 : 0);
@@ -365,11 +469,12 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         testResult: expect.stringContaining('npm test exited 0.'),
       });
       if (result.status === 'installed') expect(result.testResult).toContain('test verified');
+      expect(await readFile(join(f.input.worktreePath, 'package.json'), 'utf8')).toBe(manifest);
       expect(
         JSON.parse(await readFile(join(f.input.worktreePath, 'probe-counts.json'), 'utf8')),
       ).toEqual({ install: 1, test: 1 });
       console.info(
-        'Native Linux sandbox: npm ci and npm test passed once; auth, app key, parent proc credentials, and helper configuration protected.',
+        'Native Linux sandbox: npm ci and npm test passed once; hook-only prepare omitted during install and restored before tests; auth, app key, parent proc credentials, and helper configuration protected.',
       );
     },
     60_000,
