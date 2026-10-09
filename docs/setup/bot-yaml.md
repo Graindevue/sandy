@@ -88,8 +88,12 @@ parse for compatibility, but selected non-Codex personas cannot execute.
 Update older instance configuration or persona definitions to use Codex.
 
 An override replaces `vendor`, `model`, and optional `effort` together. Both
-vendor and model are required. Codex effort values are `low`, `medium`, `high`,
-and `xhigh`; omission uses the CLI default even when the persona defines effort.
+vendor and model are required. Sandy accepts Codex effort values `low`, `medium`,
+`high`, `xhigh`, and `max`; the selected model and account must support the
+chosen level. Omission uses the CLI default even when the persona defines effort.
+The shipped `gpt-6.1-sol` personas retain `xhigh`; `max` is opt-in for comparisons
+on representative reviews. See the [agent guidance audit](../research/2026-10-09-agent-guidance-audit.md)
+for official model/CLI compatibility sources and evaluation recommendations.
 
 Overrides keep the prompt, tools, category, and completion signal. To customize
 those, provide an instance persona with the same filename; to add a new persona,

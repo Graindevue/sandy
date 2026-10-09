@@ -188,8 +188,18 @@ describe('loadAgentDefinitions', () => {
     expect(agents.get('logic')?.model).toBe('haiku');
   });
 
-  it('parses an `effort` within the vendor vocabulary', async () => {
-    write(defaultsDir, 'logic.md', LOGIC_MD.replace('model: opus', 'model: opus\neffort: max'));
+  it.each([
+    { vendor: 'claude', model: 'opus' },
+    { vendor: 'codex', model: 'gpt-6.1-sol' },
+  ])('parses max effort for $vendor', async ({ vendor, model }) => {
+    write(
+      defaultsDir,
+      'logic.md',
+      LOGIC_MD.replace('vendor: claude', `vendor: ${vendor}`).replace(
+        'model: opus',
+        `model: ${model}\neffort: max`,
+      ),
+    );
 
     const agents = await loadAgentDefinitions(defaultsDir);
 
@@ -204,14 +214,13 @@ describe('loadAgentDefinitions', () => {
   });
 
   it("rejects an `effort` outside the vendor's own vocabulary", async () => {
-    // `max` exists for claude but is not in codex's vocabulary.
-    const codexMax = LOGIC_MD.replace('vendor: claude', 'vendor: codex').replace(
+    const copilotMax = LOGIC_MD.replace('vendor: claude', 'vendor: copilot').replace(
       'model: opus',
       'model: gpt-5.5\neffort: max',
     );
-    write(defaultsDir, 'logic.md', codexMax);
+    write(defaultsDir, 'logic.md', copilotMax);
 
-    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/vendor codex/);
+    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/vendor copilot/);
   });
 
   it('rejects `effort` on a cursor Agent (no configured effort support)', async () => {

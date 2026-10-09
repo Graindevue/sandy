@@ -405,7 +405,7 @@ products:
     expect(() => parseBotConfig(yaml)).toThrow(/agents\.enable/);
   });
 
-  it('parses a runtime override with an optional effort', () => {
+  it.each(['xhigh', 'max'])('parses a Codex runtime override with %s effort', (effort) => {
     const yaml = `
 products:
   - slug: acme
@@ -418,19 +418,18 @@ products:
       overrides:
         logic:
           vendor: codex
-          model: gpt-5.6
-          effort: xhigh
+          model: gpt-6.1-sol
+          effort: ${effort}
 `;
 
     const product = parseBotConfig(yaml).products[0];
 
     expect(product?.agentOverrides).toEqual({
-      logic: { vendor: 'codex', model: 'gpt-5.6', effort: 'xhigh' },
+      logic: { vendor: 'codex', model: 'gpt-6.1-sol', effort },
     });
   });
 
   it("throws when an override effort is outside the vendor's vocabulary", () => {
-    // `max` exists for claude but is not in codex's vocabulary.
     const yaml = `
 products:
   - slug: acme
@@ -442,12 +441,12 @@ products:
     agents:
       overrides:
         logic:
-          vendor: codex
+          vendor: copilot
           model: gpt-5.6
           effort: max
 `;
     expect(() => parseBotConfig(yaml)).toThrow(
-      /products\[0\]\.agents\.overrides\.logic\.effort must be one of .* for vendor codex/,
+      /products\[0\]\.agents\.overrides\.logic\.effort must be one of .* for vendor copilot/,
     );
   });
 
