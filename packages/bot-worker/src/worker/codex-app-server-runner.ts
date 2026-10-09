@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { CodexAppServer, protocolObject, runtimeEnvironment } from './codex-app-server.js';
@@ -74,31 +74,35 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
       runAgent: (input) => {
         controller.signal.throwIfAborted();
         const task = (async () => {
-          const toolHome = await mkdtemp(join(input.worktreePath, '.sandy-tools-'));
-          const temporaryDirectory = join(toolHome, 'tmp');
-          await mkdir(temporaryDirectory);
-          const ownPath = await realpath(input.worktreePath);
-          const protectedWorkspacePaths = await Promise.all(
-            [preparedWorkspacePath, ...privateWorkspacePaths].map((path) => realpath(path)),
-          );
-          const serial = new CodexExecRunner({
-            ...this.#options,
-            toolHome,
-            temporaryDirectory,
-            protectedPaths: [
-              ...(this.#options.protectedPaths ?? []),
-              ...protectedWorkspacePaths.filter((path) => path !== ownPath),
-            ],
-            env: { ...this.#options.env, OPENSRC_HOME: join(toolHome, 'opensrc') },
-          });
-          return serial.runAgent({
-            ...input,
-            signal: AbortSignal.any([
-              controller.signal,
-              ...(input.signal ? [input.signal] : []),
-              ...(reviewSignal ? [reviewSignal] : []),
-            ]),
-          });
+          const toolHome = await mkdtemp(join(tmpdir(), 'sandy-serial-agent-'));
+          try {
+            const temporaryDirectory = join(toolHome, 'tmp');
+            await mkdir(temporaryDirectory);
+            const ownPath = await realpath(input.worktreePath);
+            const protectedWorkspacePaths = await Promise.all(
+              [preparedWorkspacePath, ...privateWorkspacePaths].map((path) => realpath(path)),
+            );
+            const serial = new CodexExecRunner({
+              ...this.#options,
+              toolHome,
+              temporaryDirectory,
+              protectedPaths: [
+                ...(this.#options.protectedPaths ?? []),
+                ...protectedWorkspacePaths.filter((path) => path !== ownPath),
+              ],
+              env: { ...this.#options.env, OPENSRC_HOME: join(toolHome, 'opensrc') },
+            });
+            return await serial.runAgent({
+              ...input,
+              signal: AbortSignal.any([
+                controller.signal,
+                ...(input.signal ? [input.signal] : []),
+                ...(reviewSignal ? [reviewSignal] : []),
+              ]),
+            });
+          } finally {
+            await rm(toolHome, { recursive: true, force: true });
+          }
         })();
         pending.add(task);
         void task.finally(() => pending.delete(task)).catch(() => {});

@@ -59,6 +59,47 @@ describe('buildBenchmarkReport', () => {
     ).rejects.toThrow('Explicit --ci-home is required');
   });
 
+  it('rejects mandatory auth refresh in serial-only mode before starting any Codex command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sandy-benchmark-refresh-mode-'));
+    try {
+      const home = join(root, 'auth');
+      await mkdir(home);
+      await writeFile(join(home, 'auth.json'), '{}');
+      const executable = join(root, 'codex');
+      const started = join(root, 'codex-started');
+      await writeFile(
+        executable,
+        `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(started)},'started');\nprocess.exit(1);\n`,
+      );
+      await chmod(executable, 0o755);
+      await expect(
+        promisify(execFile)(
+          process.execPath,
+          [
+            'scripts/review-benchmark.mjs',
+            'run',
+            '--ci-home',
+            home,
+            '--codex',
+            executable,
+            '--out',
+            join(root, 'results.json'),
+            '--require-auth-refresh',
+            '--modes',
+            'serial',
+          ],
+          { env: { PATH: process.env.PATH, HOME: root }, timeout: 10_000 },
+        ),
+      ).rejects.toThrow('--require-auth-refresh requires parallel mode');
+      await expect(readFile(started)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(root, 'results.json.jsonl'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   describe('shipped preparation CLI', () => {
     beforeAll(async () => {
       await promisify(execFile)(
@@ -317,6 +358,37 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
     expect(report.quality.gates.correctSeverity).toBe(false);
     expect(report.quality.gates.noMissedCritical).toBe(false);
     expect(report.quality.bySeverity.P0.parallel.found).toBe(0);
+  });
+
+  it.each([
+    'missing-agent',
+    'logic',
+  ])('rejects producer and severity evidence without a real Finding from %s', (agentKey) => {
+    const sample = matchedSamples()[0];
+    if (!sample) throw new Error('Missing test sample');
+    const report = buildBenchmarkReport({
+      samples: [sample],
+      fixtures: [{ id: 'fixture', expected: [] }],
+      adjudications: [
+        {
+          sampleId: sample.id,
+          reviewer: 'Maintainer',
+          findings: [
+            {
+              agentKey,
+              findingIndex: 0,
+              defectId: null,
+              actionableFalsePositive: false,
+              correctSeverity: true,
+              correctProducer: true,
+              verifiedInstalledSource: false,
+            },
+          ],
+        },
+      ],
+    });
+    expect(report.quality.gates.correctProducer).toBe(false);
+    expect(report.quality.gates.correctSeverity).toBe(false);
   });
 });
 

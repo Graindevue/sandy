@@ -1,10 +1,21 @@
 import { execFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition } from '@sandy/shared-types';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
 import type { RunAgentInput } from './codex-exec-runner.js';
 
@@ -362,6 +373,63 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
     try {
       const result = await runtime.runAgent(current);
       expect(result.stdout).toBe('<findings>protected</findings>');
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    'completed',
+    'failed',
+    'cancelled',
+  ])('removes the serial Agent home after its %s owner stops without adding it to the seed', async (status) => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const input = w.inputs[0];
+    if (input === undefined) throw new Error('Missing fixture Agent');
+    await mkdir(f.codexHome);
+    const marker = join(f.root, 'tool-home');
+    const stopped = join(f.root, 'stopped');
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node
+const fs=require('node:fs'), path=require('node:path');
+fs.writeFileSync(path.join(process.env.HOME,'owned-artifact'),'fixture');
+fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
+if(${JSON.stringify(status)}==='cancelled') {
+  process.on('SIGTERM',()=>{
+    fs.writeFileSync(path.join(process.env.HOME,'last-artifact'),'fixture');
+    fs.writeFileSync(${JSON.stringify(stopped)},'stopped');
+    setTimeout(()=>process.exit(0),10);
+  });
+  setInterval(()=>{},1000);
+} else if(${JSON.stringify(status)}==='failed') process.exit(1);
+else process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
+`,
+    );
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      logger: { info() {} },
+    }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
+    const originalEntries = await readdir(w.seed);
+    const outcome = Promise.allSettled([runtime.runAgent({ ...input, worktreePath: w.seed })]);
+    let toolHome = '';
+    try {
+      await vi.waitFor(
+        async () => {
+          toolHome = await readFile(marker, 'utf8');
+          expect(toolHome).not.toBe('');
+        },
+        { timeout: 5000, interval: 10 },
+      );
+      if (status === 'cancelled') await runtime.close();
+      const [result] = await outcome;
+      expect(result?.status).toBe(status === 'completed' ? 'fulfilled' : 'rejected');
+      expect(toolHome.startsWith(`${w.seed}/`)).toBe(false);
+      await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readdir(w.seed)).toEqual(originalEntries);
+      if (status === 'cancelled') expect(await readFile(stopped, 'utf8')).toBe('stopped');
     } finally {
       await runtime.close();
     }

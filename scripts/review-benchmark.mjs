@@ -63,6 +63,8 @@ async function liveBenchmark(options) {
     selectedModes.some((mode) => !['serial', 'parallel'].includes(mode))
   )
     throw new Error('--modes must be serial, parallel or serial,parallel');
+  if (options['require-auth-refresh'] && !selectedModes.includes('parallel'))
+    throw new Error('--require-auth-refresh requires parallel mode');
   if (
     cases.length === 0 ||
     new Set(cases).size !== cases.length ||

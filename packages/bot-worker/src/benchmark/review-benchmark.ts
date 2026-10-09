@@ -259,10 +259,12 @@ export function buildBenchmarkReport(input: {
       const defect = fixture?.expected.find((defect) => defect.id === judgment.defectId);
       return {
         ...judgment,
-        correctProducer: judgment.correctProducer && finding?.agentKey === agent?.agentKey,
+        correctProducer:
+          finding !== undefined && judgment.correctProducer && finding.agentKey === agent?.agentKey,
         correctSeverity:
+          finding !== undefined &&
           judgment.correctSeverity &&
-          (defect === undefined || finding?.severity === defect.severity),
+          (defect === undefined || finding.severity === defect.severity),
       };
     });
     const score = scores[sample.mode];
