@@ -16,7 +16,7 @@ import { GitHubAppClient } from './github/app-client.js';
 import type { PullRequestFacts, RepoRef } from './github/types.js';
 import { disabledArchetypeAssigner } from './learning/archetype-assigner.js';
 import { ConvexSink } from './state/convex-sink.js';
-import { CodexExecRunner } from './worker/codex-exec-runner.js';
+import { CodexExecRunner, type ReviewTestMode } from './worker/codex-exec-runner.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { ReviewExecutor } from './worker/review-executor.js';
@@ -33,6 +33,8 @@ export interface ReviewActionConfig {
   cloneDir: string;
   runnerTempDir?: string;
   maxChangedLines: number;
+  testMode: ReviewTestMode;
+  testTimeoutMs: number;
 }
 
 export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConfig {
@@ -57,6 +59,8 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
       env.SANDY_REVIEW_MAX_CHANGED_LINES ?? '5000',
       'SANDY_REVIEW_MAX_CHANGED_LINES',
     ),
+    testMode: reviewTestMode(env.SANDY_REVIEW_TEST_MODE ?? 'targeted'),
+    testTimeoutMs: suiteTestTimeout(env.SANDY_REVIEW_TEST_TIMEOUT_SECONDS ?? '120'),
   };
 }
 
@@ -157,6 +161,8 @@ export async function runReviewAction(
     diffInspector: github,
     runner: new CodexExecRunner({
       codexHome: config.codexHome,
+      testMode: config.testMode,
+      testTimeoutMs: config.testTimeoutMs,
       protectedPaths: [
         config.privateKeyPath,
         config.configPath,
@@ -208,6 +214,18 @@ function positiveInteger(raw: string, key: string): number {
   if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw)))
     throw new Error(`${key} must be a positive integer`);
   return Number(raw);
+}
+
+function reviewTestMode(raw: string): ReviewTestMode {
+  if (raw !== 'targeted' && raw !== 'suite')
+    throw new Error('SANDY_REVIEW_TEST_MODE must be targeted or suite');
+  return raw;
+}
+
+function suiteTestTimeout(raw: string): number {
+  const seconds = positiveInteger(raw, 'SANDY_REVIEW_TEST_TIMEOUT_SECONDS');
+  if (seconds > 600) throw new Error('SANDY_REVIEW_TEST_TIMEOUT_SECONDS must be between 1 and 600');
+  return seconds * 1000;
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

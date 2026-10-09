@@ -76,6 +76,36 @@ describe('ReviewExecutor Review Status Check', () => {
     });
   });
 
+  it('keeps a clean focused Review neutral and states that the full suite is deferred to CI', async () => {
+    const { executor, statusChecks, poster } = makeExecutor({
+      runner: {
+        runAgent: async () => runnerOutput(findingsOutput([])),
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install --frozen-lockfile',
+          durationMs: 100,
+          testStatus: 'deferred',
+          testResult: 'The full project suite is deferred to CI.',
+        }),
+      },
+      now: nextNow([100, 200, 300, 400]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(statusChecks.completed[0]).toMatchObject({
+      conclusion: 'neutral',
+      verdict:
+        'Sandy completed review. Full project test suite deferred to CI; reviewers may run focused verification',
+      completedAt: 400,
+    });
+    expect(poster.results[0]?.summary).toMatch(
+      /^Full project test suite deferred to CI; reviewers may run focused verification\.\n\nConfidence score: 5\/5/,
+    );
+    expect(poster.results[0]?.summary).not.toContain('Tests passed');
+  });
+
   it('resolves partial Agent failure to neutral, never success', async () => {
     const { executor, statusChecks } = makeExecutor({
       store: new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] })),

@@ -28,8 +28,8 @@ export type DependencyInstallResult =
       command: string;
       durationMs: number;
       /** Structured outcome; never inferred from reviewed stdout/stderr. */
-      testStatus?: 'passed' | 'failed' | 'skipped';
-      /** The test suite is run once, before Agents, with a bounded diagnostic tail. */
+      testStatus?: 'passed' | 'failed' | 'skipped' | 'deferred';
+      /** Optional suite verification or an explicit deferral to CI and focused Agent tests. */
       testResult?: string;
     }
   | { status: 'skipped'; reason: string }

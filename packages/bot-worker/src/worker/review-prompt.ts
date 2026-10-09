@@ -16,12 +16,15 @@ Framework source verification:
 - Useful pattern: run \`opensrc path <package>\`, then search the returned source path for the touched API or symbol with \`rg\`.
 - Record the verification in the Finding.evidence: package name, installed version from the ApiSurfaceManifest when available, source path or symbol inspected, and the behavior confirmed.
 - Memory or generic training knowledge is not evidence for a framework-behavior claim. If installed source contradicts the suspicion, or you cannot verify enough for the Finding's confidence, suppress the Finding.`;
-const TOKEN_DISCIPLINE_CONTRACT = `
+const REVIEW_EFFICIENCY_CONTRACT = `
 
-Token discipline:
+Review efficiency:
+- Read the supplied diff first. Investigate concrete candidate bugs in touched behavior, following relevant callers and consumers when needed to establish their impact.
+- Batch independent read-only searches and focused reads into one shell call when they do not depend on each other's results.
 - Prefer locating symbols with search (\`rg\`) before opening files, then read only the relevant matches.
 - Prefer reading focused line ranges over whole files when a range is enough to verify behavior.
-- Prefer running the narrowest relevant test first, then broaden only as needed.
+- Use the narrowest verification needed to confirm or suppress a concrete candidate Finding. Avoid speculative broad test or build sweeps.
+- Once the diff is covered and every candidate is confirmed or suppressed by the available evidence, emit the final Findings instead of starting unrelated investigations.
 - Avoid pasting full command logs into your output. Summarize noisy logs, but preserve exact file paths, line numbers, and error text needed to support Findings.`;
 
 export function buildReviewPrompt(input: RunAgentInput): string {
@@ -59,7 +62,7 @@ ${toolchainContext}
 ${formatReviewBotContext(input.botConfig)}
 ${AGENT_PRIOR_CONTRACT}
 ${SOURCE_VERIFICATION_CONTRACT}
-${TOKEN_DISCIPLINE_CONTRACT}
+${REVIEW_EFFICIENCY_CONTRACT}
 
 Cross-Repo Search contract:
 - The reviewed Repo (${pr.owner}/${pr.repo}) is your current working directory. Sibling Repos, when present, are available read-only at the paths listed above; each worktree maps to the shown owner/name Repo at its recorded default-branch SHA.
@@ -116,6 +119,8 @@ function formatDependencyInstallContext(result: DependencyInstallResult | undefi
   switch (result.status) {
     case 'installed': {
       const testStatusContext = {
+        deferred:
+          '- Sandy deferred the full project test suite to repository CI; it has not run in this Review.',
         passed:
           '- Sandy ran the project test suite once and it passed. Do NOT rerun the full suite.',
         failed:
@@ -127,11 +132,12 @@ function formatDependencyInstallContext(result: DependencyInstallResult | undefi
       return `
 Review toolchain:
 - Dependencies are installed: \`${result.command}\` completed in ${Math.round(result.durationMs / 1000)}s before this Review. node_modules is present in the worktree.
-- You MAY run a targeted package script or test needed to verify a concrete Finding. Use the same package manager and exact version shown in the install command above; use its pinned npx invocation for pnpm scripts.
+- You MAY run focused package scripts or tests only when needed to verify a concrete candidate Finding. Use the same package manager and exact version shown in the install command above; use its pinned npx invocation for pnpm scripts.
+- Do NOT run root or whole-monorepo test suites; full-suite validation belongs to repository CI.
 - Do NOT re-run a dependency install; it already happened.
 - In a monorepo, a test that fails to resolve a workspace package's entry needs that package built first — build only what the test imports, never the whole Repo.
 ${testStatusContext}
-${result.testResult !== undefined ? `\nTest-suite result:\n${result.testResult}\n` : ''}
+${result.testResult !== undefined ? `\nTest-suite context:\n${result.testResult}\n` : ''}
 `;
     }
     case 'skipped':

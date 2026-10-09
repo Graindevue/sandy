@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition } from '@sandy/shared-types';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexExecRunner, type RunAgentInput } from './codex-exec-runner.js';
 import { readPackageJson } from './dependency-install.js';
 
@@ -82,6 +82,75 @@ async function fixture(program: string, temporaryDirectory = tmpdir()) {
 }
 
 describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
+  it('logs invocation timing without exposing prompts or reviewed command output', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'PRIVATE_REVIEW_COMMAND',aggregated_output:'PRIVATE_REVIEW_OUTPUT'}})+'\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      logger: { info: (message) => messages.push(message) },
+    });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+    expect(messages).toEqual([
+      'Sandy agent "logic" invocation started.',
+      expect.stringMatching(
+        /^Sandy agent "logic" invocation completed after \d+ms \(1 completed tools\)\.$/,
+      ),
+    ]);
+    expect(messages.join('\n')).not.toContain('PRIVATE_REVIEW');
+    expect(messages.join('\n')).not.toContain(findings);
+    expect(messages.join('\n')).not.toContain('export const');
+  });
+
+  it('reports elapsed time and completed tools from split JSONL without exposing their contents', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      const command = JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'PRIVATE_REVIEW_COMMAND',aggregated_output:'PRIVATE_REVIEW_OUTPUT'}});
+      process.stdout.write(command.slice(0, 30));
+      await new Promise(resolve => setTimeout(resolve, 40));
+      process.stdout.write(command.slice(30)+'\\n');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'mcp_tool_call',result:'PRIVATE_TOOL_RESULT'}})+'\\n');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      logger: { info: (message) => messages.push(message) },
+    });
+    const setInterval = globalThis.setInterval;
+    const intervals: ReturnType<typeof setInterval>[] = [];
+    const timers = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation((callback, delay, ...args) => {
+        expect(delay).toBe(30_000);
+        const timer = setInterval(callback, 20, ...args);
+        intervals.push(timer);
+        return timer;
+      });
+    const clear = vi.spyOn(globalThis, 'clearInterval');
+    try {
+      await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+      expect(messages).toContainEqual(
+        expect.stringMatching(
+          /^Sandy agent "logic" invocation running after \d+ms \(2 completed tools\)\.$/,
+        ),
+      );
+      expect(messages.at(-1)).toMatch(/completed after \d+ms \(2 completed tools\)\.$/);
+      expect(messages.join('\n')).not.toContain('PRIVATE_');
+      expect(messages.join('\n')).not.toContain(findings);
+      expect(clear).toHaveBeenCalledWith(intervals[0]);
+    } finally {
+      timers.mockRestore();
+      clear.mockRestore();
+    }
+  });
+
   it('uses scoped Linux reads while preserving linked Git metadata, sibling access, and credential denials', async () => {
     const f = await fixture(`
       for await (const chunk of process.stdin) {}
@@ -327,8 +396,31 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n');
       process.stdout.write(JSON.stringify({type:'turn.failed',error:{message:'Subscription limit reached'}}) + '\\n');
     `);
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      logger: { info: (message) => messages.push(message) },
+    });
     await expect(runner.runAgent(f.input)).rejects.toThrow('Subscription limit reached');
+    expect(messages.at(-1)).toMatch(/invocation failed after \d+ms \(0 completed tools\)\.$/);
+    expect(messages.join('\n')).not.toContain('invocation completed');
+  });
+
+  it('logs invalid JSONL as an invocation failure even when Codex exits successfully', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      process.stdout.write('not valid JSONL\\n');
+    `);
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      logger: { info: (message) => messages.push(message) },
+    });
+    await expect(runner.runAgent(f.input)).rejects.toThrow('Codex emitted invalid JSONL');
+    expect(messages.at(-1)).toMatch(/invocation failed after \d+ms \(0 completed tools\)\.$/);
+    expect(messages.join('\n')).not.toContain('invocation completed');
   });
 
   it('excludes ignored generated diff content before preparing the prompt while preserving negated ignore patterns', async () => {
@@ -380,6 +472,179 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it.each([
+    undefined,
+    'turbo run test && pnpm test:sandcastle',
+  ])('installs dependencies without running the full suite by default (test script: %s)', async (test) => {
+    const f = await fixture(`
+        if (!process.argv.at(-1).includes(' install ')) throw new Error('Full suite must stay in CI');
+        const fs = await import('node:fs/promises');
+        await fs.appendFile('commands.jsonl', JSON.stringify(process.argv.at(-1)) + '\\n');
+        await fs.mkdir('node_modules');
+      `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ packageManager: 'pnpm@12.10.1', scripts: { test } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      logger: { info: (message) => messages.push(message) },
+    });
+    await expect(
+      runner.installDependencies({ worktreePath: f.input.worktreePath }),
+    ).resolves.toMatchObject({
+      status: 'installed',
+      testStatus: 'deferred',
+      testResult: expect.stringContaining('deferred to CI'),
+    });
+    expect((await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8')).trim()).toBe(
+      JSON.stringify(
+        'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@12.10.1 install --frozen-lockfile --prefer-offline',
+      ),
+    );
+    expect((await stat(join(f.input.worktreePath, 'node_modules'))).isDirectory()).toBe(true);
+    expect(messages).toEqual([
+      'Sandy dependency install started.',
+      expect.stringMatching(/^Sandy dependency install completed after \d+ms\.$/),
+      'Sandy project tests deferred to CI; reviewers can run focused tests.',
+    ]);
+  });
+
+  it('bounds an explicit full suite to two minutes by default and retains timeout diagnostics', async () => {
+    const f = await fixture(`
+      if (process.argv.at(-1).includes(' ci ')) process.stdout.write('dependencies ready');
+      else {
+        process.stdout.write('FIRST TEST DIAGNOSTIC\\n' + 'test detail\\n'.repeat(1000));
+        process.stderr.write('LAST TEST DIAGNOSTIC');
+        process.on('SIGTERM', () => {}); setInterval(() => {}, 100);
+      }
+    `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node test.js' } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const messages: string[] = [];
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      testMode: 'suite',
+      logger: { info: (message) => messages.push(message) },
+    });
+    const setTimeout = globalThis.setTimeout;
+    const deadlines: number[] = [];
+    const timers = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 120_000 || delay === 600_000) {
+          deadlines.push(delay);
+          return setTimeout(callback, 500, ...args);
+        }
+        return setTimeout(callback, delay, ...args);
+      });
+    try {
+      const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+      expect(deadlines).toEqual([120_000]);
+      expect(result).toMatchObject({ status: 'installed', testStatus: 'failed' });
+      if (result.status !== 'installed') throw new Error('Expected successful dependency install');
+      expect(result.testResult).toContain('command exceeded 120000ms');
+      expect(result.testResult).toContain('FIRST TEST DIAGNOSTIC');
+      expect(result.testResult).toContain('LAST TEST DIAGNOSTIC');
+      expect(result.testResult).toContain('[output truncated]');
+      expect(result.testResult?.length).toBeLessThan(4200);
+      expect(messages).toEqual([
+        'Sandy dependency install started.',
+        expect.stringMatching(/^Sandy dependency install completed after \d+ms\.$/),
+        'Sandy project tests started (timeout 120000ms).',
+        expect.stringMatching(/^Sandy project tests failed after \d+ms\.$/),
+      ]);
+      expect(messages.join('\n')).not.toContain('TEST DIAGNOSTIC');
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it('cancels a running suite and kills detached children without replacing the cancellation reason', async () => {
+    const f = await fixture(`
+      if (process.argv.at(-1).includes(' ci ')) process.stdout.write('dependencies ready');
+      else {
+        const { spawn } = await import('node:child_process');
+        const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},100)'], {stdio:'ignore',detached:true});
+        await (await import('node:fs/promises')).writeFile('child.pid', String(child.pid));
+        process.stdout.write('Reviewed output must not replace abort reason');
+        process.on('SIGTERM',()=>{}); setInterval(()=>{},100);
+      }
+    `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node test.js' } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const controller = new AbortController();
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      testMode: 'suite',
+    });
+    const pending = runner.installDependencies({
+      worktreePath: f.input.worktreePath,
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toThrow('Review cancelled by operator');
+    const pidFile = join(f.input.worktreePath, 'child.pid');
+    let pid: number | undefined;
+    for (let attempts = 0; attempts < 100; attempts++) {
+      try {
+        pid = Number(await readFile(pidFile, 'utf8'));
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    expect(pid).toBeTypeOf('number');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort(new Error('Review cancelled by operator'));
+    await rejected;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(() => process.kill(pid ?? 0, 0)).toThrow();
+  });
+
+  it('honors an explicit suite timeout without changing the install budget', async () => {
+    const f = await fixture(`
+      if (process.argv.at(-1).includes(' ci ')) process.stdout.write('dependencies ready');
+      else setInterval(() => {}, 100);
+    `);
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node test.js' } }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      testMode: 'suite',
+      testTimeoutMs: 75,
+    });
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      await expect(
+        runner.installDependencies({ worktreePath: f.input.worktreePath }),
+      ).resolves.toMatchObject({
+        status: 'installed',
+        testStatus: 'failed',
+        testResult: expect.stringContaining('command exceeded 75ms'),
+      });
+      expect(timers.mock.calls.map(([, delay]) => delay)).toContain(900_000);
+      expect(timers.mock.calls.map(([, delay]) => delay)).toContain(75);
+      expect(timers.mock.calls.map(([, delay]) => delay)).not.toContain(120_000);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
   it('installs and tests a Linux linked worktree with shared Git history readable and host reads scoped', async () => {
     const f = await fixture(`
       const args = process.argv.slice(2);
@@ -406,6 +671,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     Object.defineProperty(process, 'platform', { value: 'linux' });
     try {
       const runner = new CodexExecRunner({
+        testMode: 'suite',
         codexHome: f.codexHome,
         executable: f.executable,
         protectedPaths: [join(f.root, 'app.pem')],
@@ -440,7 +706,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     process.env.PATH = `${f.root}:${originalPath ?? ''}`;
     const controller = new AbortController();
     try {
-      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      const runner = new CodexExecRunner({
+        testMode: 'suite',
+        codexHome: f.codexHome,
+        executable: f.executable,
+      });
       const result = runner.installDependencies({
         worktreePath: f.input.worktreePath,
         signal: controller.signal,
@@ -474,7 +744,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     await writeFile(outside, 'private sentinel must not appear in an error');
     await symlink(outside, join(f.input.worktreePath, 'package.json'));
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     await expect(
       runner.installDependencies({ worktreePath: f.input.worktreePath }),
     ).resolves.toEqual({ status: 'failed', error: 'package.json must be a regular file' });
@@ -493,7 +767,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
     await chmod(join(f.input.worktreePath, 'package.json'), 0o640);
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     await expect(
       runner.installDependencies({ worktreePath: f.input.worktreePath }),
     ).resolves.toMatchObject({ status: 'failed' });
@@ -511,6 +789,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
     const runner = new CodexExecRunner({
+      testMode: 'suite',
       codexHome: f.codexHome,
       executable: f.executable,
       installTimeoutMs: 300,
@@ -536,7 +815,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     `);
     await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     await expect(
       runner.installDependencies({ worktreePath: f.input.worktreePath }),
     ).resolves.toMatchObject({ status: 'installed', testStatus: 'passed' });
@@ -551,7 +834,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     `);
     await writeFile(join(f.input.worktreePath, 'package.json'), manifest);
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     await expect(
       runner.installDependencies({ worktreePath: f.input.worktreePath }),
     ).resolves.toMatchObject({ status: 'installed', testStatus: 'skipped' });
@@ -569,7 +856,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       JSON.stringify({ scripts: { test: 'node test.js' } }),
     );
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     await expect(
       runner.installDependencies({ worktreePath: f.input.worktreePath }),
     ).resolves.toMatchObject({
@@ -586,7 +877,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     `);
     await writeFile(join(f.input.worktreePath, 'package.json'), '{}');
     await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    const runner = new CodexExecRunner({
+      testMode: 'suite',
+      codexHome: f.codexHome,
+      executable: f.executable,
+    });
     const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
     expect(result.status).toBe('failed');
     if (result.status !== 'failed') throw new Error('Expected sandbox startup failure');
@@ -677,6 +972,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
          console.log(stage + ' verified');`,
       );
       const runner = new CodexExecRunner({
+        testMode: 'suite',
         codexHome: f.codexHome,
         protectedPaths: [keyPath],
         env: { GH_TOKEN: 'dummy-probe-token', CODEX_AUTH_JSON: 'dummy-probe-auth' },
@@ -740,7 +1036,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
             ? [join(process.env.RUNNER_TEMP, '_runner_file_commands')]
             : []),
         ];
-        const runner = new CodexExecRunner({ codexHome: f.codexHome, protectedPaths });
+        const runner = new CodexExecRunner({
+          testMode: 'suite',
+          codexHome: f.codexHome,
+          protectedPaths,
+        });
         const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
         expect(
           (await readPackageJson(f.input.worktreePath)).bytes.equals(originalManifest.bytes),
@@ -787,7 +1087,11 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'linux' });
     try {
-      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      const runner = new CodexExecRunner({
+        testMode: 'suite',
+        codexHome: f.codexHome,
+        executable: f.executable,
+      });
       await expect(
         runner.installDependencies({ worktreePath: f.input.worktreePath }),
       ).resolves.toMatchObject({ status: 'installed', testStatus: 'skipped' });
@@ -808,6 +1112,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       if (process.env.pnpm_config_verify_deps_before_run !== 'false' || process.env.pnpm_config_manage_package_manager_versions !== 'false') throw new Error('Test command could repeat dependency installation');
       if (process.env.CODEX_HOME.endsWith('/ci-codex')) throw new Error('Sandbox utility uses authenticated home');
       const command = args.at(-1);
+      await (await import('node:fs/promises')).appendFile('commands.jsonl', JSON.stringify(command) + '\\n');
       if (command.includes(' install ')) process.stdout.write('dependencies ready');
       else if (command === 'npx --yes pnpm@10.34.1 test') process.stdout.write('1 passed');
       else throw new Error('Unexpected command: ' + command);
@@ -818,6 +1123,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     );
     await writeFile(join(f.input.worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
     const runner = new CodexExecRunner({
+      testMode: 'suite',
       codexHome: f.codexHome,
       executable: f.executable,
       env: {
@@ -838,5 +1144,14 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       testStatus: 'passed',
       testResult: 'npx --yes pnpm@10.34.1 test exited 0.\n1 passed',
     });
+    expect(
+      (await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@10.34.1 install --frozen-lockfile --prefer-offline',
+      'npx --yes pnpm@10.34.1 test',
+    ]);
   });
 });

@@ -46,6 +46,8 @@ export interface AgentRunResult {
   usage?: AgentRunUsage;
 }
 
+export type ReviewTestMode = 'targeted' | 'suite';
+
 export interface CodexExecRunnerOptions {
   /** Dedicated CI login. Never copied from the operator's local Codex login. */
   codexHome: string;
@@ -55,6 +57,9 @@ export interface CodexExecRunnerOptions {
   agentTimeoutMs?: number;
   installTimeoutMs?: number;
   testTimeoutMs?: number;
+  /** Full-suite verification is opt-in; targeted mode leaves it to CI. */
+  testMode?: ReviewTestMode;
+  logger?: { info(message: string): void };
 }
 
 const exec = promisify(execFile);
@@ -66,6 +71,7 @@ export class CodexExecRunner {
   readonly #options: CodexExecRunnerOptions;
   readonly #toolHome: string;
   readonly #sandboxHome: string;
+  readonly #logger: { info(message: string): void };
 
   constructor(options: CodexExecRunnerOptions) {
     if (
@@ -76,6 +82,7 @@ export class CodexExecRunner {
         'Codex reviews require a dedicated CI CODEX_HOME; the local Codex login cannot be reused',
       );
     this.#options = options;
+    this.#logger = options.logger ?? console;
     this.#toolHome = resolvePath(options.codexHome, '..', 'sandy-tool-home');
     this.#sandboxHome = resolvePath(options.codexHome, '..', 'sandy-sandbox-home');
   }
@@ -122,12 +129,23 @@ export class CodexExecRunner {
         };
       command = detected.command;
       const startedAt = Date.now();
-      const installed = await installWithoutHookOnlyPrepare(input.worktreePath, () =>
-        this.#sandboxCommand(
-          input,
-          detected.command,
-          this.#options.installTimeoutMs ?? 15 * 60 * 1000,
-        ),
+      this.#logger.info('Sandy dependency install started.');
+      let installed: { exitCode: number; output: string };
+      try {
+        installed = await installWithoutHookOnlyPrepare(input.worktreePath, () =>
+          this.#sandboxCommand(
+            input,
+            detected.command,
+            this.#options.installTimeoutMs ?? 15 * 60 * 1000,
+          ),
+        );
+      } catch (error) {
+        this.#logger.info(`Sandy dependency install failed after ${Date.now() - startedAt}ms.`);
+        throw error;
+      }
+      const durationMs = Date.now() - startedAt;
+      this.#logger.info(
+        `Sandy dependency install ${installed.exitCode === 0 ? 'completed' : 'failed'} after ${durationMs}ms.`,
       );
       if (installed.exitCode !== 0)
         return {
@@ -135,7 +153,18 @@ export class CodexExecRunner {
           command,
           error: installed.output || `install exited ${installed.exitCode}`,
         };
-      const durationMs = Date.now() - startedAt;
+      if ((this.#options.testMode ?? 'targeted') === 'targeted') {
+        this.#logger.info('Sandy project tests deferred to CI; reviewers can run focused tests.');
+        return {
+          status: 'installed',
+          packageManager: detected.packageManager,
+          command,
+          durationMs,
+          testStatus: 'deferred',
+          testResult:
+            'Full project test suite deferred to CI. Reviewers may run focused tests to verify concrete findings.',
+        };
+      }
       let testStatus: 'passed' | 'failed' | 'skipped' = 'skipped';
       let testResult = 'No test script is defined in package.json; test suite skipped.';
       const manifest = JSON.parse(
@@ -143,19 +172,24 @@ export class CodexExecRunner {
       ) as { scripts?: { test?: unknown } };
       if (typeof manifest.scripts?.test === 'string') {
         const testCommand = `${detected.packageManagerCommand ?? detected.packageManager} test`;
+        const testTimeoutMs = this.#options.testTimeoutMs ?? 2 * 60 * 1000;
+        const testsStartedAt = Date.now();
+        this.#logger.info(`Sandy project tests started (timeout ${testTimeoutMs}ms).`);
         try {
-          const tests = await this.#sandboxCommand(
-            input,
-            testCommand,
-            this.#options.testTimeoutMs ?? 10 * 60 * 1000,
-          );
+          const tests = await this.#sandboxCommand(input, testCommand, testTimeoutMs);
           testStatus = tests.exitCode === 0 ? 'passed' : 'failed';
           testResult = `${testCommand} exited ${tests.exitCode}.\n${tests.output}`;
         } catch (error) {
           input.signal?.throwIfAborted();
           testStatus = 'failed';
           testResult = `${testCommand} failed: ${error instanceof Error ? error.message : String(error)}`;
+        } finally {
+          this.#logger.info(
+            `Sandy project tests ${testStatus === 'passed' ? 'completed' : 'failed'} after ${Date.now() - testsStartedAt}ms.`,
+          );
         }
+      } else {
+        this.#logger.info('Sandy project tests skipped: no project test script is defined.');
       }
       return {
         status: 'installed',
@@ -212,6 +246,7 @@ export class CodexExecRunner {
       let outputTail = '';
       let outputLength = 0;
       let failure: unknown;
+      let timedOut = false;
       let descendants: number[] = [];
       let killTimer: NodeJS.Timeout | undefined;
       const terminate = (reason: unknown) => {
@@ -223,10 +258,10 @@ export class CodexExecRunner {
           killTimer = setTimeout(() => killTree(child.pid, descendants, 'SIGKILL'), 250);
         });
       };
-      const timer = setTimeout(
-        () => terminate(new Error(`command exceeded ${timeoutMs}ms`)),
-        timeoutMs,
-      );
+      const timer = setTimeout(() => {
+        timedOut = true;
+        terminate(new Error(`command exceeded ${timeoutMs}ms`));
+      }, timeoutMs);
       const onAbort = () => terminate(input.signal?.reason ?? new Error('Review cancelled'));
       input.signal?.addEventListener('abort', onAbort, { once: true });
       if (input.signal?.aborted) onAbort();
@@ -245,14 +280,20 @@ export class CodexExecRunner {
         clearTimeout(killTimer);
         input.signal?.removeEventListener('abort', onAbort);
         killTree(child.pid, descendants, 'SIGKILL');
-        if (failure !== undefined) reject(failure);
-        else {
-          const output =
-            outputLength <= 4000
-              ? outputTail
-              : `${outputStart}\n... [output truncated] ...\n${outputTail.slice(-2000)}`;
-          resolve({ exitCode: code ?? 1, output: output.trim() });
-        }
+        const output = (
+          outputLength <= 4000
+            ? outputTail
+            : `${outputStart}\n... [output truncated] ...\n${outputTail.slice(-2000)}`
+        ).trim();
+        if (failure !== undefined)
+          reject(
+            timedOut && output !== ''
+              ? new Error(
+                  `${failure instanceof Error ? failure.message : String(failure)}\n${output}`,
+                )
+              : failure,
+          );
+        else resolve({ exitCode: code ?? 1, output });
       });
       child.stdin.on('error', () => {});
       child.stdin.end();
@@ -347,114 +388,150 @@ export class CodexExecRunner {
       args.push('-c', `model_reasoning_effort=${JSON.stringify(input.agent.effort)}`);
     if (threadId !== undefined) args.push(threadId);
     args.push('-');
-    const jsonl = await new Promise<string>((resolve, reject) => {
-      const child = spawn(this.#options.executable ?? 'codex', args, {
-        cwd: input.worktreePath,
-        env: {
-          ...safeEnvironment({ ...process.env, ...this.#options.env }),
-          HOME: this.#toolHome,
-          CODEX_HOME: resolvePath(this.#options.codexHome),
-          TURBO_CACHE_DIR: join(resolvePath(input.worktreePath), '.turbo', 'cache'),
-        },
-        stdio: 'pipe',
-        detached: true,
-      });
-      let aborted: unknown;
-      let descendants: number[] = [];
-      let killTimer: NodeJS.Timeout | undefined;
-      const terminate = (reason: unknown) => {
-        if (aborted !== undefined) return;
-        aborted = reason;
-        void descendantPids(child.pid).then((pids) => {
-          descendants = pids;
-          killTree(child.pid, descendants, 'SIGTERM');
-          killTimer = setTimeout(() => killTree(child.pid, descendants, 'SIGKILL'), 250);
+    const invocation = `Sandy agent ${JSON.stringify(input.agent.key)} ${threadId === undefined ? 'invocation' : 'resume'}`;
+    const startedAt = Date.now();
+    let completedTools = 0;
+    this.#logger.info(`${invocation} started.`);
+    try {
+      const jsonl = await new Promise<string>((resolve, reject) => {
+        const child = spawn(this.#options.executable ?? 'codex', args, {
+          cwd: input.worktreePath,
+          env: {
+            ...safeEnvironment({ ...process.env, ...this.#options.env }),
+            HOME: this.#toolHome,
+            CODEX_HOME: resolvePath(this.#options.codexHome),
+            TURBO_CACHE_DIR: join(resolvePath(input.worktreePath), '.turbo', 'cache'),
+          },
+          stdio: 'pipe',
+          detached: true,
         });
-      };
-      const onAbort = () => terminate(input.signal?.reason ?? new Error('Review cancelled'));
-      const timeoutMs = this.#options.agentTimeoutMs ?? 15 * 60 * 1000;
-      const timer = setTimeout(
-        () => terminate(new Error(`Codex agent exceeded ${timeoutMs}ms`)),
-        timeoutMs,
-      );
-      input.signal?.addEventListener('abort', onAbort, { once: true });
-      if (input.signal?.aborted) onAbort();
-      let output = '';
-      let errorOutput = '';
-      child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
-        output += chunk;
-        if (output.length > 64 * 1024 * 1024)
-          terminate(new Error('Codex JSONL output exceeds 64MiB'));
-      });
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        errorOutput = (errorOutput + chunk).slice(-4000);
-      });
-      child.once('error', reject);
-      child.once('close', (code) => {
-        clearTimeout(timer);
-        input.signal?.removeEventListener('abort', onAbort);
-        if (killTimer !== undefined) {
-          clearTimeout(killTimer);
-          killTree(child.pid, descendants, 'SIGKILL');
-        }
-        if (aborted !== undefined) reject(aborted);
-        else if (code === 0) resolve(output);
-        else reject(new Error(`Codex exited with ${code}: ${errorOutput}`));
-      });
-      child.stdin.on('error', () => {});
-      child.stdin.end(prompt);
-    });
-    let stdout = '';
-    let usage: AgentRunUsage | undefined;
-    let startedThreadId: string | undefined;
-    for (const line of jsonl.trim().split('\n')) {
-      let event: Record<string, unknown>;
-      try {
-        event = objectValue(JSON.parse(line), 'Codex JSONL event');
-      } catch {
-        throw new Error('Codex emitted invalid JSONL');
-      }
-      if (event.type === 'turn.failed' || event.type === 'error') {
-        const error =
-          typeof event.error === 'object' && event.error !== null
-            ? objectValue(event.error, 'Codex error')
-            : undefined;
-        throw new Error(
-          typeof error?.message === 'string'
-            ? error.message
-            : typeof event.message === 'string'
-              ? event.message
-              : 'Codex turn failed',
+        let aborted: unknown;
+        let descendants: number[] = [];
+        let killTimer: NodeJS.Timeout | undefined;
+        const terminate = (reason: unknown) => {
+          if (aborted !== undefined) return;
+          aborted = reason;
+          void descendantPids(child.pid).then((pids) => {
+            descendants = pids;
+            killTree(child.pid, descendants, 'SIGTERM');
+            killTimer = setTimeout(() => killTree(child.pid, descendants, 'SIGKILL'), 250);
+          });
+        };
+        const onAbort = () => terminate(input.signal?.reason ?? new Error('Review cancelled'));
+        const timeoutMs = this.#options.agentTimeoutMs ?? 15 * 60 * 1000;
+        const timer = setTimeout(
+          () => terminate(new Error(`Codex agent exceeded ${timeoutMs}ms`)),
+          timeoutMs,
         );
-      }
-      if (event.type === 'thread.started' && typeof event.thread_id === 'string')
-        startedThreadId = event.thread_id;
-      if (
-        event.type === 'item.completed' &&
-        typeof event.item === 'object' &&
-        event.item !== null
-      ) {
-        const item = objectValue(event.item, 'Codex item');
-        if (item.type === 'agent_message' && typeof item.text === 'string') stdout = item.text;
-      }
-      if (event.type === 'turn.completed' && event.usage !== undefined) {
-        const counts = objectValue(event.usage, 'Codex usage');
-        const inputTokens = tokenCount(counts.input_tokens, 'input_tokens');
-        const cachedTokens = tokenCount(counts.cached_input_tokens ?? 0, 'cached_input_tokens');
-        if (cachedTokens > inputTokens) throw new Error('Codex cached input exceeds total input');
-        usage = addUsage(usage, {
-          inputTokens: inputTokens - cachedTokens,
-          cacheCreationInputTokens: 0,
-          cacheReadInputTokens: cachedTokens,
-          outputTokens: tokenCount(counts.output_tokens, 'output_tokens'),
+        input.signal?.addEventListener('abort', onAbort, { once: true });
+        if (input.signal?.aborted) onAbort();
+        let output = '';
+        let errorOutput = '';
+        let progressBuffer = '';
+        const heartbeat = setInterval(
+          () =>
+            this.#logger.info(
+              `${invocation} running after ${Date.now() - startedAt}ms (${completedTools} completed tools).`,
+            ),
+          30_000,
+        );
+        child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+          output += chunk;
+          if (output.length > 64 * 1024 * 1024) {
+            terminate(new Error('Codex JSONL output exceeds 64MiB'));
+            return;
+          }
+          const lines = (progressBuffer + chunk).split('\n');
+          progressBuffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (isCompletedToolEvent(line)) completedTools++;
+          }
         });
+        child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+          errorOutput = (errorOutput + chunk).slice(-4000);
+        });
+        child.once('error', (error) => {
+          clearTimeout(timer);
+          clearInterval(heartbeat);
+          input.signal?.removeEventListener('abort', onAbort);
+          reject(error);
+        });
+        child.once('close', (code) => {
+          clearTimeout(timer);
+          clearInterval(heartbeat);
+          if (isCompletedToolEvent(progressBuffer)) completedTools++;
+          input.signal?.removeEventListener('abort', onAbort);
+          if (killTimer !== undefined) {
+            clearTimeout(killTimer);
+            killTree(child.pid, descendants, 'SIGKILL');
+          }
+          if (aborted !== undefined) reject(aborted);
+          else if (code === 0) resolve(output);
+          else reject(new Error(`Codex exited with ${code}: ${errorOutput}`));
+        });
+        child.stdin.on('error', () => {});
+        child.stdin.end(prompt);
+      });
+      let stdout = '';
+      let usage: AgentRunUsage | undefined;
+      let startedThreadId: string | undefined;
+      for (const line of jsonl.trim().split('\n')) {
+        let event: Record<string, unknown>;
+        try {
+          event = objectValue(JSON.parse(line), 'Codex JSONL event');
+        } catch {
+          throw new Error('Codex emitted invalid JSONL');
+        }
+        if (event.type === 'turn.failed' || event.type === 'error') {
+          const error =
+            typeof event.error === 'object' && event.error !== null
+              ? objectValue(event.error, 'Codex error')
+              : undefined;
+          throw new Error(
+            typeof error?.message === 'string'
+              ? error.message
+              : typeof event.message === 'string'
+                ? event.message
+                : 'Codex turn failed',
+          );
+        }
+        if (event.type === 'thread.started' && typeof event.thread_id === 'string')
+          startedThreadId = event.thread_id;
+        if (
+          event.type === 'item.completed' &&
+          typeof event.item === 'object' &&
+          event.item !== null
+        ) {
+          const item = objectValue(event.item, 'Codex item');
+          if (item.type === 'agent_message' && typeof item.text === 'string') stdout = item.text;
+        }
+        if (event.type === 'turn.completed' && event.usage !== undefined) {
+          const counts = objectValue(event.usage, 'Codex usage');
+          const inputTokens = tokenCount(counts.input_tokens, 'input_tokens');
+          const cachedTokens = tokenCount(counts.cached_input_tokens ?? 0, 'cached_input_tokens');
+          if (cachedTokens > inputTokens) throw new Error('Codex cached input exceeds total input');
+          usage = addUsage(usage, {
+            inputTokens: inputTokens - cachedTokens,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: cachedTokens,
+            outputTokens: tokenCount(counts.output_tokens, 'output_tokens'),
+          });
+        }
       }
+      this.#logger.info(
+        `${invocation} completed after ${Date.now() - startedAt}ms (${completedTools} completed tools).`,
+      );
+      return {
+        stdout,
+        usage,
+        ...(startedThreadId !== undefined ? { threadId: startedThreadId } : {}),
+      };
+    } catch (error) {
+      this.#logger.info(
+        `${invocation} failed after ${Date.now() - startedAt}ms (${completedTools} completed tools).`,
+      );
+      throw error;
     }
-    return {
-      stdout,
-      usage,
-      ...(startedThreadId !== undefined ? { threadId: startedThreadId } : {}),
-    };
   }
 
   async #permissionConfig(
@@ -551,6 +628,21 @@ export class CodexExecRunner {
         .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
         .join(',')}}`,
     ];
+  }
+}
+
+/** Progress is observational; the final parser remains authoritative for outcomes. */
+function isCompletedToolEvent(line: string): boolean {
+  try {
+    const event = objectValue(JSON.parse(line), 'Codex progress event');
+    if (event.type !== 'item.completed') return false;
+    const item = objectValue(event.item, 'Codex progress item');
+    return (
+      typeof item.type === 'string' &&
+      ['command_execution', 'mcp_tool_call', 'web_search'].includes(item.type)
+    );
+  } catch {
+    return false;
   }
 }
 
