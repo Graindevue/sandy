@@ -4,7 +4,8 @@ Sandy executes finite reviews on GitHub-hosted Linux runners. Durable state live
 in Convex Cloud, and GitHub Actions serializes requests from new `@sandy` PR
 comments.
 [ADR 0018](../adr/0018-github-actions-codex-runtime.md) records the runtime.
-The canonical Sandy source is the private `Graindevue/sandy` repository.
+The canonical Sandy source is `Graindevue/sandy`. The caller that holds
+ChatGPT-managed CI credentials must be private.
 
 ## Requirements
 
@@ -40,8 +41,10 @@ commits, post a new `@sandy` comment to request another review.
 a repository secret: an environment reads the current auth only when a queued
 job starts, after the prior Review has persisted its refreshed file.
 
-One auth stream has one Actions concurrency group on the review job and serial
-Agent Runs.
+One auth stream has one Actions concurrency group on the whole review job.
+Serial Agent execution remains the rollout default. Optional parallel Agents
+share one managed runtime and authentication owner inside that serialized job;
+independent CLI processes must not share writable authentication concurrently.
 Give each independently operated caller its own dedicated login. For reseeding,
 pause new review requests and ensure the active job has finished before replacing
 the environment secret.
@@ -57,3 +60,10 @@ Reviewers run focused tests for concrete Findings after dependency installation.
 Run the full repository suite in CI; opt into `test-mode: suite` only when it
 must run before a review. Its default budget is two minutes, and the summary
 always states whether the full suite ran.
+
+## Isolated performance and quality tests
+
+Use [the benchmark setup](./review-benchmark.md) and its dedicated test login
+to validate issue #4. It runs fixed fixtures without production posting or
+Convex state. The test environment and auth stream are separate from
+`sandy-codex`; serial review execution remains the rollout default.

@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -167,6 +177,150 @@ describe('CloneManager', () => {
     expect(existsSync(join(b.path, 'feature.ts'))).toBe(true);
   });
 
+  it('gives Agents private prepared installations with working workspace dependencies', async () => {
+    const origin = await makeOrigin();
+    const headSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha: headSha });
+    await installWorkspaceFixture(seed.path);
+
+    const logic = await manager.materializeAgentWorkspace(seed, 'logic');
+    const security = await manager.materializeAgentWorkspace(seed, 'security');
+    await Promise.all([
+      exec(process.execPath, ['probe.cjs', 'logic'], { cwd: logic.path }),
+      exec(process.execPath, ['probe.cjs', 'security'], { cwd: security.path }),
+    ]);
+
+    expect(JSON.parse(await readFile(join(logic.path, 'dist/result.json'), 'utf8'))).toEqual({
+      agent: 'logic',
+      shared: 'workspace dependency',
+    });
+    expect(JSON.parse(await readFile(join(security.path, 'dist/result.json'), 'utf8'))).toEqual({
+      agent: 'security',
+      shared: 'workspace dependency',
+    });
+    expect(await readFile(join(logic.path, 'node_modules/private-helper/index.js'), 'utf8')).toBe(
+      'module.exports = "logic";',
+    );
+    expect(
+      await readFile(join(security.path, 'node_modules/private-helper/index.js'), 'utf8'),
+    ).toBe('module.exports = "security";');
+    expect(await readFile(join(seed.path, 'node_modules/private-helper/index.js'), 'utf8')).toBe(
+      'module.exports = "prepared";',
+    );
+    expect(existsSync(join(seed.path, 'dist/result.json'))).toBe(false);
+    expect(await git(logic.path, 'rev-parse', 'HEAD')).toBe(headSha);
+    expect(await git(security.path, 'rev-parse', 'HEAD')).toBe(headSha);
+    expect(await git(logic.path, 'diff', 'HEAD', '--', 'README.md')).toContain('+logic');
+    expect(await git(security.path, 'diff', 'HEAD', '--', 'README.md')).toContain('+security');
+    expect(await readFile(join(seed.path, 'README.md'), 'utf8')).toBe('# seed\n');
+  });
+
+  it('keeps internal absolute dependency links inside the private Agent workspace', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha });
+    await mkdir(join(seed.path, 'packages/shared'), { recursive: true });
+    await writeFile(join(seed.path, 'packages/shared/output.txt'), 'prepared');
+    await symlink(join(seed.path, 'packages/shared'), join(seed.path, 'absolute-dependency'));
+
+    const workspace = await manager.materializeAgentWorkspace(seed, 'logic');
+    await writeFile(join(workspace.path, 'absolute-dependency/output.txt'), 'private');
+
+    expect(await readFile(join(seed.path, 'packages/shared/output.txt'), 'utf8')).toBe('prepared');
+    expect(await readFile(join(workspace.path, 'packages/shared/output.txt'), 'utf8')).toBe(
+      'private',
+    );
+    expect((await lstat(join(workspace.path, 'absolute-dependency'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('preserves hostile and dangling links without copying their host targets', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha });
+    const hostDirectory = join(tmpRoot, 'private-host');
+    await mkdir(hostDirectory);
+    await writeFile(join(hostDirectory, 'credential'), 'never materialize');
+    await symlink(hostDirectory, join(seed.path, 'host-link'));
+    await symlink(join(hostDirectory, 'missing'), join(seed.path, 'dangling-link'));
+
+    const workspace = await manager.materializeAgentWorkspace(seed, 'logic');
+
+    expect((await lstat(join(workspace.path, 'host-link'))).isSymbolicLink()).toBe(true);
+    expect(await readlink(join(workspace.path, 'host-link'))).toBe(hostDirectory);
+    expect(await readlink(join(workspace.path, 'dangling-link'))).toBe(
+      join(hostDirectory, 'missing'),
+    );
+  });
+
+  it('removes private Agent workspaces without deleting their prepared seed', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha });
+    const workspace = await manager.materializeAgentWorkspace(seed, 'logic');
+
+    await manager.removeWorktree(workspace);
+    await manager.removeWorktree(workspace);
+
+    expect(existsSync(workspace.path)).toBe(false);
+    expect(await git(seed.path, 'rev-parse', 'HEAD')).toBe(sha);
+  });
+
+  it('cleans up a partially materialized Agent workspace after a copy failure', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({ baseDir, cloneUrl: () => origin.url });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha });
+    await exec('mkfifo', [join(seed.path, 'unsupported-pipe')]);
+
+    await expect(manager.materializeAgentWorkspace(seed, 'logic')).rejects.toThrow();
+
+    expect(
+      await readdir(join(baseDir, '.agent-workspaces', REPO.owner, REPO.name, 'rj_1')),
+    ).toEqual([]);
+    expect(await git(seed.path, 'rev-parse', 'HEAD')).toBe(sha);
+  });
+
+  it('does not materialize a queued Agent after the Review is canceled', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const controller = new AbortController();
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+      signal: controller.signal,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'rj_1', sha });
+    controller.abort(new Error('Review canceled'));
+
+    await expect(manager.materializeAgentWorkspace(seed, 'logic')).rejects.toThrow(
+      'Review canceled',
+    );
+    expect(await git(seed.path, 'rev-parse', 'HEAD')).toBe(sha);
+  });
+
   it('removes a worktree when the Review ends', async () => {
     const origin = await makeOrigin();
     const headSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
@@ -282,3 +436,44 @@ describe('CloneManager', () => {
     expect(await git(repoPath, 'rev-parse', '--is-inside-work-tree')).toBe('true');
   });
 });
+
+async function installWorkspaceFixture(path: string): Promise<void> {
+  await mkdir(join(path, 'packages/shared'), { recursive: true });
+  await mkdir(join(path, 'vendor/private-helper'), { recursive: true });
+  await writeFile(
+    join(path, 'package.json'),
+    JSON.stringify({
+      private: true,
+      dependencies: {
+        '@fixture/shared': 'workspace:*',
+        'private-helper': 'file:vendor/private-helper',
+      },
+    }),
+  );
+  await writeFile(join(path, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+  await writeFile(
+    join(path, 'packages/shared/package.json'),
+    JSON.stringify({ name: '@fixture/shared', version: '1.0.0', main: 'index.js' }),
+  );
+  await writeFile(
+    join(path, 'packages/shared/index.js'),
+    'module.exports = "workspace dependency";',
+  );
+  await writeFile(
+    join(path, 'vendor/private-helper/package.json'),
+    JSON.stringify({ name: 'private-helper', version: '1.0.0', main: 'index.js' }),
+  );
+  await writeFile(join(path, 'vendor/private-helper/index.js'), 'module.exports = "prepared";');
+  await writeFile(
+    join(path, 'probe.cjs'),
+    `const fs = require('node:fs');
+const agent = process.argv[2];
+const shared = require('@fixture/shared');
+fs.writeFileSync('README.md', agent + '\\n');
+fs.writeFileSync(require.resolve('private-helper'), 'module.exports = ' + JSON.stringify(agent) + ';');
+fs.mkdirSync('dist', { recursive: true });
+fs.writeFileSync('dist/result.json', JSON.stringify({ agent, shared }));
+`,
+  );
+  await exec('pnpm', ['install', '--offline', '--ignore-scripts'], { cwd: path, timeout: 30_000 });
+}
