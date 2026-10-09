@@ -178,6 +178,14 @@ export async function runReviewAction(
       codexHome: config.codexHome,
       enableManagedRuntime: config.executionMode === 'parallel',
       dependencyDownloadCache: createGitHubDependencyDownloadCache(),
+      ...(config.runnerTempDir
+        ? {
+            dependencyDownloadCacheDirectory: resolve(
+              config.runnerTempDir,
+              'sandy-reviewed-downloads',
+            ),
+          }
+        : {}),
       testMode: config.testMode,
       testTimeoutMs: config.testTimeoutMs,
       protectedPaths: [

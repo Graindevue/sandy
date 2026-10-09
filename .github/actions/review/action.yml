@@ -61,6 +61,25 @@ runs:
         SANDY_AUTH_ENVIRONMENT: ${{ inputs.auth-environment }}
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
 
+    # The runner supplies cache credentials to Node actions, not run: shell steps.
+    - name: Expose the optional cache runtime to trusted review steps
+      id: cache-runtime
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      with:
+        script: |
+          const token = process.env.ACTIONS_RUNTIME_TOKEN;
+          if (token) core.setSecret(token);
+          for (const name of [
+            'ACTIONS_RUNTIME_TOKEN',
+            'ACTIONS_CACHE_URL',
+            'ACTIONS_RESULTS_URL',
+            'ACTIONS_RUNTIME_URL',
+            'ACTIONS_CACHE_SERVICE_V2',
+          ]) {
+            const value = process.env[name];
+            if (value) core.exportVariable(name, value);
+          }
+
     - name: Install pnpm
       uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:

@@ -123,6 +123,12 @@ still performs a fresh frozen installation. Supported stores are npm's
 excluded. Installed dependencies, source, test outputs, tool homes, logs,
 credentials, and configuration files are never saved.
 
+A pinned Node action exports only the runner's optional cache-service variables
+to trusted worker steps and masks the runtime token first. Reviewed commands
+receive neither those variables nor access to the runner environment-command
+files. CI verifies the shipped adapter against the real Linux cache provider with
+a harmless save/remove/restore fixture, without a Codex login or model request.
+
 pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
 Sandy snapshots those validated downloads before the normal installation runs
 reviewed hooks and lifecycles. The publication snapshot is denied to reviewed
@@ -141,11 +147,12 @@ preparation budget. Cache workers have a 30-second operation limit and stop
 before cleanup on cancellation. Only successful dependency preparation publishes
 downloads; a genuine install failure retains static-analysis review.
 
-The publication store uses a stable `sandy-dependency-downloads` directory beside
-the dedicated Codex home. Reviewed commands have an install-only write grant for
-the separate `sandy-dependency-downloads-install` store. Both are cleared after
-each preparation. Keep the publication path stable across Actions runs because
-the cache service includes the supplied paths in its cache version. Phase logs
+The action uses the stable `${RUNNER_TEMP}/sandy-reviewed-downloads` publication
+directory across Reviews, even when each dedicated Codex home is temporary.
+Reviewed commands cannot access this directory. They have an install-only write
+grant for the separate Review-local `sandy-dependency-downloads-install` store.
+Both are cleared after preparation. The cache service includes requested paths
+in its cache version, so a temporary publication path would prevent reuse. Phase logs
 distinguish cache restore and save, installation, and total preparation time; a hit label alone
 does not prove fewer downloads.
 

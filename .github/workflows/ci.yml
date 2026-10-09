@@ -48,6 +48,51 @@ jobs:
       - name: Test
         run: pnpm test
 
+  dependency-cache:
+    name: Reviewed dependency cache provider
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build the shipped worker adapter
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+
+      # Runtime cache credentials only; no Codex login or model provider.
+      - name: Expose the optional cache runtime to trusted review steps
+        id: cache-runtime
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (token) core.setSecret(token);
+            for (const name of [
+              'ACTIONS_RUNTIME_TOKEN',
+              'ACTIONS_CACHE_URL',
+              'ACTIONS_RESULTS_URL',
+              'ACTIONS_RUNTIME_URL',
+              'ACTIONS_CACHE_SERVICE_V2',
+            ]) {
+              const value = process.env[name];
+              if (value) core.exportVariable(name, value);
+            }
+
+      - name: Save and restore harmless downloads through the actual provider
+        run: node scripts/dependency-cache-probe.mjs
+
   codex-compatibility:
     name: Pinned Codex sandbox compatibility
     runs-on: ubuntu-latest
