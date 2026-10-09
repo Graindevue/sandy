@@ -40,8 +40,10 @@ commits, post a new `@sandy` comment to request another review.
 a repository secret: an environment reads the current auth only when a queued
 job starts, after the prior Review has persisted its refreshed file.
 
-One auth stream has one Actions concurrency group on the review job and serial
-Agent Runs.
+One auth stream has one Actions concurrency group on the whole review job.
+Serial Agent execution remains the rollout default. Optional parallel Agents
+share one managed runtime and authentication owner inside that serialized job;
+independent CLI processes must not share writable authentication concurrently.
 Give each independently operated caller its own dedicated login. For reseeding,
 pause new review requests and ensure the active job has finished before replacing
 the environment secret.

@@ -1,5 +1,5 @@
 name: Sandy review
-description: Review an authorized private-repository PR with a serialized Codex subscription session.
+description: Review an authorized private-repository PR with one managed Codex subscription session.
 
 inputs:
   pr-number:
@@ -32,6 +32,12 @@ inputs:
   model:
     description: Codex model for the generated logic/security/conditional-convex agent configuration.
     default: gpt-6.1-sol
+  agent-execution-mode:
+    description: serial (rollout default) or parallel (opt in only after runtime and quality gates).
+    default: serial
+  max-agent-concurrency:
+    description: Positive Agent cap in parallel mode; one selects serial rollback.
+    default: '3'
   test-mode:
     description: targeted lets reviewers verify findings with focused tests; suite runs the root test script once before review.
     default: targeted
@@ -143,6 +149,8 @@ runs:
         SANDY_PR_NUMBER: ${{ inputs.pr-number }}
         CONVEX_URL: ${{ inputs.convex-url }}
         GITHUB_APP_ID: ${{ inputs.app-id }}
+        SANDY_REVIEW_EXECUTION_MODE: ${{ inputs.agent-execution-mode }}
+        SANDY_REVIEW_AGENT_CONCURRENCY: ${{ inputs.max-agent-concurrency }}
         SANDY_REVIEW_TEST_MODE: ${{ inputs.test-mode }}
         SANDY_REVIEW_TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
       # Finish this step before the caller's 120-minute job timeout so the

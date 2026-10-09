@@ -53,6 +53,7 @@ export interface RunAgentInput {
 export interface AgentRunResult {
   stdout: string;
   usage?: AgentRunUsage;
+  activity?: { toolCount: number; toolDurationMs?: number };
 }
 
 export type ReviewTestMode = 'targeted' | 'suite';
@@ -60,6 +61,8 @@ export type ReviewTestMode = 'targeted' | 'suite';
 export interface CodexExecRunnerOptions {
   /** Dedicated CI login. Never copied from the operator's local Codex login. */
   codexHome: string;
+  /** Agent-owned tool caches; preparation retains the default shared tool home. */
+  toolHome?: string;
   executable?: string;
   env?: Record<string, string>;
   protectedPaths?: readonly string[];
@@ -93,7 +96,10 @@ export class CodexExecRunner {
       );
     this.#options = options;
     this.#logger = options.logger ?? console;
-    this.#toolHome = resolvePath(options.codexHome, '..', 'sandy-tool-home');
+    this.#toolHome =
+      options.toolHome === undefined
+        ? resolvePath(options.codexHome, '..', 'sandy-tool-home')
+        : resolvePath(options.toolHome);
     this.#sandboxHome = resolvePath(options.codexHome, '..', 'sandy-sandbox-home');
   }
 
