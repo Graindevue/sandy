@@ -4,6 +4,63 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createDedicatedBenchmarkDiagnostics } from './agent-failure-diagnostics.js';
 
+it('withholds recoverable uppercase, mixed and nested encoded credentials in message and details', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'sandy-diagnostic-escape-'));
+  const credential = 'KnownLoginAa2bb3CC456';
+  const unicode = (character: string) =>
+    `\\u${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+  const escaped = credential.split('').map(unicode).join('');
+  const mixed = credential
+    .split('')
+    .map((character, index) => (index % 4 === 0 ? unicode(character) : character))
+    .join('');
+  try {
+    await writeFile(
+      join(home, 'auth.json'),
+      JSON.stringify({
+        tokens: {
+          access_token: credential,
+          refresh_token: 'seed$secret/one',
+          id_token: credential,
+        },
+      }),
+    );
+    const diagnostics = await createDedicatedBenchmarkDiagnostics(home);
+    for (const encoded of [
+      escaped,
+      mixed,
+      escaped.replaceAll('\\', '\\\\'),
+      encodeURIComponent(escaped),
+      escaped.replaceAll('\\u', '%u'),
+      'seed$secret\\/one',
+      'seed$secret\\\\/one',
+      encodeURIComponent(encodeURIComponent(mixed)),
+      credential
+        .split('')
+        .map((character, index) =>
+          index % 4 === 0
+            ? encodeURIComponent(character).replace(
+                character,
+                `%${character.charCodeAt(0).toString(16)}`,
+              )
+            : character,
+        )
+        .join(''),
+    ]) {
+      const message = `Native fault ${encoded}`;
+      const details = `Native detail ${encoded}`;
+      expect(await diagnostics.describe(new Error(message, { cause: details }))).toEqual({
+        messageLength: message.length,
+        excerpt: null,
+        detailsLength: details.length,
+        detailsExcerpt: null,
+      });
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 it('keeps excerpts withheld when seed authentication could not be captured', async () => {
   const home = await mkdtemp(join(tmpdir(), 'sandy-diagnostic-no-seed-'));
   try {
@@ -41,7 +98,7 @@ it('withholds oversized or unverifiable details and redacts unknown authenticati
     );
     const diagnostics = await createDedicatedBenchmarkDiagnostics(home);
     const unsafe =
-      'Bearer tiny Authorization: "Basic tiny-two" eyAbCd.eyEfGh.signature https://short.test/a https:\\/\\/short.test\\/b https%3A%2F%2Fshort.test%2Fc person@short.test UnknownOpaque123456 acct-inner';
+      'Bearer tiny Authorization: "Basic tiny-two" eyAbCd.eyEfGh.signature https://short.test/a person@short.test UnknownOpaque123456 acct-inner';
     const result = await diagnostics.describe(new Error(`Reason: ${unsafe}`));
     expect(result.excerpt).toContain('Reason:');
     for (const value of ['tiny', 'eyAbCd', 'short.test', 'UnknownOpaque123456', 'acct-inner'])
@@ -78,13 +135,8 @@ it('redacts seed, rotated and current authentication before bounding native fail
   const variants = (value: string) => [
     value,
     JSON.stringify(value).slice(1, -1),
-    encodeURIComponent(value),
     Buffer.from(value).toString('base64'),
     Buffer.from(value).toString('base64url'),
-    encodeURIComponent(Buffer.from(value).toString('base64')),
-    Array.from(value)
-      .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
-      .join(''),
   ];
   const auth = (token: string) => ({
     auth_mode: 'chatgpt',

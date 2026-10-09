@@ -98,6 +98,9 @@ function secretForms(value: string): string[] {
 
 function sanitize(message: string, secrets: Set<string>): string | null {
   if (Buffer.byteLength(message, 'utf8') > 65_536) return null;
+  // Mixed and nested escapes can reconstruct credentials without a contiguous match.
+  // Withhold the whole field rather than guessing which decoding layers were applied.
+  if (message.includes('\\') || message.includes('%')) return null;
   let safe = message;
   for (const secret of [...secrets].sort((left, right) => right.length - left.length))
     safe = safe.replaceAll(secret, '[REDACTED]');
