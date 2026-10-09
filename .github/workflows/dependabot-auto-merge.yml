@@ -36,10 +36,22 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      - id: merge
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { mergeDependabotUpdates } = await import(
               `${process.env.GITHUB_WORKSPACE}/.github/actions/dependabot-auto-merge.mjs`
             );
-            await mergeDependabotUpdates({ github, context, core });
+            core.setOutput('merged', await mergeDependabotUpdates({ github, context, core }));
+      # A rerun recovers dispatches independently of PRs, including already merged ones.
+      # Only merge runs and explicit retries dispatch checks, preventing workflow_run loops.
+      - name: Dispatch post-merge checks
+        if: ${{ always() && (steps.merge.outputs.merged == 'true' || github.run_attempt > 1) }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { dispatchPostMergeChecks } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/actions/dependabot-auto-merge.mjs`
+            );
+            await dispatchPostMergeChecks({ github, context, core });
