@@ -93,17 +93,14 @@ describe('review action configuration', () => {
       repository: { owner: 'acme', name: 'widget' },
     });
   });
-  it.each([
-    '0',
-    '-1',
-    '4;echo bad',
-    '1e3',
-    '9007199254740992',
-  ])('rejects invalid PR number %s', (number) => {
-    expect(() => loadReviewActionConfig({ ...env, SANDY_PR_NUMBER: number })).toThrow(
-      'SANDY_PR_NUMBER',
-    );
-  });
+  it.each(['0', '-1', '4;echo bad', '1e3', '9007199254740992'])(
+    'rejects invalid PR number %s',
+    (number) => {
+      expect(() => loadReviewActionConfig({ ...env, SANDY_PR_NUMBER: number })).toThrow(
+        'SANDY_PR_NUMBER',
+      );
+    },
+  );
 });
 
 describe('review action PR eligibility', () => {

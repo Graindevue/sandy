@@ -360,36 +360,36 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
     expect(report.quality.bySeverity.P0.parallel.found).toBe(0);
   });
 
-  it.each([
-    'missing-agent',
-    'logic',
-  ])('rejects producer and severity evidence without a real Finding from %s', (agentKey) => {
-    const sample = matchedSamples()[0];
-    if (!sample) throw new Error('Missing test sample');
-    const report = buildBenchmarkReport({
-      samples: [sample],
-      fixtures: [{ id: 'fixture', expected: [] }],
-      adjudications: [
-        {
-          sampleId: sample.id,
-          reviewer: 'Maintainer',
-          findings: [
-            {
-              agentKey,
-              findingIndex: 0,
-              defectId: null,
-              actionableFalsePositive: false,
-              correctSeverity: true,
-              correctProducer: true,
-              verifiedInstalledSource: false,
-            },
-          ],
-        },
-      ],
-    });
-    expect(report.quality.gates.correctProducer).toBe(false);
-    expect(report.quality.gates.correctSeverity).toBe(false);
-  });
+  it.each(['missing-agent', 'logic'])(
+    'rejects producer and severity evidence without a real Finding from %s',
+    (agentKey) => {
+      const sample = matchedSamples()[0];
+      if (!sample) throw new Error('Missing test sample');
+      const report = buildBenchmarkReport({
+        samples: [sample],
+        fixtures: [{ id: 'fixture', expected: [] }],
+        adjudications: [
+          {
+            sampleId: sample.id,
+            reviewer: 'Maintainer',
+            findings: [
+              {
+                agentKey,
+                findingIndex: 0,
+                defectId: null,
+                actionableFalsePositive: false,
+                correctSeverity: true,
+                correctProducer: true,
+                verifiedInstalledSource: false,
+              },
+            ],
+          },
+        ],
+      });
+      expect(report.quality.gates.correctProducer).toBe(false);
+      expect(report.quality.gates.correctSeverity).toBe(false);
+    },
+  );
 });
 
 function matchedSamples(): BenchmarkSample[] {

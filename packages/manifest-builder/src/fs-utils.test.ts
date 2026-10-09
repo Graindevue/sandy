@@ -154,19 +154,18 @@ describe('repository source snapshots', () => {
     await expect(snapshot.readText('oversized.txt')).rejects.toThrow('64 MiB');
   }, 15_000);
 
-  it.each([
-    'file',
-    'ancestor',
-  ])('never reads outside content during concurrent %s symlink swaps', async (kind) => {
-    const repo = await makeRepo();
-    const outside = join(root, 'outside');
-    await mkdir(outside);
-    await writeFile(join(outside, 'index.ts'), 'DUMMY_OUTSIDE_HOST_CONTENT');
-    const target = kind === 'file' ? join(repo, 'src', 'index.ts') : join(repo, 'src');
-    const source = kind === 'file' ? join(outside, 'index.ts') : outside;
-    const control = new SharedArrayBuffer(4);
-    const worker = new Worker(
-      `
+  it.each(['file', 'ancestor'])(
+    'never reads outside content during concurrent %s symlink swaps',
+    async (kind) => {
+      const repo = await makeRepo();
+      const outside = join(root, 'outside');
+      await mkdir(outside);
+      await writeFile(join(outside, 'index.ts'), 'DUMMY_OUTSIDE_HOST_CONTENT');
+      const target = kind === 'file' ? join(repo, 'src', 'index.ts') : join(repo, 'src');
+      const source = kind === 'file' ? join(outside, 'index.ts') : outside;
+      const control = new SharedArrayBuffer(4);
+      const worker = new Worker(
+        `
       const fs = require('node:fs');
       const { parentPort, workerData } = require('node:worker_threads');
       const { target, source, kind, control } = workerData;
@@ -191,24 +190,25 @@ describe('repository source snapshots', () => {
       }
       parentPort.postMessage({ swaps });
       `,
-      { eval: true, workerData: { target, source, kind, control } },
-    );
-    await new Promise<void>((resolve, reject) => {
-      worker.once('message', () => resolve());
-      worker.once('error', reject);
-    });
-    try {
-      for (let read = 0; read < 12; read += 1) {
-        expect(await readRepoText(repo, 'src/index.ts')).toBe('PINNED_SOURCE_CONTENT');
-      }
-    } finally {
-      Atomics.store(new Int32Array(control), 0, 1);
+        { eval: true, workerData: { target, source, kind, control } },
+      );
       await new Promise<void>((resolve, reject) => {
-        worker.once('exit', () => resolve());
+        worker.once('message', () => resolve());
         worker.once('error', reject);
       });
-    }
-  });
+      try {
+        for (let read = 0; read < 12; read += 1) {
+          expect(await readRepoText(repo, 'src/index.ts')).toBe('PINNED_SOURCE_CONTENT');
+        }
+      } finally {
+        Atomics.store(new Int32Array(control), 0, 1);
+        await new Promise<void>((resolve, reject) => {
+          worker.once('exit', () => resolve());
+          worker.once('error', reject);
+        });
+      }
+    },
+  );
 });
 
 async function makeRepo(name = 'repo'): Promise<string> {
