@@ -32,7 +32,7 @@ import type {
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
-import { isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
+import { AgentRunError, isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
 import type {
   ArchetypeAssignedFinding,
   PersistedFinding,
@@ -483,7 +483,10 @@ export class ReviewExecutor {
             changedLineCount: changedLines,
             siblingShas: workspace.siblingShas,
             cancellationSignal,
-            testSummary,
+            testSummary:
+              failedAgentCount === 0
+                ? testSummary
+                : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${testSummary}`,
           }),
         );
       }
@@ -623,16 +626,33 @@ export class ReviewExecutor {
     cancellationSignal: AbortSignal | undefined;
     worktrees: ReviewWorktree[];
   }): Promise<SelectedAgentReviewResults> {
+    const cancellation = new AbortController();
+    const signal =
+      input.cancellationSignal === undefined
+        ? cancellation.signal
+        : AbortSignal.any([input.cancellationSignal, cancellation.signal]);
     const runtime = await this.#runner.openReview?.({
       worktreePath: input.workspace.prWorktree.path,
       siblingWorktrees: input.workspace.siblingWorktrees,
       maxConcurrency: this.#maxAgentConcurrency,
-      ...(input.cancellationSignal === undefined ? {} : { signal: input.cancellationSignal }),
+      signal,
     });
     const cap =
       runtime === undefined ? 1 : Math.min(this.#maxAgentConcurrency, runtime.maxConcurrency);
     const results: SelectedAgentReviewResult[] = [];
     let next = 0;
+    let checking: Promise<void> | undefined;
+    const monitor =
+      runtime === undefined
+        ? undefined
+        : setInterval(() => {
+            if (checking !== undefined || signal.aborted) return;
+            checking = this.#throwIfCancelledOrSuperseded(input.context.job.id, signal)
+              .catch((error: unknown) => cancellation.abort(error))
+              .finally(() => {
+                checking = undefined;
+              });
+          }, 1000);
     try {
       if (!Number.isSafeInteger(cap) || cap < 1)
         throw new Error('Runtime returned an invalid concurrency cap');
@@ -644,31 +664,54 @@ export class ReviewExecutor {
         `Execution mode: ${cap === 1 ? 'serial' : 'parallel'} (maximum ${cap} Agents).`,
       );
       const consume = async () => {
-        while (next < input.agents.length) {
-          const index = next++;
-          const agent = input.agents[index];
-          if (agent === undefined) return;
-          await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
-          let workspace = input.workspace;
-          if (runtime !== undefined && this.#cloneManager.materializeAgentWorkspace !== undefined) {
-            const startedAt = Date.now();
-            const prWorktree = await this.#cloneManager.materializeAgentWorkspace(
-              input.workspace.prWorktree,
-              agent.key,
-            );
-            input.worktrees.push(prWorktree);
-            workspace = { ...workspace, prWorktree };
-            this.#logProgress(
-              input.context.job.id,
-              `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
-            );
+        try {
+          while (next < input.agents.length) {
+            const index = next++;
+            const agent = input.agents[index];
+            if (agent === undefined) return;
+            await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+            if (runtime?.failureSignal?.aborted) {
+              const timestamp = this.#now();
+              await this.#store.recordAgentRun({
+                reviewJobId: input.context.job.id,
+                agentKey: agent.key,
+                status: 'failed',
+                findingCount: 0,
+                startedAt: timestamp,
+                finishedAt: timestamp,
+                error: `Agent was not started because the Review runtime failed: ${describeError(runtime.failureSignal.reason)}`,
+              });
+              results[index] = { status: 'failed' };
+              continue;
+            }
+            let workspace = input.workspace;
+            if (
+              runtime !== undefined &&
+              this.#cloneManager.materializeAgentWorkspace !== undefined
+            ) {
+              const startedAt = Date.now();
+              const prWorktree = await this.#cloneManager.materializeAgentWorkspace(
+                input.workspace.prWorktree,
+                agent.key,
+              );
+              input.worktrees.push(prWorktree);
+              workspace = { ...workspace, prWorktree };
+              this.#logProgress(
+                input.context.job.id,
+                `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
+              );
+            }
+            results[index] = await this.#runSelectedAgent({
+              ...input,
+              cancellationSignal: signal,
+              agent,
+              workspace,
+              ...(runtime === undefined ? {} : { runtime }),
+            });
           }
-          results[index] = await this.#runSelectedAgent({
-            ...input,
-            agent,
-            workspace,
-            ...(runtime === undefined ? {} : { runtime }),
-          });
+        } catch (error) {
+          cancellation.abort(error);
+          throw error;
         }
       };
       const settled = await Promise.allSettled(
@@ -676,6 +719,9 @@ export class ReviewExecutor {
       );
       for (const result of settled) if (result.status === 'rejected') throw result.reason;
     } finally {
+      if (monitor !== undefined) clearInterval(monitor);
+      await checking;
+      cancellation.abort();
       await runtime?.close();
     }
     return {
@@ -729,6 +775,7 @@ export class ReviewExecutor {
         ...(usage !== undefined ? { usage } : {}),
       };
     } catch (error) {
+      if (error instanceof AgentRunError) usage = error.usage;
       if (isReviewSupersededError(error)) {
         throw error;
       }
@@ -753,6 +800,12 @@ export class ReviewExecutor {
     parentSignal: AbortSignal | undefined,
     runtime?: ReviewAgentRuntime,
   ): Promise<AgentRunResult> {
+    if (runtime?.failureSignal !== undefined) {
+      parentSignal =
+        parentSignal === undefined
+          ? runtime.failureSignal
+          : AbortSignal.any([parentSignal, runtime.failureSignal]);
+    }
     parentSignal?.throwIfAborted();
 
     const controller = new AbortController();
@@ -780,12 +833,11 @@ export class ReviewExecutor {
       parentSignal.addEventListener('abort', onParentAbort, { once: true });
     });
 
+    const running = Promise.resolve().then(() =>
+      (runtime ?? this.#runner).runAgent({ ...input, signal: controller.signal }),
+    );
     try {
-      return await Promise.race([
-        (runtime ?? this.#runner).runAgent({ ...input, signal: controller.signal }),
-        timeoutPromise,
-        parentAbortPromise,
-      ]);
+      return await Promise.race([running, timeoutPromise, parentAbortPromise]);
     } catch (error) {
       if (timeoutError !== null && !isAgentTimedOutError(error)) {
         throw timeoutError;
@@ -793,6 +845,9 @@ export class ReviewExecutor {
       throw error;
     } finally {
       controller.abort();
+      // A managed adapter resolves only after its interrupted turn is terminal.
+      // Keep the slot and workspace alive while child tools drain.
+      if (runtime !== undefined) await running.catch(() => {});
       if (parentSignal !== undefined && onParentAbort !== undefined) {
         parentSignal.removeEventListener('abort', onParentAbort);
       }
@@ -1028,9 +1083,9 @@ function repoAgentsYaml(config: ReviewBotContext, fullName: string): string | nu
   return repoConfig?.agentsYaml;
 }
 
-class AgentTimedOutError extends Error {
-  constructor(agentKey: string, timeoutMs: number) {
-    super(`Agent ${JSON.stringify(agentKey)} exceeded ${timeoutMs}ms execution timeout`);
+class AgentTimedOutError extends AgentRunError {
+  constructor(agentKey: string, timeoutMs: number, usage?: AgentRunUsage) {
+    super(`Agent ${JSON.stringify(agentKey)} exceeded ${timeoutMs}ms execution timeout`, usage);
     this.name = 'AgentTimedOutError';
   }
 }
