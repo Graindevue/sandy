@@ -14,8 +14,9 @@ the same work.
 
 ## Base branch
 
-Feature work branches from `main` with a `phase-N/<slug>` name and targets
-`main`. Follow [AGENTS.md](../../../AGENTS.md). Fetch the target repository's
+Feature work branches from `staging` with a `phase-N/<slug>` name and targets
+`staging`. Release PRs promote `staging` to `main` for maintainer review.
+Follow [AGENTS.md](../../../AGENTS.md). Fetch the target repository's
 base branch and review the diff against its current remote-tracking ref to make
 sure the contents match the user's goal. Use another base only when the user
 explicitly requests it.
@@ -28,7 +29,7 @@ explicitly requests it.
   checks after further edits.
 - Report the requested behavior actually verified. For build or runtime
   changes, include the affected package build or runtime verification. Passing
-  tests or a review score do not replace that evidence.
+  tests or a bot approval do not replace that evidence.
 - Backend edits: regenerate Convex types before checks using the procedure in
   [packages/convex-backend/README.md](../../../packages/convex-backend/README.md),
   and include generated changes with their source changes.
@@ -82,17 +83,16 @@ When using `gh`, write multiline descriptions to a temporary file and pass
 
 ## After filing
 
-Open as a draft (`gh pr create --draft --base main`) unless the user explicitly
+Open as a draft (`gh pr create --draft --base staging`) unless the user explicitly
 asks for a ready PR. A maintainer reviews the PR before merge.
 
 When T3 Code exposes `link_pull_request`, register the full PR URL immediately
 after creation or when starting work on an existing PR. Before finishing, use
 `list_thread_pull_requests` and register any missing PR from this work.
 
-If Greptile review is part of the requested workflow, request it with a fresh
-`@greptile` comment. For an existing PR, wait for a running review to finish
-before requesting the new head, and follow the user's retriggering instructions.
-Keep the PR in draft until the requested review gate is satisfied; for a
-Greptile 5/5 gate, mark it ready with `gh pr ready` after that score is reached.
+Request and verify a CodeRabbit review using
+[coderabbit-review](../coderabbit-review/SKILL.md). Keep the PR in draft until
+the current head has a completed review, actionable findings are addressed,
+and required checks pass, then mark it ready with `gh pr ready`.
 If the user also asks to watch the PR, continue with
-[babysit-pr](../babysit-pr/SKILL.md), which owns triggering and monitoring.
+[babysit-pr](../babysit-pr/SKILL.md), which owns monitoring and further fixes.
