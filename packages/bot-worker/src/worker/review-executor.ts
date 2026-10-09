@@ -708,7 +708,13 @@ export class ReviewExecutor {
         : setInterval(() => {
             if (checking !== undefined || signal.aborted) return;
             checking = this.#throwIfCancelledOrSuperseded(input.context.job.id, signal)
-              .catch((error: unknown) => cancellation.abort(error))
+              .catch((error: unknown) => {
+                if (isReviewSupersededError(error)) cancellation.abort(error);
+                else if (!signal.aborted)
+                  this.#logger.warn(
+                    `Sandy ReviewJob ${input.context.job.id}: Status check failed; retrying on the next interval.`,
+                  );
+              })
               .finally(() => {
                 checking = undefined;
               });

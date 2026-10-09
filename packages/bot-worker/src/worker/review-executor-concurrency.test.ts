@@ -304,6 +304,74 @@ describe('claimed ReviewJob concurrency', () => {
     expect(fixture.clones.removed).toHaveLength(1);
   });
 
+  it.each([
+    1, 2,
+  ])('retries a transient status-monitor failure without interrupting %i active Agents', async (cap) => {
+    vi.useFakeTimers();
+    const cleanup = new AbortController();
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const signals: AbortSignal[] = [];
+    const logger = { warn: vi.fn() };
+    let monitoredReads = 0;
+    const fixture = managedReview({
+      cap,
+      signal: cleanup.signal,
+      logger,
+      runAgent: async ({ signal }) => {
+        if (!signal) throw new Error('Missing Agent cancellation signal');
+        signals.push(signal);
+        if (signals.length === cap) started.resolve();
+        await Promise.race([
+          finish.promise,
+          new Promise<never>((_resolve, reject) =>
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+          ),
+        ]);
+        return runnerOutput(findingsOutput([]));
+      },
+    });
+    fixture.store.getReviewJobStatus = async () => {
+      if (signals.length === cap && ++monitoredReads === 1)
+        throw new Error('Temporary status service failure');
+      return fixture.store.status;
+    };
+    const reviewing = fixture.executor.executeClaimedJob('job-1');
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Sandy ReviewJob job-1: Status check failed; retrying on the next interval.',
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(monitoredReads).toBe(2);
+      finish.resolve();
+      await reviewing;
+    } finally {
+      finish.resolve();
+      cleanup.abort(new Error('test cleanup'));
+      await reviewing;
+      vi.useRealTimers();
+    }
+    expect(fixture.store.agentRuns.every((run) => run.status === 'completed')).toBe(true);
+    expect(fixture.store.status).toBe('completed');
+    expect(fixture.store.failed).toEqual([]);
+  });
+
+  it('fails closed when the admission checkpoint cannot verify Review status', async () => {
+    const runAgent = vi.fn(async () => runnerOutput(findingsOutput([])));
+    const fixture = managedReview({ runAgent });
+    fixture.store.getReviewJobStatus = async () => {
+      throw new Error('Status service unavailable at admission');
+    };
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(fixture.poster.results).toEqual([]);
+    expect(fixture.store.status).toBe('failed');
+    expect(fixture.store.failed[0]?.error).toBe('Status service unavailable at admission');
+  });
+
   it('records authoritative usage on failed Agents without borrowing successful peer usage', async () => {
     const fixture = managedReview({
       runAgent: async ({ agent }) => {
@@ -388,6 +456,7 @@ function managedReview(options: {
   runAgent: ReviewAgentRuntime['runAgent'];
   agentTimeoutMs?: number;
   onOpen?: (paths: readonly string[] | undefined) => void;
+  logger?: ConstructorParameters<typeof ReviewExecutor>[0]['logger'];
 }) {
   const agents = options.agents ?? [logicAgent, securityAgent];
   const store = new FakeExecutionStore(
@@ -410,6 +479,7 @@ function managedReview(options: {
     maxAgentConcurrency: options.cap ?? 2,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.agentTimeoutMs === undefined ? {} : { agentTimeoutMs: options.agentTimeoutMs }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     runner: {
       runAgent: async () => {
         throw new Error('legacy runner must not be used');
