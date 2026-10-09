@@ -117,8 +117,10 @@ directories, including those enforced by SWC.
 Without `SANDY_CONFIG_PATH`, the action creates one Product for the caller Repo
 and selects `logic` and `security`, adding `convex` only for Convex changes.
 All three use `gpt-6.1-sol` with `xhigh` effort by default. When dependency
-installation succeeds and a test script exists, Sandy runs the project test
-suite once and includes its result in the review. Optional repository variables:
+installation succeeds, reviewers can run focused tests for concrete Findings.
+Sandy leaves the full repository suite to CI by default, rather than blocking
+every review on recursive builds and unrelated tests. The summary explicitly
+reports this deferral. Optional repository variables:
 
 | Variable | Purpose |
 |----------|---------|
@@ -126,6 +128,15 @@ suite once and includes its result in the review. Optional repository variables:
 | `SANDY_PRODUCT_NAME` | Product display name. |
 | `SANDY_MODEL` | Codex model for generated config; default `gpt-6.1-sol`. Effort is `xhigh` for all selected reviewers. |
 | `SANDY_CONFIG_PATH` | Trusted `bot.yaml` path relative to `GITHUB_WORKSPACE`. |
+| `SANDY_TEST_MODE` | `targeted` (default) leaves full-suite execution to CI; `suite` runs the root test script once before reviewers. |
+| `SANDY_TEST_TIMEOUT_SECONDS` | Full-suite budget in `suite` mode: 1–600 seconds, default 120. |
+
+The workflow template passes these test settings to the action's `test-mode`
+and `test-timeout-seconds` inputs. Existing callers that omit them use focused
+verification. Suite commands retain the reviewed repository's package-manager
+pin and execute in the same credential-free sandbox as dependency installation.
+Timed-out commands retain bounded startup and final diagnostics. Actions logs
+show installation, optional suite execution, and reviewer start/end timings.
 
 For multiple Repos or custom selection, commit a non-secret
 `.github/sandy/bot.yaml` on the caller's default branch and set:
@@ -155,7 +166,8 @@ you intended to review. After new commits, create a new `@sandy` comment to
 request another review.
 Inspect the summary's test status: a confidence score of 5/5 or successful
 Actions run does not prove tests ran. An otherwise successful review receives
-a neutral Sandy Check Run when tests are unavailable, failed, or skipped.
+a neutral Sandy Check Run when the full suite is deferred to CI, unavailable,
+failed, or skipped. Focused reviewer tests do not imply that the whole suite passed.
 The review can still complete with static analysis.
 
 Only newly created comments trigger reviews. Editing a comment, clicking the

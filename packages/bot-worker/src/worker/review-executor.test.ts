@@ -1,4 +1,4 @@
-import type { Finding } from '@sandy/shared-types';
+import type { ApiSurfaceManifestBuildResult, Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { ReviewSupersededError } from './review-errors.js';
 import { ReviewExecutor } from './review-executor.js';
@@ -159,12 +159,97 @@ describe('ReviewExecutor', () => {
       logger: { warn: () => {}, info: (message) => statusLines.push(message) },
     });
     await executor.executeClaimedJob('job-1');
-    expect(statusLines[0]).toBe('Tests failed: the project test suite did not pass.');
-    expect(statusLines[1]).toContain('FIRST ERROR');
-    expect(statusLines[1]).toContain('LAST ERROR');
-    expect(statusLines[1]?.length).toBeLessThan(4100);
+    expect(statusLines).toContain('Tests failed: the project test suite did not pass.');
+    const loggedDiagnostics = statusLines.find((line) =>
+      line.startsWith('Project test diagnostics:'),
+    );
+    expect(loggedDiagnostics).toContain('FIRST ERROR');
+    expect(loggedDiagnostics).toContain('LAST ERROR');
+    expect(loggedDiagnostics?.length).toBeLessThan(4100);
     expect(poster.results[0]?.summary).not.toContain('FIRST ERROR');
     expect(poster.results[0]?.summary).not.toContain('LAST ERROR');
+  });
+
+  it('logs preparation and serial Agent outcomes without exposing reviewed output or errors', async () => {
+    const logs: string[] = [];
+    const manifest = deferred<ApiSurfaceManifestBuildResult>();
+    const install = deferred<{
+      status: 'installed';
+      packageManager: 'pnpm';
+      command: string;
+      durationMs: number;
+      testStatus: 'deferred';
+      testResult: string;
+    }>();
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      manifestBuilder: { buildManifest: () => manifest.promise },
+      runner: {
+        installDependencies: () => install.promise,
+        runAgent: async ({ agent }) => {
+          if (agent.key === 'security') throw new Error('untrusted failure detail');
+          return runnerOutput(findingsOutput([finding], 'untrusted review summary'));
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 200, 300, 350, 400]),
+      logger: { warn: () => {}, info: (message) => logs.push(message) },
+    });
+
+    const reviewing = executor.executeClaimedJob('job-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(logs).toContain('Sandy ReviewJob job-1: API surface manifest started.');
+    expect(logs).toContain('Sandy ReviewJob job-1: Dependency preparation started.');
+    expect(logs.join('\n')).not.toContain('Agent "logic" started.');
+
+    install.resolve({
+      status: 'installed',
+      packageManager: 'pnpm',
+      command: 'untrusted install command',
+      durationMs: 100,
+      testStatus: 'deferred',
+      testResult: 'untrusted test result',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(logs).toContainEqual(
+      expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
+    );
+    expect(logs.join('\n')).not.toContain('Agent "logic" started.');
+
+    manifest.resolve({
+      markdown: 'untrusted manifest',
+      structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+    });
+    await reviewing;
+
+    expect(logs).toEqual([
+      'Sandy ReviewJob job-1: Workspace preparation started.',
+      expect.stringMatching(/^Sandy ReviewJob job-1: Workspace preparation finished in \d+ms\.$/),
+      'Sandy ReviewJob job-1: API surface manifest started.',
+      'Sandy ReviewJob job-1: Dependency preparation started.',
+      expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
+      expect.stringMatching(/^Sandy ReviewJob job-1: API surface manifest finished in \d+ms\.$/),
+      'Full project test suite deferred to CI; reviewers may run focused verification.',
+      'Sandy ReviewJob job-1: Selected Agent order: "logic" -> "security".',
+      'Sandy ReviewJob job-1: Agent "logic" started.',
+      'Sandy ReviewJob job-1: Agent "logic" completed in 100ms (1 finding).',
+      'Sandy ReviewJob job-1: Agent "security" started.',
+      'Sandy ReviewJob job-1: Agent "security" failed in 50ms.',
+      'Sandy ReviewJob job-1: Synthesis and posting started.',
+      expect.stringMatching(/^Sandy ReviewJob job-1: Synthesis and posting finished in \d+ms\.$/),
+    ]);
+    expect(logs.join('\n')).not.toContain('untrusted');
+    expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 400 }]);
+    expect(poster.results[0]?.summary).toContain(
+      'Full project test suite deferred to CI; reviewers may run focused verification.',
+    );
   });
 
   it('qualifies a clean static review and uses a neutral check when dependency installation fails', async () => {
@@ -215,7 +300,7 @@ describe('ReviewExecutor', () => {
       /^Tests unavailable: dependency installation failed\. Review used static analysis\.\n\nConfidence score: 5\/5/,
     );
     expect(poster.results[0]?.summary).not.toContain('container failed to start');
-    expect(statusLines).toEqual([testSummary]);
+    expect(statusLines).toContain(testSummary);
     expect(completedChecks[0]).toMatchObject({
       conclusion: 'neutral',
       verdict: `Sandy completed review. ${testSummary.slice(0, -1)}`,

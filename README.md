@@ -32,6 +32,14 @@ Default `logic`, `security`, and conditional `convex` reviewers use
 `gpt-6.1-sol` with `xhigh` effort. Optional shipped personas use the same model
 and effort when enabled.
 
+Dependencies are installed once so reviewers can run focused tests to verify
+concrete Findings. The full repository suite belongs in CI and does not delay
+reviewer startup by default. The action's optional `test-mode: suite` runs it
+once before reviewing, with a two-minute default timeout. Summaries explicitly
+report when the full suite was deferred, skipped, or failed; these reviews have
+a neutral advisory Check Run. Actions logs identify the current phase and each
+reviewer's elapsed time.
+
 Cross-repo review reads actual sibling source pinned to each Repo's default
 branch. The manifest identifies contracts worth searching; Findings cite
 affected consumers with SHA-pinned permalinks and post on the reviewed PR.

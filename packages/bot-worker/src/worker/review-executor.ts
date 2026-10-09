@@ -334,14 +334,13 @@ export class ReviewExecutor {
 
   async executeClaimedJob(jobId: string): Promise<{ failedAgentCount: number }> {
     let failedAgentCount = 0;
-    let context: ReviewJobContext | null = null;
     let statusCheck: ReviewStatusCheckRun | null = null;
     const worktrees: ReviewWorktree[] = [];
     const cancellationSignal = this.#signal;
 
     try {
       cancellationSignal?.throwIfAborted();
-      context = await this.#requiredContext(jobId);
+      const context = await this.#requiredContext(jobId);
       const repo = repoForWorktree(context);
       const target = pullRequestTarget(context);
       statusCheck = await startReviewStatusCheck({
@@ -373,7 +372,9 @@ export class ReviewExecutor {
         return { failedAgentCount };
       }
 
-      const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
+      const workspace = await this.#runPhase(jobId, 'Workspace preparation', () =>
+        materializeReviewWorkspace(this.#cloneManager, context),
+      );
       worktrees.push(...workspace.worktrees);
       await this.#store.recordSiblingShas(jobId, workspace.siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
@@ -381,12 +382,20 @@ export class ReviewExecutor {
       // so they run concurrently. allSettled keeps the slower one from being
       // orphaned mid-flight (and rejecting unhandled) when the other throws.
       const [manifestSettled, installSettled] = await Promise.allSettled([
-        this.#buildAndRecordManifest(context, workspace.manifestRepos),
-        this.#installWorkspaceDependencies(
-          workspace.prWorktree.path,
-          `${context.repo.owner}/${context.repo.name}`,
-          cancellationSignal,
-        ),
+        this.#manifestBuilder === null
+          ? Promise.resolve(undefined)
+          : this.#runPhase(jobId, 'API surface manifest', () =>
+              this.#buildAndRecordManifest(context, workspace.manifestRepos),
+            ),
+        this.#runner.installDependencies === undefined
+          ? Promise.resolve(undefined)
+          : this.#runPhase(jobId, 'Dependency preparation', () =>
+              this.#installWorkspaceDependencies(
+                workspace.prWorktree.path,
+                `${context.repo.owner}/${context.repo.name}`,
+                cancellationSignal,
+              ),
+            ),
       ]);
       if (manifestSettled.status === 'rejected') {
         throw manifestSettled.reason;
@@ -426,6 +435,10 @@ export class ReviewExecutor {
         workspace.manifestRepos,
         reviewBotConfig,
       );
+      this.#logProgress(
+        jobId,
+        `Selected Agent order: ${agents.map((agent) => JSON.stringify(agent.key)).join(' -> ') || 'none'}.`,
+      );
       const agentResults = await this.#runSelectedAgents({
         context,
         agents,
@@ -438,15 +451,17 @@ export class ReviewExecutor {
       failedAgentCount = agentResults.failedAgentCount;
       let postedReview: PostedReviewResult | null = null;
       if (agentResults.outputs.length > 0) {
-        postedReview = await this.#synthesizePersistAndPostReview({
-          context,
-          target,
-          agentOutputs: agentResults.outputs,
-          changedLineCount: changedLines,
-          siblingShas: workspace.siblingShas,
-          cancellationSignal,
-          testSummary,
-        });
+        postedReview = await this.#runPhase(jobId, 'Synthesis and posting', () =>
+          this.#synthesizePersistAndPostReview({
+            context,
+            target,
+            agentOutputs: agentResults.outputs,
+            changedLineCount: changedLines,
+            siblingShas: workspace.siblingShas,
+            cancellationSignal,
+            testSummary,
+          }),
+        );
       }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
@@ -487,6 +502,29 @@ export class ReviewExecutor {
       }
     }
     return { failedAgentCount };
+  }
+
+  #logProgress(jobId: string, message: string): void {
+    this.#logger.info?.(`Sandy ReviewJob ${jobId}: ${message}`);
+  }
+
+  async #runPhase<T>(jobId: string, phase: string, run: () => Promise<T>): Promise<T> {
+    const startedAt = performance.now();
+    this.#logProgress(jobId, `${phase} started.`);
+    try {
+      const result = await run();
+      this.#logProgress(
+        jobId,
+        `${phase} finished in ${Math.round(performance.now() - startedAt)}ms.`,
+      );
+      return result;
+    } catch (error) {
+      this.#logProgress(
+        jobId,
+        `${phase} failed after ${Math.round(performance.now() - startedAt)}ms.`,
+      );
+      throw error;
+    }
   }
 
   async #selectAgents(
@@ -582,8 +620,17 @@ export class ReviewExecutor {
 
   async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
+    this.#logProgress(context.job.id, `Agent ${JSON.stringify(agent.key)} started.`);
     const outcome = await this.#executeAgent(input);
     await this.#store.recordAgentRun(agentRunRecordInput(context.job.id, agent.key, outcome));
+    const findings =
+      outcome.status === 'completed'
+        ? ` (${outcome.payload.findings.length} ${outcome.payload.findings.length === 1 ? 'finding' : 'findings'})`
+        : '';
+    this.#logProgress(
+      context.job.id,
+      `Agent ${JSON.stringify(agent.key)} ${outcome.status} in ${outcome.finishedAt - outcome.startedAt}ms${findings}.`,
+    );
     if (outcome.status !== 'completed') {
       return { status: 'failed' };
     }
@@ -872,6 +919,9 @@ function reviewTestSummary(result: DependencyInstallResult | undefined): string 
     return 'Tests not run: no supported project test setup.';
   }
   if (result?.status === 'installed') {
+    if (result.testStatus === 'deferred') {
+      return 'Full project test suite deferred to CI; reviewers may run focused verification.';
+    }
     if (result.testStatus === 'passed') return 'Tests passed: the project test suite ran once.';
     if (result.testStatus === 'failed') return 'Tests failed: the project test suite did not pass.';
     if (result.testStatus === 'skipped') return 'Tests not run: no project test script is defined.';

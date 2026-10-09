@@ -32,6 +32,12 @@ inputs:
   model:
     description: Codex model for the generated logic/security/conditional-convex agent configuration.
     default: gpt-6.1-sol
+  test-mode:
+    description: targeted lets reviewers verify findings with focused tests; suite runs the root test script once before review.
+    default: targeted
+  test-timeout-seconds:
+    description: Full-suite timeout when test-mode is suite, between 1 and 600 seconds.
+    default: '120'
 
 runs:
   using: composite
@@ -137,6 +143,8 @@ runs:
         SANDY_PR_NUMBER: ${{ inputs.pr-number }}
         CONVEX_URL: ${{ inputs.convex-url }}
         GITHUB_APP_ID: ${{ inputs.app-id }}
+        SANDY_REVIEW_TEST_MODE: ${{ inputs.test-mode }}
+        SANDY_REVIEW_TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
       # Finish this step before the caller's 120-minute job timeout so the
       # always() persistence steps still have time to preserve refreshed auth.
       run: |

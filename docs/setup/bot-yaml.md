@@ -52,10 +52,12 @@ standalone `@sandy`. It does not restrict those requests.
 Keys are filenames without `.md` in `agents/` and `.config/agents/`.
 The current generated Actions configuration uses `logic`, `security`, and
 conditional `convex`, all on `gpt-6.1-sol` with `xhigh` effort. The Convex persona
-runs only when the reviewed diff touches a `convex/` directory. When dependencies
-install and a project test script is available, Sandy runs the suite once and
-includes its result in reviewer context; a separate coverage persona is not part
-of the generated selection. Next.js, style, and other optional shipped personas
+runs only when the reviewed diff touches a `convex/` directory. After dependency
+installation, reviewers run focused tests for concrete Findings; the full suite
+is deferred to CI by default. The action's optional `test-mode: suite` runs the
+root test script once with a bounded timeout and includes its result in reviewer
+context. A separate coverage persona is not part of the generated selection.
+Next.js, style, and other optional shipped personas
 use the same model and effort when explicitly selected.
 
 List form chooses an exact set:

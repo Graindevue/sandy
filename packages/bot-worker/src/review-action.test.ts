@@ -28,6 +28,29 @@ const pr: PullRequestFacts = {
 };
 
 describe('review action configuration', () => {
+  it('defaults to focused verification with a bounded optional full suite', () => {
+    expect(loadReviewActionConfig(env)).toMatchObject({
+      testMode: 'targeted',
+      testTimeoutMs: 120_000,
+    });
+    expect(
+      loadReviewActionConfig({
+        ...env,
+        SANDY_REVIEW_TEST_MODE: 'suite',
+        SANDY_REVIEW_TEST_TIMEOUT_SECONDS: '60',
+      }),
+    ).toMatchObject({ testMode: 'suite', testTimeoutMs: 60_000 });
+  });
+  it('rejects unknown test modes and invalid suite budgets', () => {
+    expect(() => loadReviewActionConfig({ ...env, SANDY_REVIEW_TEST_MODE: 'fast' })).toThrow(
+      'SANDY_REVIEW_TEST_MODE',
+    );
+    for (const seconds of ['0', '-1', '1.5', '601', '9007199254740992']) {
+      expect(() =>
+        loadReviewActionConfig({ ...env, SANDY_REVIEW_TEST_TIMEOUT_SECONDS: seconds }),
+      ).toThrow('SANDY_REVIEW_TEST_TIMEOUT_SECONDS');
+    }
+  });
   it('requires an explicit dedicated Codex home and Product configuration', () => {
     expect(() => loadReviewActionConfig({ ...env, CODEX_HOME: undefined })).toThrow('CODEX_HOME');
     expect(() => loadReviewActionConfig({ ...env, SANDY_CONFIG_PATH: undefined })).toThrow(

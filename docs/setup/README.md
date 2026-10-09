@@ -52,3 +52,8 @@ Reviews use Codex CLI; configure selected personas with `vendor: codex`.
 Embeddings, new Archetype assignment, reaction collection, and SuggestedRule
 promotion are disabled. Historical learning data remains in Convex. The old
 host-service setup is preserved only in historical ADRs and PRDs.
+
+Reviewers run focused tests for concrete Findings after dependency installation.
+Run the full repository suite in CI; opt into `test-mode: suite` only when it
+must run before a review. Its default budget is two minutes, and the summary
+always states whether the full suite ran.
