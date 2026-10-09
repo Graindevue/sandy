@@ -1,13 +1,12 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fixtureGit } from '../../../test-support/git.js';
 import npmExports from './extractors/npm-exports.js';
 import { buildManifest } from './main.js';
 
 let tmpRoot: string;
-const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(join(tmpdir(), 'sandy-manifest-'));
@@ -247,23 +246,10 @@ function packageJson(name: string): unknown {
 }
 
 async function repoInput(fullName: string, worktreePath: string) {
-  await execFileAsync('git', ['init', '-q', worktreePath]);
-  await execFileAsync('git', ['-C', worktreePath, 'add', '.']);
-  await execFileAsync('git', [
-    '-C',
-    worktreePath,
-    '-c',
-    'user.name=Fixture',
-    '-c',
-    'user.email=fixture@example.test',
-    '-c',
-    'commit.gpgsign=false',
-    'commit',
-    '-q',
-    '-m',
-    'Fixture',
-  ]);
-  const { stdout } = await execFileAsync('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
+  await fixtureGit(['init', '-q', worktreePath]);
+  await fixtureGit(['-C', worktreePath, 'add', '.']);
+  await fixtureGit(['-C', worktreePath, 'commit', '-q', '-m', 'Fixture']);
+  const { stdout } = await fixtureGit(['-C', worktreePath, 'rev-parse', 'HEAD']);
   const sha = stdout.trim();
   const [owner, name] = fullName.split('/');
   return {
@@ -281,5 +267,3 @@ async function write(root: string, path: string, contents: string): Promise<void
   await mkdir(join(fullPath, '..'), { recursive: true });
   await writeFile(fullPath, contents);
 }
-
-import { execFile } from 'node:child_process';

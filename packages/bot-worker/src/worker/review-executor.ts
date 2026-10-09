@@ -955,7 +955,7 @@ function repoAgentsYaml(config: ReviewBotContext, fullName: string): string | nu
   const repoConfig = config.repos?.find(
     (entry) => entry.repo.fullName.toLowerCase() === fullName.toLowerCase(),
   );
-  return repoConfig?.agentsYaml ?? null;
+  return repoConfig?.agentsYaml;
 }
 
 class AgentTimedOutError extends Error {
