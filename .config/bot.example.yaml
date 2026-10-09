@@ -46,7 +46,7 @@ products:
     #   overrides:
     #     logic:
     #       vendor: codex
-    #       model: gpt-5.5
+    #       model: gpt-6.1-sol
     #       effort: xhigh
 
   # A second, unrelated Product. This one omits `agents`, so the default
