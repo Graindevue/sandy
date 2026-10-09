@@ -1,13 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fixtureGit } from '../../../../test-support/git.js';
 import { selectAgentsForReview } from './agent-selector.js';
 
 let root: string;
-const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'sandy-agent-selector-'));
@@ -113,22 +112,9 @@ async function writePackageJson(
 ): Promise<void> {
   await mkdir(repoRoot, { recursive: true });
   await writeFile(join(repoRoot, 'package.json'), JSON.stringify(packageJson, null, 2));
-  await execFileAsync('git', ['init', '-q', repoRoot]);
-  await execFileAsync('git', ['-C', repoRoot, 'add', '.']);
-  await execFileAsync('git', [
-    '-C',
-    repoRoot,
-    '-c',
-    'user.name=Fixture',
-    '-c',
-    'user.email=fixture@example.test',
-    '-c',
-    'commit.gpgsign=false',
-    'commit',
-    '-q',
-    '-m',
-    'Fixture',
-  ]);
+  await fixtureGit(['init', '-q', repoRoot]);
+  await fixtureGit(['-C', repoRoot, 'add', '.']);
+  await fixtureGit(['-C', repoRoot, 'commit', '-q', '-m', 'Fixture']);
 }
 
 function agent(key: string, defaultEnabled: AgentDefinition['defaultEnabled']): AgentDefinition {
@@ -146,5 +132,3 @@ function agent(key: string, defaultEnabled: AgentDefinition['defaultEnabled']): 
     systemPrompt: `# ${key}`,
   };
 }
-
-import { execFile } from 'node:child_process';

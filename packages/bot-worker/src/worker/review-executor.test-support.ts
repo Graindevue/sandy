@@ -5,6 +5,7 @@ import type {
   ReviewJobStatus,
   SiblingShas,
 } from '@sandy/shared-types';
+import type { ReviewBotContext } from '../config/review-bot-context.js';
 import type {
   RecordAgentRunInput,
   RecordSynthesizedReviewInput,
@@ -22,6 +23,18 @@ interface RecordedFinding {
   pullRequestId: string;
   finding: Finding;
 }
+
+// Fake worktrees have no filesystem; model captured absence rather than an unread config.
+export const fixtureBotConfig: ReviewBotContext = {
+  repoRules: null,
+  productRules: null,
+  ignorePatterns: [],
+  repos: [{ repo: { fullName: 'acme/widget' }, agentsYaml: null }],
+};
+
+export const fixtureExecutorOptions = {
+  resolveReviewBotConfig: async () => fixtureBotConfig,
+};
 
 export const logicAgent: AgentDefinition = {
   key: 'logic',

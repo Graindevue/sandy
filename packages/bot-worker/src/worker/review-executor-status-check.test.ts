@@ -10,6 +10,7 @@ import {
   FakeRunner,
   finding,
   findingsOutput,
+  fixtureExecutorOptions,
   logicAgent,
   makeContext,
   nextNow,
@@ -375,6 +376,7 @@ function makeExecutor(options: {
   const poster = options.poster ?? new FakePoster();
   const statusChecks = options.statusChecks ?? new FakeStatusCheckReporter();
   const executorOptions: ConstructorParameters<typeof ReviewExecutor>[0] = {
+    ...fixtureExecutorOptions,
     store,
     cloneManager: new FakeCloneManager(),
     poster,

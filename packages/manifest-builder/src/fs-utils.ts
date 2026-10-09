@@ -4,6 +4,7 @@ import { dirname, posix, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const MAX_GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 const SKIP_DIRS = new Set([
   '.git',
@@ -23,7 +24,11 @@ interface GitEntry {
 
 export class RepoFileReadError extends Error {}
 
-/** Host-side context comes from Git objects, never from a mutable PR checkout. */
+/**
+ * Host-side context comes from Git objects, never from a mutable PR checkout.
+ * Complete tree listings and individual blobs support up to 64 MiB each.
+ * Larger inputs or failed Git reads throw RepoFileReadError without truncation.
+ */
 export interface RepoFileSnapshot {
   sha: string;
   listFiles(): string[];
@@ -167,21 +172,33 @@ async function runGit(args: string[]): Promise<string> {
     GIT_NO_LAZY_FETCH: '1',
     GIT_TERMINAL_PROMPT: '0',
   };
-  const { stdout } = await execFileAsync(
-    'git',
-    [
-      '--no-pager',
-      '--no-optional-locks',
-      '--literal-pathspecs',
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'core.hooksPath=/dev/null',
-      '-c',
-      'protocol.allow=never',
-      ...args,
-    ],
-    { env, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30_000 },
-  );
-  return stdout;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        '--no-pager',
+        '--no-optional-locks',
+        '--literal-pathspecs',
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        '-c',
+        'protocol.allow=never',
+        ...args,
+      ],
+      { env, encoding: 'utf8', maxBuffer: MAX_GIT_OUTPUT_BYTES, timeout: 30_000 },
+    );
+    return stdout;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new RepoFileReadError('Pinned repository context exceeds the 64 MiB Git output limit');
+    }
+    // execFile errors carry captured stdout/stderr. Do not attach reviewed
+    // content to the host error or silently treat an unavailable file as absent.
+    throw new RepoFileReadError(
+      `Git could not read pinned repository context (${code ?? 'process failure'})`,
+    );
+  }
 }

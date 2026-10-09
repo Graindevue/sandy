@@ -1,13 +1,12 @@
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fixtureGit } from '../../../../test-support/git.js';
 import { BotConfigReader } from './bot-config-reader.js';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 
 let root: string;
-const execFileAsync = promisify(execFile);
 
 const repoA: RepoConfig = {
   owner: 'acme',
@@ -256,24 +255,10 @@ describe('BotConfigReader', () => {
 });
 
 async function commitRepo(repoRoot: string): Promise<string> {
-  await execFileAsync('git', ['init', '-q', repoRoot]);
-  await execFileAsync('git', ['-C', repoRoot, 'add', '.']);
-  await execFileAsync('git', [
-    '-C',
-    repoRoot,
-    '-c',
-    'user.name=Fixture',
-    '-c',
-    'user.email=fixture@example.test',
-    '-c',
-    'commit.gpgsign=false',
-    'commit',
-    '-q',
-    '--allow-empty',
-    '-m',
-    'Fixture',
-  ]);
-  const { stdout } = await execFileAsync('git', ['-C', repoRoot, 'rev-parse', 'HEAD']);
+  await fixtureGit(['init', '-q', repoRoot]);
+  await fixtureGit(['-C', repoRoot, 'add', '.']);
+  await fixtureGit(['-C', repoRoot, 'commit', '-q', '--allow-empty', '-m', 'Fixture']);
+  const { stdout } = await fixtureGit(['-C', repoRoot, 'rev-parse', 'HEAD']);
   return stdout.trim();
 }
 
@@ -287,5 +272,3 @@ function product(repos: RepoConfig[]): ProductConfig {
     agentOverrides: {},
   };
 }
-
-import { execFile } from 'node:child_process';
