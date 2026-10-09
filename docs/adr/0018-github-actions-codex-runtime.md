@@ -2,7 +2,8 @@
 
 Date: 2026-10-09
 
-Status: Accepted; trigger policy updated to standalone `@sandy` comments.
+Status: Accepted; trigger policy updated to standalone `@sandy` comments;
+Review-scoped concurrency remains an opt-in rollout.
 
 Supersedes [0003](./0003-sandcastle-runtime-no-fork.md) and
 [0009](./0009-apple-container-provider-copied-from-graindevue.md).
@@ -44,10 +45,52 @@ ancestor ownership incompatibly with native tools such as SWC. macOS retains
 the `:workspace` profile with the same credential denies. The review entry point
 enforces an overall deadline below the existing abandoned-Review reaper cutoff.
 
-Each persona runs once with `codex exec --json`, receiving its diff and context
-up front. A missing completion signal permits one resume of that same session;
-it does not restart an unbounded prompt loop. The runner parses JSONL final
-messages and usage and terminates its subprocess when aborted or timed out.
+Serial execution uses `codex exec --json` for each persona, receiving its diff
+and context up front. A missing completion signal permits one resume of the
+same thread; it does not restart an unbounded prompt loop. The runner parses
+final messages and usage and terminates child activity on abort or timeout.
+
+### Issue #4 amendment: prepared downloads and independent threads
+
+Preparation may restore verified npm or pnpm download stores, keyed by the
+reviewed lockfile and install configuration, Repo, platform, Node compatibility,
+and exact package-manager version. Every Review still performs a fresh frozen
+installation inside the credential-free sandbox. Unsupported or unverified
+stores remain cold; cache failures are optional, and an unusable restored store
+is discarded before one bounded cold retry. Only successful preparation can
+publish downloads. Installed trees, source, tool homes, credentials and mutable
+Review outputs are excluded.
+
+The optional parallel adapter owns one Codex app-server for a Review. Sandy
+admits selected Agents up to a positive cap (three initially in parallel mode),
+creates a fresh thread for each, and preserves its configured persona, model,
+effort and usage. The managed runtime owns transport and authentication; Sandy
+owns scheduling, trusted attribution, persistence and deterministic synthesis.
+There is no model coordinator. A cap of one selects serial rollback.
+
+Dependencies are prepared once, then each admitted Agent receives a private
+writable copy of the source and installation. Internal dependency links follow
+the private copy; files are independent or copied on write, never hardlinked
+for mutable sharing. Seed source, pinned sibling source and Git metadata remain
+read-only. Tool homes, temporary files and writable caches are private. A
+timeout starts on admission rather than while waiting in the queue.
+
+Completed outcomes are persisted independently and synthesis reconstructs the
+selected-Agent order. Agent failures retain healthy peers and completed
+findings. A runtime crash fails affected active and queued work explicitly;
+there is no silent restart or second investigation. Cancellation and deadline
+expiry stop admission, interrupt active turns, drain final events and await
+runtime shutdown before removing workspaces or persisting authentication.
+Partial Reviews are visibly incomplete and cannot appear as an all-clear.
+
+The preferred adapter is validated against deployed Codex **0.162.0**, including
+its generated experimental protocol. Compatibility fallback occurs only before
+Agent execution. Serial remains the production default: exact-pin protocol
+fixtures establish mechanics, while promotion additionally requires real Linux
+isolation, dedicated-login refresh and writeback, matched latency measurements
+and adjudicated finding-quality gates. The
+[rollout report](../benchmarks/review-speed.md) records evidence and blockers.
+Changing prompts, models or coverage is not part of this comparison.
 
 ## Authentication and serialization
 
@@ -59,9 +102,11 @@ an API billing path.
 Following [OpenAI's CI/CD auth procedure](https://learn.chatgpt.com/docs/auth/ci-cd-auth),
 the runner seeds a missing `auth.json`, lets Codex refresh it, and persists the
 updated file after the job, including failed reviews. One concurrency group on
-the eligible review job serializes Reviews, and Agents within a Review run
-serially because they share the same rotating refresh token. Running reviews
-are not cancelled by later requests.
+the eligible review job serializes whole Reviews and every job using the login.
+Serial exec remains the default. Optional parallel threads run inside one
+managed process with one authentication owner, rather than independent CLI
+processes competing to rotate the refresh token. Running Reviews are not
+cancelled by later requests.
 
 `CODEX_AUTH_JSON` is an **environment secret** in `sandy-codex`, rather than a
 repository secret. GitHub reads repository secrets when a workflow is queued,
@@ -115,6 +160,7 @@ maintenance without improving this manually requested, finite-job workload.
 Operational state is cloud-based and Reviews work while the laptop is offline.
 Codex CLI output parsing becomes Sandy's responsibility, with focused tests
 covering completion, resume, usage, and abort behavior. Shared auth favors
-correct token rotation over concurrent persona latency, and subscription limits
-still bound review throughput. A failed auth write-back is an operational
+correct token rotation at the job boundary; opt-in child concurrency can reduce
+persona latency without removing that boundary. Subscription limits still
+bound review throughput. A failed auth write-back is an operational
 failure requiring repair before another Review can safely reuse the stream.
