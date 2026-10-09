@@ -30,7 +30,7 @@ jobs:
         uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
 
       - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -47,5 +47,117 @@ jobs:
       - name: Type-check
         run: pnpm type-check
 
+      # Benchmark CLI integration tests import the shipped worker adapters.
+      - name: Build shipped packages
+        run: pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+
       - name: Test
         run: pnpm test
+
+  dependency-cache:
+    name: Reviewed dependency cache provider
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Build the shipped worker adapter
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+
+      # Runtime cache credentials only; no Codex login or model provider.
+      - name: Expose the optional cache runtime to trusted review steps
+        id: cache-runtime
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (token) core.setSecret(token);
+            for (const name of [
+              'ACTIONS_RUNTIME_TOKEN',
+              'ACTIONS_CACHE_URL',
+              'ACTIONS_RESULTS_URL',
+              'ACTIONS_RUNTIME_URL',
+              'ACTIONS_CACHE_SERVICE_V2',
+            ]) {
+              const value = process.env[name];
+              if (value) core.exportVariable(name, value);
+            }
+
+      - name: Save and restore harmless downloads through the actual provider
+        run: node scripts/dependency-cache-probe.mjs
+
+  codex-compatibility:
+    name: Pinned Codex sandbox compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install the exact deployed Codex pin
+        run: npm install --global --ignore-scripts @openai/codex@0.162.0
+
+      - name: Install pnpm for the trusted preparation adapter build
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Build the shipped preparation adapter
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+
+      - name: Prepare the dedicated bubblewrap AppArmor profile
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+
+      # Uses a local mock provider, temporary canaries and a clean child env.
+      # No sandy-codex environment, auth secret, App key or model request.
+      - name: Verify concurrent turns and Linux sandbox boundaries without credentials
+        run: node scripts/codex-compatibility-probe.mjs codex "$RUNNER_TEMP/codex-compatibility.json"
+
+      - name: Verify native concurrent turns through the shipped managed adapter
+        run: node scripts/codex-managed-runtime-probe.mjs codex
+
+      - name: Reproduce controlled benchmark preparation without credentials or models
+        run: node scripts/review-preparation-probe.mjs codex "$RUNNER_TEMP/review-preparation.json"
+
+      - name: Upload the bounded preparation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: review-preparation
+          path: ${{ runner.temp }}/review-preparation.json
+          if-no-files-found: warn
+
+      - name: Upload the bounded compatibility report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codex-compatibility
+          path: ${{ runner.temp }}/codex-compatibility.json
+          if-no-files-found: warn

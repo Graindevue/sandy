@@ -1,0 +1,169 @@
+# Install in a PRIVATE caller repository. SANDY_BENCHMARK_REF is a reviewed full
+# Sandy commit SHA, independent from the production SANDY_REF.
+name: Sandy isolated benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Matched repetitions (start with 1; promotion needs at least 3).
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
+      cases:
+        description: Pinned evaluation changes.
+        type: choice
+        options: ['defects,clean', defects, clean]
+        default: 'defects,clean'
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    if: >-
+      github.event.repository.private == true &&
+      github.event.repository.fork == false &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.run_attempt == 1
+    concurrency:
+      group: sandy-codex-test-session
+      queue: max
+      cancel-in-progress: false
+    environment: sandy-codex-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Authorize a private manual benchmark
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get(context.repo);
+            if (context.eventName !== 'workflow_dispatch' ||
+                process.env.GITHUB_RUN_ATTEMPT !== '1' || !repo.private || repo.fork ||
+                context.ref !== `refs/heads/${repo.default_branch}`) {
+              throw new Error('Only new manual runs on a private default branch are accepted');
+            }
+            const { data: access } = await github.rest.repos.getCollaboratorPermissionLevel({
+              ...context.repo, username: context.actor,
+            });
+            if (!['write', 'maintain', 'admin'].includes(access.permission)) {
+              throw new Error('A collaborator with write permission must request the benchmark');
+            }
+
+      - name: Validate the independently reviewed source pin
+        shell: bash
+        env:
+          SANDY_BENCHMARK_REF: ${{ vars.SANDY_BENCHMARK_REF }}
+        run: |
+          [[ "$SANDY_BENCHMARK_REF" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'Set SANDY_BENCHMARK_REF to the full SHA of a reviewed Sandy commit.' >&2
+            exit 1
+          }
+
+      - name: Checkout pinned Sandy source without retaining credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: Graindevue/sandy
+          ref: ${{ vars.SANDY_BENCHMARK_REF }}
+          path: sandy
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: sandy/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+          cache-dependency-path: sandy/pnpm-lock.yaml
+
+      - name: Build the trusted benchmark runner
+        shell: bash
+        working-directory: sandy
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+          npm install --global --ignore-scripts @openai/codex@0.162.0
+
+      - name: Prepare sandbox prerequisites and credential paths
+        id: prepare
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          printf 'CODEX_HOME=%s\nGITHUB_APP_PRIVATE_KEY_PATH=%s\nSANDY_AUTH_ENVIRONMENT=sandy-codex-test\n' \
+            "$RUNNER_TEMP/sandy-benchmark-auth" "$RUNNER_TEMP/sandy-benchmark-app.pem" >> "$GITHUB_ENV"
+
+      - name: Obtain dedicated environment writeback permission before login use
+        id: auth-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.SANDY_APP_ID }}
+          private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
+          permission-environments: write
+
+      # Job-level environment secrets are read after the test stream's lock.
+      - name: Restore the current dedicated test login
+        id: auth
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.auth-token.outputs.token }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          SANDY_APP_PRIVATE_KEY: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
+        run: node sandy/.github/actions/review/auth.mjs seed
+
+      - name: Run fixed serial and parallel evaluations
+        id: benchmark
+        shell: bash
+        working-directory: sandy
+        env:
+          SANDY_BENCHMARK_REPETITIONS: ${{ inputs.repetitions }}
+          SANDY_BENCHMARK_CASES: ${{ inputs.cases }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sandy-benchmark-results"
+          sandy_log_guard="$(node -p 'require("node:crypto").randomUUID()')"
+          printf '::stop-commands::%s\n' "$sandy_log_guard"
+          trap 'printf "::%s::\n" "$sandy_log_guard"' EXIT
+          timeout --signal=TERM --kill-after=60s 65m node scripts/review-benchmark.mjs run \
+            --ci-home "$CODEX_HOME" --require-auth-refresh \
+            --out "$RUNNER_TEMP/sandy-benchmark-results/results.json" \
+            --repetitions "$SANDY_BENCHMARK_REPETITIONS" --cases "$SANDY_BENCHMARK_CASES" \
+            --timeout-minutes 60 --agent-timeout-seconds 300
+
+      # A fresh App token avoids a one-hour token expiring during measurements.
+      - name: Create a fresh persistence token
+        if: ${{ always() && steps.auth.outcome == 'success' }}
+        id: persist-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.SANDY_APP_ID }}
+          private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
+          permission-environments: write
+
+      - name: Persist the dedicated test session
+        if: ${{ always() && steps.auth.outcome == 'success' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.persist-token.outputs.token }}
+        run: node sandy/.github/actions/review/auth.mjs persist
+
+      - name: Remove local credentials
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        shell: bash
+        run: node sandy/.github/actions/review/auth.mjs cleanup
+
+      - name: Upload bounded findings and measurements for human adjudication
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sandy-benchmark-${{ github.run_id }}
+          path: ${{ runner.temp }}/sandy-benchmark-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,6 +1,19 @@
 import { execFile } from 'node:child_process';
-import { mkdir, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  stat,
+  symlink,
+} from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
@@ -62,6 +75,7 @@ export class CloneManager {
   readonly #baseDir: string;
   readonly #cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
   readonly #signal: AbortSignal | undefined;
+  readonly #agentWorkspaces = new Set<string>();
 
   constructor(options: CloneManagerOptions) {
     this.#baseDir = options.baseDir;
@@ -155,11 +169,54 @@ export class CloneManager {
   }
 
   /**
+   * Snapshot a quiescent prepared seed without repeating its installation. Git's
+   * worktree pointer is retained for pinned reads; the runner must grant shared
+   * Git metadata, the seed and sibling sources read-only access. File copies use
+   * copy-on-write when supported, with regular copies as the fallback.
+   */
+  async materializeAgentWorkspace(seed: Worktree, agentKey: string): Promise<Worktree> {
+    this.#signal?.throwIfAborted();
+    const parent = join(
+      this.#baseDir,
+      '.agent-workspaces',
+      seed.repo.owner,
+      seed.repo.name,
+      seed.reviewJobId,
+    );
+    await mkdir(parent, { recursive: true });
+    const key = createHash('sha256').update(agentKey).digest('hex').slice(0, 12);
+    const path = await mkdtemp(join(parent, `${key}-`));
+    try {
+      await cp(seed.path, path, {
+        recursive: true,
+        dereference: false,
+        verbatimSymlinks: true,
+        mode: constants.COPYFILE_FICLONE,
+        filter: () => {
+          this.#signal?.throwIfAborted();
+          return true;
+        },
+      });
+      await rebaseWorkspaceLinks(path, resolve(seed.path), await realpath(seed.path), this.#signal);
+      this.#signal?.throwIfAborted();
+      this.#agentWorkspaces.add(path);
+      return { ...seed, path };
+    } catch (error) {
+      await rm(path, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  /**
    * Remove a Review's worktree when the Review ends. Idempotent: a second removal
    * (or removal of a never-created worktree) is a no-op, so teardown can run on
    * both the success and failure paths without guarding.
    */
   async removeWorktree(worktree: Worktree): Promise<void> {
+    if (this.#agentWorkspaces.has(worktree.path)) {
+      await rm(worktree.path, { recursive: true, force: true });
+      return;
+    }
     await this.#clearWorktree(this.repoPath(worktree.repo), worktree.path);
   }
 
@@ -231,6 +288,34 @@ export class CloneManager {
       );
     }
   }
+}
+
+async function rebaseWorkspaceLinks(
+  destination: string,
+  source: string,
+  canonicalSource: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory)) {
+      signal?.throwIfAborted();
+      const path = join(directory, entry);
+      const info = await lstat(path);
+      if (info.isDirectory()) {
+        await visit(path);
+      } else if (info.isSymbolicLink()) {
+        const target = await readlink(path);
+        if (!isAbsolute(target)) continue;
+        const sourceRelative = [source, canonicalSource]
+          .map((root) => relative(root, target))
+          .find((value) => value !== '..' && !value.startsWith(`..${sep}`) && !isAbsolute(value));
+        if (sourceRelative === undefined) continue;
+        await rm(path);
+        await symlink(relative(dirname(path), join(destination, sourceRelative)) || '.', path);
+      }
+    }
+  };
+  await visit(destination);
 }
 
 function redactCredentialsInText(value: string): string {
