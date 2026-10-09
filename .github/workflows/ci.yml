@@ -45,6 +45,10 @@ jobs:
       - name: Type-check
         run: pnpm type-check
 
+      # Benchmark CLI integration tests import the shipped worker adapters.
+      - name: Build shipped packages
+        run: pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
+
       - name: Test
         run: pnpm test
 
