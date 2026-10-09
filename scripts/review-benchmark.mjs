@@ -16,6 +16,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { runManagedRuntimeProbe } from './codex-managed-runtime-probe.mjs';
 import { prepareBenchmarkFixtures } from './review-benchmark-fixtures.mjs';
 
 const exec = promisify(execFile);
@@ -53,6 +54,15 @@ async function liveBenchmark(options) {
     'agent-timeout-seconds',
   );
   const cases = (options.cases ?? 'defects,clean').split(',');
+  const selectedModes = (
+    options.modes ?? (options['require-auth-refresh'] ? 'parallel,serial' : 'serial,parallel')
+  ).split(',');
+  if (
+    selectedModes.length === 0 ||
+    new Set(selectedModes).size !== selectedModes.length ||
+    selectedModes.some((mode) => !['serial', 'parallel'].includes(mode))
+  )
+    throw new Error('--modes must be serial, parallel or serial,parallel');
   if (
     cases.length === 0 ||
     new Set(cases).size !== cases.length ||
@@ -71,12 +81,14 @@ async function liveBenchmark(options) {
     { loadAgentDefinitions },
     { parseFindingsPayload },
     { synthesizeAgentOutputs },
+    { agentRunFailure },
   ] = await Promise.all([
     import(join(worker, 'git/clone-manager.js')),
     import(join(worker, 'worker/codex-app-server-runner.js')),
     import(join(worker, 'config/agents.js')),
     import(join(worker, 'worker/findings-parser.js')),
     import(join(worker, 'synthesizer/synthesizer.js')),
+    import(join(worker, 'worker/review-errors.js')),
   ]);
   const definitions = await loadAgentDefinitions(join(sandyRoot, 'agents'));
   const agents = ['logic', 'security'].map((key) => {
@@ -105,6 +117,7 @@ async function liveBenchmark(options) {
   const snapshots = join(root, 'download-snapshots');
   const samples = [];
   const priming = [];
+  let nativePreflight;
   const runId = randomUUID();
   let refreshProbe;
   let authRefreshObserved = null;
@@ -143,15 +156,20 @@ async function liveBenchmark(options) {
       agents,
       testMode: 'targeted',
       maximumConcurrency: 3,
+      modes: selectedModes,
       repetitions,
       fixtures: fixtures.map(({ origin, sibling, ...fixture }) => ({
         ...fixture,
         sibling: { repo: sibling.repo, sha: sibling.sha },
       })),
       downloadMeasurement: suite.source,
-      modelTurnUpperBound: repetitions * cases.length * 4 * agents.length * 2,
+      modelTurnUpperBound:
+        repetitions * cases.length * selectedModes.length * 2 * agents.length * 2,
     };
     await writeFile(journal, `${JSON.stringify({ configuration: fixed })}\n`, { flag: 'wx' });
+    process.stderr.write(
+      `Sandy benchmark: first repetition mode order ${selectedModes.join(',')}.\n`,
+    );
     await suite.persistEvidence(fixtureEvidence);
     for (const fixture of fixtures) {
       await cloneManager.ensureCloned(fixture.repo);
@@ -253,6 +271,19 @@ async function liveBenchmark(options) {
       await cloneManager.removeWorktree(prime);
       if (failure)
         throw new Error(`Controlled warm-cache priming failed: ${failure.stage} (${failure.code})`);
+      if (nativePreflight === undefined) {
+        process.stderr.write('Sandy benchmark: validating anonymous native managed adapter.\n');
+        try {
+          nativePreflight = await runManagedRuntimeProbe(executable);
+          await appendFile(journal, `${JSON.stringify({ nativePreflight })}\n`);
+        } catch (error) {
+          await appendFile(
+            journal,
+            `${JSON.stringify({ nativePreflight: { status: 'failed', failure: agentRunFailure(error) } })}\n`,
+          );
+          throw new Error('Native managed adapter preflight failed before live model evaluation');
+        }
+      }
       const configurationDigest = createHash('sha256')
         .update(
           JSON.stringify({
@@ -276,7 +307,7 @@ async function liveBenchmark(options) {
         .digest('hex');
       for (let repetition = 0; repetition < repetitions; repetition++) {
         // Alternate mode ordering to reduce systematic order bias.
-        const modes = repetition % 2 === 0 ? ['serial', 'parallel'] : ['parallel', 'serial'];
+        const modes = repetition % 2 === 0 ? selectedModes : [...selectedModes].reverse();
         for (const cacheState of ['cold', 'warm'])
           for (const mode of modes) {
             signal.throwIfAborted();
@@ -412,6 +443,7 @@ async function liveBenchmark(options) {
                       usage: result?.usage ?? error.usage ?? null,
                       activity: result?.activity ?? null,
                       findings: [],
+                      failure: agentRunFailure(error),
                     };
                   }
                 }
@@ -490,7 +522,7 @@ async function liveBenchmark(options) {
             await appendFile(journal, `${JSON.stringify({ sample })}\n`);
             await writeFile(
               outputPath,
-              `${JSON.stringify({ configuration: fixed, priming, fixtures, samples, authRefreshObserved }, null, 2)}\n`,
+              `${JSON.stringify({ configuration: fixed, priming, nativePreflight, fixtures, samples, authRefreshObserved }, null, 2)}\n`,
             );
             console.info(
               JSON.stringify({ sample: id, outcome: sample.outcome, elapsedMs: sample.elapsedMs }),

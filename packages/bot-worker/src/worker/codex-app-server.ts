@@ -1,8 +1,15 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { AgentRunError, type AgentRunFailure } from './review-errors.js';
 
 const exec = promisify(execFile);
 const RPC_TIMEOUT_MS = 10_000;
+
+function requestStage(method: string): AgentRunFailure['stage'] {
+  if (method === 'thread/start') return 'thread-start';
+  if (method === 'turn/start') return 'turn-start';
+  return 'runtime';
+}
 
 export function protocolObject(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -42,6 +49,7 @@ export class CodexAppServer {
       resolve(value: Record<string, unknown>): void;
       reject(error: Error): void;
       timer: NodeJS.Timeout;
+      method: string;
     }
   >();
   #nextId = 0;
@@ -79,7 +87,13 @@ export class CodexAppServer {
     this.#closed = new Promise((resolve) => {
       this.#child.once('close', (code) => {
         if (this.#buffer.trim() !== '') this.#read(this.#buffer);
-        if (!this.#closing) this.fail(new Error(`Codex app-server exited unexpectedly (${code})`));
+        if (!this.#closing)
+          this.fail(
+            new AgentRunError(`Codex app-server exited unexpectedly (${code})`, undefined, {
+              stage: 'runtime',
+              code: 'runtime-exited',
+            }),
+          );
         resolve();
       });
     });
@@ -117,15 +131,25 @@ export class CodexAppServer {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(new Error(`Codex ${method} response timed out`));
+        reject(
+          new AgentRunError(`Codex ${method} response timed out`, undefined, {
+            stage: requestStage(method),
+            code: 'rpc-timeout',
+          }),
+        );
       }, RPC_TIMEOUT_MS);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { resolve, reject, timer, method });
       this.#send({ id, method, params });
     });
   }
 
   fail(error: Error): void {
     if (this.failure.signal.aborted) return;
+    if (!(error instanceof AgentRunError))
+      error = new AgentRunError(error.message, undefined, {
+        stage: 'runtime',
+        code: 'protocol-error',
+      });
     this.failure.abort(error);
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
@@ -172,7 +196,17 @@ export class CodexAppServer {
           this.#pending.delete(value.id);
           clearTimeout(pending.timer);
           pending.reject(
-            new Error(typeof error.message === 'string' ? error.message : 'Codex request failed'),
+            new AgentRunError(
+              typeof error.message === 'string' ? error.message : 'Codex request failed',
+              undefined,
+              {
+                stage: requestStage(pending.method),
+                code: 'rpc-error',
+                ...(typeof error.code === 'number' && Number.isSafeInteger(error.code)
+                  ? { rpcCode: error.code }
+                  : {}),
+              },
+            ),
           );
         } else {
           const result = protocolObject(value.result, 'RPC result');

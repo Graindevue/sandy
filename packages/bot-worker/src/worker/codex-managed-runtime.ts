@@ -8,7 +8,7 @@ import { type CodexAppServer, protocolObject, runtimeEnvironment } from './codex
 import type { CodexAppServerRunnerOptions } from './codex-app-server-runner.js';
 import type { AgentRunResult, RunAgentInput } from './codex-exec-runner.js';
 import { readReviewDiff } from './review-diff.js';
-import { AgentRunError } from './review-errors.js';
+import { AgentRunError, codexTurnFailure } from './review-errors.js';
 import type { ReviewAgentRunner, ReviewAgentRuntime } from './review-executor.js';
 import { buildReviewPrompt } from './review-prompt.js';
 import { minimalSandboxDenials } from './sandbox-denials.js';
@@ -184,7 +184,12 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
       this.#threads.delete(threadId);
     }
     // Cleanup can emit final usage and tool events even after the turn terminal.
-    if (failure !== undefined) throw new AgentRunError(failure.message, state.usage);
+    if (failure !== undefined)
+      throw new AgentRunError(
+        failure.message,
+        state.usage,
+        failure instanceof AgentRunError ? failure.failure : undefined,
+      );
     return {
       stdout,
       ...(state.usage ? { usage: state.usage } : {}),
@@ -336,10 +341,12 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
             ? {}
             : protocolObject(terminal.error, 'turn error');
         turn.reject(
-          new Error(
+          new AgentRunError(
             typeof error.message === 'string'
               ? error.message
               : `Codex turn ${String(terminal.status)}`,
+            undefined,
+            codexTurnFailure(error.codexErrorInfo),
           ),
         );
       }

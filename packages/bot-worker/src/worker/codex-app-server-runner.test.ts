@@ -119,6 +119,71 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it('retains bounded RPC failure metadata without exposing the server message', async () => {
+    const f = await executable(
+      protocolFixture.replace(
+        "if (method === 'thread/start') reply(id,{thread:{id:'thread-'+ ++nextThread},cwd:params.cwd,runtimeWorkspaceRoots:params.runtimeWorkspaceRoots,approvalPolicy:'never',activePermissionProfile:{id:'sandy'}});",
+        "if (method === 'thread/start') send({id,error:{code:-32602,message:'PRIVATE_RPC_MESSAGE'}});",
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runner = new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    });
+    const runtime = await runner.openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const input = w.inputs[0];
+      if (!input) throw new Error('Missing fixture Agent');
+      await expect(runtime.runAgent(input)).rejects.toMatchObject({
+        failure: { stage: 'thread-start', code: 'rpc-error', rpcCode: -32602 },
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('retains only allowlisted terminal error enums and HTTP status with drained usage', async () => {
+    const f = await executable(
+      protocolFixture.replace(
+        "status:'completed',items:[{type:'agentMessage',text}]",
+        "status:'failed',error:{message:'PRIVATE_TURN_MESSAGE',additionalDetails:'PRIVATE_DETAILS',codexErrorInfo:{httpConnectionFailed:{httpStatusCode:401,privateField:'PRIVATE_STATUS_DETAILS'}}},items:[]",
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runner = new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    });
+    const runtime = await runner.openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const outcomes = await Promise.allSettled(w.inputs.map((input) => runtime.runAgent(input)));
+      for (const outcome of outcomes) {
+        if (outcome.status !== 'rejected') throw new Error('Expected provider rejection');
+        expect(outcome.reason.failure).toEqual({
+          stage: 'turn',
+          code: 'turn-failed',
+          codexErrorInfo: 'httpConnectionFailed',
+          httpStatusCode: 401,
+        });
+        expect(outcome.reason.usage).toBeDefined();
+        expect(JSON.stringify(outcome.reason.failure)).not.toContain('PRIVATE_');
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('retains logical and physical protected paths for native symlink validation', async () => {
     const f = await executable('');
     const w = await workspaces(f.root);

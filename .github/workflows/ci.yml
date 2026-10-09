@@ -138,6 +138,9 @@ jobs:
       - name: Verify concurrent turns and Linux sandbox boundaries without credentials
         run: node scripts/codex-compatibility-probe.mjs codex "$RUNNER_TEMP/codex-compatibility.json"
 
+      - name: Verify native concurrent turns through the shipped managed adapter
+        run: node scripts/codex-managed-runtime-probe.mjs codex
+
       - name: Reproduce controlled benchmark preparation without credentials or models
         run: node scripts/review-preparation-probe.mjs codex "$RUNNER_TEMP/review-preparation.json"
 
