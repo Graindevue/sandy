@@ -564,6 +564,61 @@ process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_mes
     }
   });
 
+  it('denies a retained serial home to the next Agent until cleanup succeeds', async () => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const first = w.inputs[0];
+    const second = w.inputs[1];
+    if (first === undefined || second === undefined) throw new Error('Missing fixture Agents');
+    await mkdir(f.codexHome);
+    const temporaryParent = join(await realpath(f.root), 'temporary-parent');
+    await mkdir(temporaryParent);
+    vi.stubEnv('TMPDIR', temporaryParent);
+    const marker = join(f.root, 'first-home');
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node
+const fs=require('node:fs'), path=require('node:path');
+if (!fs.existsSync(${JSON.stringify(marker)})) {
+  fs.writeFileSync(path.join(process.env.HOME,'artifact'),'private-first-agent');
+  fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
+  fs.chmodSync(${JSON.stringify(temporaryParent)},0o500);
+} else {
+  const previous=fs.realpathSync(fs.readFileSync(${JSON.stringify(marker)},'utf8'));
+  const config=process.argv.slice(2).find(arg=>arg.startsWith('permissions.sandy='));
+  if(!config?.includes(JSON.stringify(previous)+'="deny"')) throw new Error('Retained Agent home is exposed');
+}
+process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
+`,
+    );
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      logger: { info() {} },
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 1,
+    });
+    try {
+      await expect(runtime.runAgent(first)).resolves.toMatchObject({
+        stdout: '<findings>complete</findings>',
+      });
+      const retainedHome = await readFile(marker, 'utf8');
+      expect(await readFile(join(retainedHome, 'artifact'), 'utf8')).toBe('private-first-agent');
+      await chmod(temporaryParent, 0o700);
+      await expect(runtime.runAgent(second)).resolves.toMatchObject({
+        stdout: '<findings>complete</findings>',
+      });
+      await runtime.close();
+      await expect(readdir(retainedHome)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await chmod(temporaryParent, 0o700);
+      await runtime.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('keeps parallel execution disabled until explicitly opted in', async () => {
     const f = await executable('throw new Error("Runtime must not start");');
     const runner = new CodexAppServerRunner({ codexHome: f.codexHome, executable: f.path });

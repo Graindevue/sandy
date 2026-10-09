@@ -90,6 +90,7 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
               protectedPaths: [
                 ...(this.#options.protectedPaths ?? []),
                 ...protectedWorkspacePaths.filter((path) => path !== ownPath),
+                ...cleanupErrors.keys(),
               ],
               env: { ...this.#options.env, OPENSRC_HOME: join(toolHome, 'opensrc') },
             });
