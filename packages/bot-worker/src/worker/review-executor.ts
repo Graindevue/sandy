@@ -184,6 +184,8 @@ export interface ReviewAgentRuntime {
   mode: 'serial' | 'parallel';
   maxConcurrency: number;
   runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]): Promise<AgentRunResult>;
+  /** Request native managed-auth refresh before any Agent admission; callers verify rotation. */
+  refreshAuthentication?(): Promise<void>;
   /** Aborted only for a fatal runtime failure; completed results remain usable. */
   failureSignal?: AbortSignal;
   /** Stop all child activity and drain final events before resolving. */

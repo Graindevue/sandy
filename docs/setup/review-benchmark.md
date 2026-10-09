@@ -51,10 +51,13 @@ Aucun PAT supplémentaire ni token OpenAI API n'est nécessaire.
 
 Le job prend le verrou `sandy-codex-test-session`, puis lit le secret de
 l'environnement. Un seul runtime utilise le fichier pendant chaque Review.
-Le premier échantillon parallèle force uniquement l'ancienneté de
-`last_refresh` pour vérifier le renouvellement natif du login dédié. Aucun
-appel manuel au point d'entrée OAuth n'est effectué. Les résultats n'enregistrent
-qu'un booléen indiquant le renouvellement observé.
+Avant les Agents du premier échantillon parallèle, le runtime demande le
+renouvellement natif via `account/read` avec `refreshToken: true`. Le harness
+observe le fichier sans modifier ses tokens ni `last_refresh`, puis vérifie
+une rotation persistée pour le même compte. Un ancien `last_refresh` ne suffit
+pas à forcer une rotation si le JWT d'accès reste valide. Aucun appel manuel au
+point d'entrée OAuth n'est effectué. Les résultats n'enregistrent qu'un booléen
+indiquant le renouvellement observé.
 
 Après succès, erreur ou timeout de la commande, le workflow sauvegarde le
 fichier mis à jour dans **le même environnement de test**, puis supprime les

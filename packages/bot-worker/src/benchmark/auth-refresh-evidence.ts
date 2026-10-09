@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,8 +43,8 @@ async function readAuth(path: string): Promise<ChatgptAuth> {
   }
 }
 
-/** Only call with an explicit test login, before any Review runtime starts. Never logs auth. */
-export async function markDedicatedAuthForRefresh(
+/** Read-only evidence capture for an explicit test login; native Codex owns refresh and writes. */
+export async function observeDedicatedAuthRefresh(
   ciHome: string,
 ): Promise<{ refreshObserved(): Promise<boolean> }> {
   const home = await realpath(ciHome);
@@ -60,17 +59,6 @@ export async function markDedicatedAuthForRefresh(
   const path = join(home, 'auth.json');
   const initial = await readAuth(path);
   const startedAt = Date.now();
-  const temporary = join(home, `.benchmark-refresh-${randomUUID()}`);
-  try {
-    await writeFile(
-      temporary,
-      JSON.stringify({ ...initial, last_refresh: '2000-01-01T00:00:00Z' }),
-      { mode: 0o600, flag: 'wx' },
-    );
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-  }
   return {
     async refreshObserved() {
       const current = await readAuth(path);

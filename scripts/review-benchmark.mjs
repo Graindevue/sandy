@@ -358,10 +358,10 @@ async function liveBenchmark(options) {
               options['require-auth-refresh'] &&
               refreshProbe === undefined
             ) {
-              const { markDedicatedAuthForRefresh } = await import(
+              const { observeDedicatedAuthRefresh } = await import(
                 join(worker, 'benchmark/auth-refresh-evidence.js')
               );
-              refreshProbe = await markDedicatedAuthForRefresh(codexHome);
+              refreshProbe = await observeDedicatedAuthRefresh(codexHome);
             }
             runtime = await runner.openReview({
               worktreePath: seed.path,
@@ -371,11 +371,32 @@ async function liveBenchmark(options) {
               signal,
             });
             safeToRemove = false;
-            const runtimeStartup = Date.now() - startup;
             if (runtime.mode !== mode)
               throw new Error(
                 'Requested parallel runtime fell back; benchmark will retain completed samples without inventing parallel measurements',
               );
+            if (mode === 'parallel' && refreshProbe !== undefined && authRefreshObserved === null) {
+              if (!runtime.refreshAuthentication)
+                throw new Error('Required native authentication refresh operation unavailable');
+              try {
+                await runtime.refreshAuthentication();
+                authRefreshObserved = await refreshProbe.refreshObserved();
+                await appendFile(journal, `${JSON.stringify({ authRefreshObserved })}\n`);
+                if (!authRefreshObserved)
+                  throw new Error(
+                    'Native authentication refresh did not persist same-account rotation',
+                  );
+              } catch (error) {
+                await appendFile(
+                  journal,
+                  `${JSON.stringify({ authentication: { stage: 'native-refresh', status: 'failed', failure: agentRunFailure(error) } })}\n`,
+                );
+                throw new Error(
+                  'Required native authentication refresh failed before Agent admission',
+                );
+              }
+            }
+            const runtimeStartup = Date.now() - startup;
             const investigation = Date.now();
             process.stderr.write(`Sandy benchmark ${cell}: investigating.\n`);
             let next = 0;
@@ -455,10 +476,6 @@ async function liveBenchmark(options) {
             runtime = undefined;
             safeToRemove = true;
             const shutdown = Date.now() - shutdownStart;
-            if (mode === 'parallel' && refreshProbe !== undefined && authRefreshObserved === null) {
-              authRefreshObserved = await refreshProbe.refreshObserved();
-              await appendFile(journal, `${JSON.stringify({ authRefreshObserved })}\n`);
-            }
             const synthesisStart = Date.now();
             const numstat = (
               await exec('git', [

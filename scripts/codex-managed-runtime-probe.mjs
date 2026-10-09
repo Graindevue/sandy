@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -198,7 +198,134 @@ supports_websockets=false
     await rm(root, { recursive: true, force: true });
   }
 }
+
+/** Synthetic OAuth authority only; the wrapper override never enters the production env allowlist. */
+export async function runNativeAuthRefreshProbe(executable = 'codex') {
+  const { CodexAppServerRunner } = await import(
+    join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
+  );
+  const { observeDedicatedAuthRefresh } = await import(
+    join(sandyRoot, 'packages/bot-worker/dist/benchmark/auth-refresh-evidence.js')
+  );
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'sandy-native-auth-probe-')));
+  const home = join(root, 'auth');
+  const path = join(home, 'auth.json');
+  const jwt = (version) =>
+    [
+      Buffer.from('{"alg":"none"}').toString('base64url'),
+      Buffer.from(
+        JSON.stringify({
+          exp: Math.floor(Date.now() / 1000) + 86_400,
+          jti: `synthetic-${version}`,
+          email: 'fixture@example.invalid',
+          'https://api.openai.com/auth': {
+            chatgpt_account_id: 'synthetic-account',
+            chatgpt_user_id: 'synthetic-user',
+            chatgpt_plan_type: 'plus',
+          },
+        }),
+      ).toString('base64url'),
+      'synthetic-signature',
+    ].join('.');
+  const initial = {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: jwt('id-1'),
+      access_token: jwt('access-1'),
+      refresh_token: 'SYNTHETIC_REFRESH_1',
+      account_id: 'synthetic-account',
+    },
+    last_refresh: '2000-01-01T00:00:00Z',
+  };
+  let requests = 0;
+  let runtime;
+  let stopped = true;
+  let providerFailure;
+  const authority = createServer(async (request, response) => {
+    try {
+      if (request.url !== '/oauth/token') {
+        response.writeHead(404).end();
+        return;
+      }
+      let body = '';
+      for await (const chunk of request) {
+        body += chunk;
+        assert.ok(body.length < 65_536, 'Synthetic authority request exceeded bound');
+      }
+      assert.ok(body.includes('SYNTHETIC_REFRESH_1'), 'Expected only synthetic refresh input');
+      requests++;
+      response.writeHead(200, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          access_token: jwt('access-2'),
+          id_token: jwt('id-2'),
+          refresh_token: 'SYNTHETIC_REFRESH_2',
+          expires_in: 86_400,
+          token_type: 'Bearer',
+        }),
+      );
+    } catch (error) {
+      providerFailure = error;
+      response.destroy();
+    }
+  });
+  try {
+    await mkdir(home);
+    await writeFile(path, JSON.stringify(initial), { mode: 0o600 });
+    await new Promise((resolve) => authority.listen(0, '127.0.0.1', resolve));
+    const port = authority.address().port;
+    await writeFile(
+      join(home, 'config.toml'),
+      `model_provider="fixture"
+[model_providers.fixture]
+name="Synthetic local auth experiment"
+base_url="http://127.0.0.1:${port}/v1"
+wire_api="responses"
+`,
+    );
+    const wrapper = join(root, 'synthetic-codex');
+    await writeFile(
+      wrapper,
+      `#!/usr/bin/env node
+const {spawnSync}=require('node:child_process');
+const result=spawnSync(${JSON.stringify(executable)},process.argv.slice(2),{stdio:'inherit',env:{...process.env,CODEX_REFRESH_TOKEN_URL_OVERRIDE:${JSON.stringify(`http://127.0.0.1:${port}/oauth/token`)}},timeout:70000});
+process.exit(result.status??1);
+`,
+    );
+    await chmod(wrapper, 0o755);
+    const evidence = await observeDedicatedAuthRefresh(home);
+    runtime = await new CodexAppServerRunner({
+      codexHome: home,
+      executable: wrapper,
+      enableManagedRuntime: true,
+      logger: { info() {} },
+    }).openReview({ worktreePath: root, maxConcurrency: 2 });
+    stopped = false;
+    assert.equal(runtime.mode, 'parallel', 'Native auth probe requires the managed adapter');
+    assert.equal(requests, 0, 'Old last_refresh alone must not force native OAuth');
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), initial);
+    assert.ok(runtime.refreshAuthentication, 'Native public refresh operation required');
+    await runtime.refreshAuthentication();
+    if (providerFailure) throw providerFailure;
+    assert.equal(requests, 1, 'Explicit native refresh must rotate once');
+    assert.equal(await evidence.refreshObserved(), true, 'Same-account rotation must persist');
+    return {
+      provider: 'synthetic-loopback-oauth',
+      refreshRequests: requests,
+      sameAccountRotation: true,
+    };
+  } finally {
+    try {
+      await runtime?.close();
+      stopped = true;
+    } finally {
+      authority.closeAllConnections();
+      await new Promise((resolve) => authority.close(resolve));
+      if (stopped) await rm(root, { recursive: true, force: true });
+    }
+  }
+}
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   process.stdout.write(
-    `${JSON.stringify(await runManagedRuntimeProbe(process.argv[2] ?? 'codex'))}\n`,
+    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
   );

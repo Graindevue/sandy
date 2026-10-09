@@ -42,6 +42,8 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
   readonly #threads = new Map<string, ThreadState>();
   readonly #tasks = new Set<Promise<AgentRunResult>>();
   #closing: Promise<void> | undefined;
+  #refresh: Promise<void> | undefined;
+  #admitted = false;
 
   constructor(
     readonly server: CodexAppServer,
@@ -64,6 +66,9 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
   async runAgent(input: RunAgentInput): Promise<AgentRunResult> {
     this.#controller.signal.throwIfAborted();
     this.failureSignal.throwIfAborted();
+    if (this.#refresh !== undefined) await this.#refresh;
+    this.#controller.signal.throwIfAborted();
+    this.#admitted = true;
     if (this.#tasks.size >= this.maxConcurrency)
       return Promise.reject(new Error('Managed Agent concurrency cap exceeded'));
     const task = this.#runAgent(input);
@@ -72,10 +77,28 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
     return task;
   }
 
+  async refreshAuthentication(): Promise<void> {
+    this.#controller.signal.throwIfAborted();
+    this.failureSignal.throwIfAborted();
+    if (this.#admitted) throw new Error('Authentication refresh must occur before Agent admission');
+    this.#refresh ??= (async () => {
+      try {
+        // Native OAuth has no request timeout in this pin. Bound the complete operation and
+        // terminate its owner on timeout so it cannot write credentials after shutdown.
+        await this.server.request('account/read', { refreshToken: true }, 60_000);
+      } catch (error) {
+        this.server.fail(error instanceof Error ? error : new Error('Native auth refresh failed'));
+        throw error;
+      }
+    })();
+    await this.#refresh;
+  }
+
   close(): Promise<void> {
     if (this.#closing !== undefined) return this.#closing;
     this.#controller.abort(new Error('Review runtime closed'));
     this.#closing = (async () => {
+      if (this.#refresh !== undefined) await Promise.allSettled([this.#refresh]);
       await Promise.allSettled(this.#tasks);
       await this.server.close();
       this.server.onNotification = undefined;

@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { markDedicatedAuthForRefresh } from './auth-refresh-evidence.js';
+import { observeDedicatedAuthRefresh } from './auth-refresh-evidence.js';
 
-it('forces only refresh age and reports rotated auth as a boolean after runtime shutdown', async () => {
+it('captures refresh evidence without changing dedicated authentication and verifies same-account rotation', async () => {
   const home = await mkdtemp(join(tmpdir(), 'sandy-refresh-evidence-'));
   const path = join(home, 'auth.json');
   const initial = {
@@ -20,11 +20,8 @@ it('forces only refresh age and reports rotated auth as a boolean after runtime 
   };
   try {
     await writeFile(path, JSON.stringify(initial));
-    const probe = await markDedicatedAuthForRefresh(home);
-    const marked = JSON.parse(await readFile(path, 'utf8'));
-    expect(marked.tokens).toEqual(initial.tokens);
-    expect(marked.extra).toBe('preserve');
-    expect(Date.parse(marked.last_refresh)).toBeLessThan(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    const probe = await observeDedicatedAuthRefresh(home);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(initial);
     expect(await probe.refreshObserved()).toBe(false);
     await writeFile(path, JSON.stringify({ ...initial, last_refresh: new Date().toISOString() }));
     expect(await probe.refreshObserved()).toBe(false);
@@ -37,6 +34,15 @@ it('forces only refresh age and reports rotated auth as a boolean after runtime 
       }),
     );
     expect(await probe.refreshObserved()).toBe(true);
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...initial,
+        tokens: { ...initial.tokens, access_token: 'synthetic-rotated', account_id: 'other' },
+        last_refresh: new Date().toISOString(),
+      }),
+    );
+    expect(await probe.refreshObserved()).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -48,7 +54,7 @@ it('refuses a symlinked test auth file before changing its target', async () => 
     const target = join(home, 'private-auth');
     await writeFile(target, 'synthetic-sensitive-content');
     await symlink(target, join(home, 'auth.json'));
-    await expect(markDedicatedAuthForRefresh(home)).rejects.toThrow('regular file');
+    await expect(observeDedicatedAuthRefresh(home)).rejects.toThrow('regular file');
     expect(await readFile(target, 'utf8')).toBe('synthetic-sensitive-content');
   } finally {
     await rm(home, { recursive: true, force: true });

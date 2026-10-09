@@ -24,6 +24,7 @@ if (args.includes('generate-json-schema')) {
     TurnCompletedNotification: ['threadId','turn'],
     TurnInterruptParams: ['threadId','turnId'],
     ThreadBackgroundTerminalsCleanParams: ['threadId'],
+    GetAccountParams: ['refreshToken'],
   })) fs.writeFileSync(path.join(out,'v2',name+'.json'), JSON.stringify({properties: Object.fromEntries(fields.map(k=>[k,{}])), ...(name==='ThreadTokenUsageUpdatedNotification'?{definitions:{TokenUsageBreakdown:{properties:{inputTokens:{},cachedInputTokens:{},cacheWriteInputTokens:{},outputTokens:{}}}}}:{})}));
   process.exit(0);
 }
@@ -119,6 +120,39 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it('requests native authentication refresh before admitting independent Agent threads', async () => {
+    const f = await executable(
+      protocolFixture
+        .replace('let nextThread = 0;', 'let nextThread = 0; let refreshed = false;')
+        .replace(
+          "if (method === 'thread/start') reply",
+          "if (method === 'account/read' && params.refreshToken === true) { refreshed = true; reply(id,{account:null}); }\nif (method === 'thread/start' && !refreshed) { send({id,error:{code:-32600,message:'Native refresh must finish before Agent admission'}}); return; }\nif (method === 'thread/start') reply",
+        ),
+    );
+    const w = await workspaces(f.root);
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      if (!runtime.refreshAuthentication) throw new Error('Native refresh operation unavailable');
+      await runtime.refreshAuthentication();
+      const outcomes = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+      expect(outcomes.map((outcome) => outcome.stdout).sort()).toEqual([
+        '<findings>thread-1</findings>',
+        '<findings>thread-2</findings>',
+      ]);
+      await expect(runtime.refreshAuthentication()).rejects.toThrow('before Agent admission');
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('retains bounded RPC failure metadata without exposing the server message', async () => {
     const f = await executable(
       protocolFixture.replace(

@@ -1,7 +1,7 @@
 import type { AgentRunUsage } from '@sandy/shared-types';
 
 export interface AgentRunFailure {
-  stage: 'runtime' | 'thread-start' | 'turn-start' | 'turn';
+  stage: 'runtime' | 'authentication' | 'thread-start' | 'turn-start' | 'turn';
   code:
     | 'rpc-error'
     | 'rpc-timeout'

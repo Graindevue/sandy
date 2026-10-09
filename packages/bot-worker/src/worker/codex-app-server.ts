@@ -6,6 +6,7 @@ const exec = promisify(execFile);
 const RPC_TIMEOUT_MS = 10_000;
 
 function requestStage(method: string): AgentRunFailure['stage'] {
+  if (method === 'account/read') return 'authentication';
   if (method === 'thread/start') return 'thread-start';
   if (method === 'turn/start') return 'turn-start';
   return 'runtime';
@@ -124,7 +125,11 @@ export class CodexAppServer {
     this.#send({ method: 'initialized', params: {} });
   }
 
-  request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  request(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs = RPC_TIMEOUT_MS,
+  ): Promise<Record<string, unknown>> {
     this.failure.signal.throwIfAborted();
     if (this.#closing) return Promise.reject(new Error('Codex runtime closed'));
     const id = ++this.#nextId;
@@ -137,7 +142,7 @@ export class CodexAppServer {
             code: 'rpc-timeout',
           }),
         );
-      }, RPC_TIMEOUT_MS);
+      }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer, method });
       this.#send({ id, method, params });
     });

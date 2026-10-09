@@ -143,6 +143,7 @@ async function validateProtocol(
       TurnCompletedNotification: ['threadId', 'turn'],
       TurnInterruptParams: ['threadId', 'turnId'],
       ThreadBackgroundTerminalsCleanParams: ['threadId'],
+      GetAccountParams: ['refreshToken'],
     })) {
       const schema = protocolObject(
         JSON.parse(await readFile(join(directory, 'v2', `${name}.json`), 'utf8')),
