@@ -2,8 +2,9 @@
 
 The caller workflow lives in the reviewed repository. It checks out a trusted
 Sandy commit and invokes [.github/actions/review/action.yml](../../.github/actions/review/action.yml).
-The canonical source is private `Graindevue/sandy`; source checkout uses
-explicit read access rather than the caller's automatic token.
+The canonical source is `Graindevue/sandy`. Private source deployments require
+explicit read access rather than the caller's automatic token. The supplied
+production template retains this explicit source-access path.
 
 ## 1. Prepare access and the environment
 
@@ -102,7 +103,10 @@ The review job's `sandy-codex-session` concurrency group serializes Reviews
 with queueing and `cancel-in-progress: false`. Its review job selects the
 `sandy-codex` environment so the current auth is read after the lock is acquired.
 Skipped jobs for unrelated events do not acquire this lock.
-Agent Runs are also serial. Keep those settings together.
+Keep that whole-job lock and environment together for every workflow using the
+login. Agent execution defaults to serial. An explicitly enabled parallel
+Review uses one managed app-server, so thread concurrency does not remove the
+job-level authentication lock.
 
 The action validates a human requester with repository write access, an open PR,
 a private caller, and a same-repository PR head. Fork PRs are declined. Reviewed
@@ -120,6 +124,69 @@ Linux uses explicit filesystem grants for required system tools, writable review
 and temporary cache directories, and read-only shared Git metadata and sibling
 source. Native caches must also satisfy ownership checks on their ancestor
 directories, including those enforced by SWC.
+
+The action optionally restores the reviewed repository's package downloads from
+GitHub Actions cache, separately from the cache used to build Sandy. Every review
+still performs a fresh frozen installation. Supported stores are npm's
+`_cacache` and pnpm's content store, with side-effect and local-project records
+excluded. Installed dependencies, source, test outputs, tool homes, logs,
+credentials, and configuration files are never saved.
+
+A pinned Node action exports only the runner's optional cache-service variables
+to trusted worker steps and masks the runtime token first. Reviewed commands
+receive neither those variables nor access to the runner environment-command
+files. CI verifies the shipped adapter against the real Linux cache provider with
+a harmless save/remove/restore fixture, without a Codex login or model request.
+
+pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
+npm stages its frozen graph with `ci --ignore-scripts`, then performs the normal
+fresh `ci` installation. Sandy snapshots validated downloads before reviewed
+hooks and lifecycles run; each ordinary lifecycle still runs once. The
+publication snapshot is denied to reviewed commands, and pnpm package imports
+use copies to keep installation writes out of it. Only successful normal
+preparation publishes that snapshot. The v2 namespace excludes earlier
+post-lifecycle npm snapshots. npm retains its lockfile tarball integrity checks
+when reading cached content. Both stages share the preparation timeout budget.
+
+Download keys include the repository, operating system and architecture, Node
+major version, exact reviewed package-manager pin, and a digest of the reviewed
+lockfile, manifest, and install configuration. npm requires its installed CLI to
+match the reviewed pin; pnpm retains the existing exact `npx` pin. Missing or
+unverified keys, other stores, credential-bearing configuration, and unavailable
+cache services retain ordinary installation. Restored stores are checked before
+use, and a failed warm installation gets at most one cold retry within the
+preparation budget. Cache workers have a 30-second operation limit and stop
+before cleanup on cancellation. Only successful dependency preparation publishes
+downloads; a genuine install failure retains static-analysis review.
+
+The action uses the stable `${RUNNER_TEMP}/sandy-reviewed-downloads` publication
+directory across Reviews, even when each dedicated Codex home is temporary.
+Reviewed commands cannot access this directory. They have an install-only write
+grant for the separate Review-local `sandy-dependency-downloads-install` store.
+Both are cleared after preparation. The cache service includes requested paths
+in its cache version, so a temporary publication path would prevent reuse. Phase logs
+distinguish cache restore and save, installation, and total preparation time; a hit label alone
+does not prove fewer downloads.
+
+Parallel Reviews prepare dependencies once and copy private source/installation
+workspaces before starting the runtime. This complete inventory lets the
+sandbox deny each peer explicitly while allowing native tools to resolve their
+own directory ancestors. Each Agent owns its temporary files and writable
+caches; the prepared seed, sibling sources and Git metadata are read-only.
+Copy time and disk overhead count toward benchmark costs.
+
+The action accepts `agent-execution-mode: serial|parallel` and
+`max-agent-concurrency` (a positive integer; parallel default three, one selects
+serial). Environment equivalents for the entry point are
+`SANDY_REVIEW_EXECUTION_MODE` and `SANDY_REVIEW_AGENT_CONCURRENCY`. The effective
+mode/cap appears in phase logs. An incompatible pinned runtime falls back before
+any Agent starts; runtime failure during execution retains completed outcomes
+and fails affected work rather than starting another investigation.
+
+Keep the mode at `serial` until the
+[runtime and quality gates](../benchmarks/review-speed.md) pass on your Linux
+execution environment and dedicated login. Mock protocol tests cannot establish
+live authentication rotation, finding recall or production latency.
 
 ## 4. Choose Product configuration
 
@@ -139,6 +206,8 @@ reports this deferral. Optional repository variables:
 | `SANDY_CONFIG_PATH` | Trusted `bot.yaml` path relative to `GITHUB_WORKSPACE`. |
 | `SANDY_TEST_MODE` | `targeted` (default) leaves full-suite execution to CI; `suite` runs the root test script once before reviewers. |
 | `SANDY_TEST_TIMEOUT_SECONDS` | Full-suite budget in `suite` mode: 1–600 seconds, default 120. |
+| `SANDY_AGENT_EXECUTION_MODE` | `serial` (default) or `parallel`, gated by runtime/authentication and quality evidence. |
+| `SANDY_AGENT_CONCURRENCY` | Positive maximum selected Agents in parallel mode; default three, one selects serial. |
 
 The workflow template passes these test settings to the action's `test-mode`
 and `test-timeout-seconds` inputs. Existing callers that omit them use focused

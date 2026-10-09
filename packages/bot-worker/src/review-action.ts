@@ -16,8 +16,10 @@ import type { PullRequestFacts, RepoRef } from './github/types.js';
 import { disabledArchetypeAssigner } from './learning/archetype-assigner.js';
 import { ConvexSink } from './state/convex-sink.js';
 import { ReviewServiceClient } from './state/review-service-client.js';
-import { CodexExecRunner, type ReviewTestMode } from './worker/codex-exec-runner.js';
+import { CodexAppServerRunner } from './worker/codex-app-server-runner.js';
+import type { ReviewTestMode } from './worker/codex-exec-runner.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
+import { createGitHubDependencyDownloadCache } from './worker/github-dependency-download-cache.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { ReviewExecutor } from './worker/review-executor.js';
 
@@ -35,6 +37,8 @@ export interface ReviewActionConfig {
   maxChangedLines: number;
   testMode: ReviewTestMode;
   testTimeoutMs: number;
+  executionMode: 'serial' | 'parallel';
+  maxAgentConcurrency: number;
 }
 
 export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConfig {
@@ -44,6 +48,15 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     throw new Error('SANDY_REPOSITORY must be owner/repo');
   }
   const [owner, name] = fullName.split('/') as [string, string];
+  const requestedMode = env.SANDY_REVIEW_EXECUTION_MODE ?? 'serial';
+  if (requestedMode !== 'serial' && requestedMode !== 'parallel') {
+    throw new Error('SANDY_REVIEW_EXECUTION_MODE must be serial or parallel');
+  }
+  const requestedCap = positiveInteger(
+    env.SANDY_REVIEW_AGENT_CONCURRENCY ?? '3',
+    'SANDY_REVIEW_AGENT_CONCURRENCY',
+  );
+  const maxAgentConcurrency = requestedMode === 'serial' ? 1 : requestedCap;
   return {
     root,
     repository: { owner, name },
@@ -61,6 +74,8 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     ),
     testMode: reviewTestMode(env.SANDY_REVIEW_TEST_MODE ?? 'targeted'),
     testTimeoutMs: suiteTestTimeout(env.SANDY_REVIEW_TEST_TIMEOUT_SECONDS ?? '120'),
+    executionMode: maxAgentConcurrency === 1 ? 'serial' : 'parallel',
+    maxAgentConcurrency,
   };
 }
 
@@ -157,8 +172,18 @@ export async function runReviewAction(
     store,
     cloneManager,
     diffInspector: github,
-    runner: new CodexExecRunner({
+    runner: new CodexAppServerRunner({
       codexHome: config.codexHome,
+      enableManagedRuntime: config.executionMode === 'parallel',
+      dependencyDownloadCache: createGitHubDependencyDownloadCache(),
+      ...(config.runnerTempDir
+        ? {
+            dependencyDownloadCacheDirectory: resolve(
+              config.runnerTempDir,
+              'sandy-reviewed-downloads',
+            ),
+          }
+        : {}),
       testMode: config.testMode,
       testTimeoutMs: config.testTimeoutMs,
       protectedPaths: [
@@ -183,6 +208,7 @@ export async function runReviewAction(
     archetypeAssigner: disabledArchetypeAssigner,
     ...(signal !== undefined ? { signal } : {}),
     maxChangedLines: config.maxChangedLines,
+    maxAgentConcurrency: config.maxAgentConcurrency,
     manifestBuilder: {
       buildManifest: async (productId, repos) => {
         const { buildManifest } = await import('@sandy/manifest-builder');
