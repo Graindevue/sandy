@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -68,6 +68,7 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
     const preparedWorkspacePath = input.worktreePath;
     const privateWorkspacePaths = input.privateWorkspacePaths ?? [];
     const pending = new Set<Promise<unknown>>();
+    const cleanupErrors = new Map<string, unknown>();
     return {
       mode: 'serial',
       maxConcurrency: 1,
@@ -101,7 +102,12 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
               ]),
             });
           } finally {
-            await rm(toolHome, { recursive: true, force: true });
+            try {
+              await removeOwnedAgentHome(toolHome);
+            } catch (error) {
+              // Retain the Agent outcome; close reports and retries unfinished teardown.
+              cleanupErrors.set(toolHome, error);
+            }
           }
         })();
         pending.add(task);
@@ -111,9 +117,42 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
       close: async () => {
         controller.abort(new Error('Review runtime closed'));
         await Promise.allSettled(pending);
+        for (const home of cleanupErrors.keys()) {
+          try {
+            await removeOwnedAgentHome(home);
+            cleanupErrors.delete(home);
+          } catch (error) {
+            cleanupErrors.set(home, error);
+          }
+        }
+        if (cleanupErrors.size > 0)
+          throw new AggregateError(cleanupErrors.values(), 'Serial Agent home cleanup failed');
       },
     };
   }
+}
+
+async function removeOwnedAgentHome(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true });
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !('code' in error) ||
+      (error.code !== 'EACCES' && error.code !== 'EPERM')
+    )
+      throw error;
+    await restoreOwnedDirectoryAccess(path);
+    await rm(path, { recursive: true, force: true });
+  }
+}
+
+/** Only called after the owner has stopped; symlinks and files never receive chmod. */
+async function restoreOwnedDirectoryAccess(path: string): Promise<void> {
+  const entry = await lstat(path);
+  if (!entry.isDirectory()) return;
+  await chmod(path, entry.mode | 0o700);
+  for (const name of await readdir(path)) await restoreOwnedDirectoryAccess(join(path, name));
 }
 
 const exec = promisify(execFile);

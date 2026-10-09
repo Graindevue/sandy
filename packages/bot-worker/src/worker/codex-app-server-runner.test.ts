@@ -8,6 +8,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -432,6 +433,134 @@ else process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agen
       if (status === 'cancelled') expect(await readFile(stopped, 'utf8')).toBe('stopped');
     } finally {
       await runtime.close();
+    }
+  });
+
+  it('cleans inaccessible owned directories without following symlinks or losing completed findings', async () => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const input = w.inputs[0];
+    const peer = w.inputs[1];
+    if (input === undefined || peer === undefined) throw new Error('Missing fixture Agents');
+    await mkdir(f.codexHome);
+    const protectedDirectories = [f.codexHome, w.seed, peer.worktreePath];
+    for (const directory of protectedDirectories) {
+      await writeFile(join(directory, 'cleanup-canary'), 'unchanged');
+      await chmod(join(directory, 'cleanup-canary'), 0o640);
+      await chmod(directory, 0o500);
+    }
+    const marker = join(f.root, 'tool-home');
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node
+const fs=require('node:fs'), path=require('node:path');
+const restricted=path.join(process.env.HOME,'restricted');
+const nested=path.join(restricted,'nested');
+fs.mkdirSync(nested,{recursive:true});
+fs.writeFileSync(path.join(nested,'artifact'),'fixture');
+for (const [index,target] of ${JSON.stringify(protectedDirectories)}.entries()) {
+  fs.symlinkSync(target,path.join(restricted,'external-directory-'+index));
+  fs.symlinkSync(path.join(target,'cleanup-canary'),path.join(nested,'external-file-'+index));
+}
+fs.chmodSync(nested,0); fs.chmodSync(restricted,0);
+fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
+process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
+process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:100,cached_input_tokens:10,output_tokens:15}})+'\\n');
+`,
+    );
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      logger: { info() {} },
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 1,
+    });
+    let toolHome: string | undefined;
+    try {
+      const outcome = runtime.runAgent(input);
+      void outcome.catch(() => {});
+      await vi.waitFor(async () => {
+        toolHome = await readFile(marker, 'utf8');
+        expect(toolHome).not.toBe('');
+      });
+      await expect(outcome).resolves.toMatchObject({
+        stdout: '<findings>complete</findings>',
+        usage: { inputTokens: 90, cacheReadInputTokens: 10, outputTokens: 15 },
+      });
+      await runtime.close();
+      if (toolHome === undefined) throw new Error('Missing owned home');
+      await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
+      for (const directory of protectedDirectories) {
+        expect((await stat(directory)).mode & 0o777).toBe(0o500);
+        expect((await stat(join(directory, 'cleanup-canary'))).mode & 0o777).toBe(0o640);
+        expect(await readFile(join(directory, 'cleanup-canary'), 'utf8')).toBe('unchanged');
+      }
+    } finally {
+      await runtime.close();
+      if (toolHome !== undefined) {
+        await chmod(join(toolHome, 'restricted'), 0o700).catch(() => {});
+        await chmod(join(toolHome, 'restricted', 'nested'), 0o700).catch(() => {});
+        await rm(toolHome, { recursive: true, force: true });
+      }
+      for (const directory of protectedDirectories) await chmod(directory, 0o700);
+    }
+  });
+
+  it.each([
+    'completed',
+    'failed',
+  ])('reports unrecoverable cleanup from close and retries without masking the %s Agent outcome', async (status) => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const input = w.inputs[0];
+    if (input === undefined) throw new Error('Missing fixture Agent');
+    await mkdir(f.codexHome);
+    const temporaryParent = join(f.root, 'temporary-parent');
+    await mkdir(temporaryParent);
+    vi.stubEnv('TMPDIR', temporaryParent);
+    const marker = join(f.root, 'tool-home');
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node
+const fs=require('node:fs'), path=require('node:path');
+fs.writeFileSync(path.join(process.env.HOME,'artifact'),'fixture');
+fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
+fs.chmodSync(${JSON.stringify(temporaryParent)},0o500);
+if (${JSON.stringify(status)}==='failed') process.exit(1);
+process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
+`,
+    );
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      logger: { info() {} },
+    }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
+    try {
+      const [outcome] = await Promise.allSettled([runtime.runAgent(input)]);
+      if (status === 'completed') {
+        expect(outcome).toMatchObject({
+          status: 'fulfilled',
+          value: { stdout: '<findings>complete</findings>' },
+        });
+      } else {
+        expect(outcome).toMatchObject({
+          status: 'rejected',
+          reason: { message: 'Codex exited with 1: ' },
+        });
+      }
+      const toolHome = await readFile(marker, 'utf8');
+      await expect(runtime.close()).rejects.toThrow('Serial Agent home cleanup failed');
+      expect((await stat(temporaryParent)).mode & 0o777).toBe(0o500);
+      await expect(readdir(toolHome)).resolves.toBeDefined();
+      await chmod(temporaryParent, 0o700);
+      await expect(runtime.close()).resolves.toBeUndefined();
+      await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await chmod(temporaryParent, 0o700);
+      await runtime.close();
+      vi.unstubAllEnvs();
     }
   });
 

@@ -1,18 +1,36 @@
 # Review runtime evidence and rollout gate
 
-Issue [#4](https://github.com/Graindevue/sandy/issues/4) adds download reuse, private Agent workspaces and an opt-in managed runtime. **Serial remains the default.** The exact-pin Linux compatibility gate passed; dedicated login refresh/writeback and adjudicated real-model latency/quality results are still pending. There is no measured production speedup or quality claim in this report.
+Issue [#4](https://github.com/Graindevue/sandy/issues/4) adds download reuse, private Agent workspaces and an opt-in managed runtime. **Serial remains the default.** Exact-pin Linux compatibility and dedicated test login refresh/writeback passed. One defects-only, unadjudicated real-model repetition is recorded below; matched clean-case repetitions and human quality judgments remain pending. These measurements do not establish a production speedup or satisfy the promotion gate.
 
 | Evidence | Result | What it establishes |
 | --- | --- | --- |
-| Linux x64, Codex 0.162.0, credential-free native probe | [Passed CI](https://github.com/Graindevue/sandy/actions/runs/37929803123/job/113817459048) | Concurrent turns and reversed event routing; usage attribution; cancellation and drained shutdown; private workspace/HOME/TMP writes; credential and peer denial; read-only seed, siblings and Git metadata; untrusted reviewed config. |
+| Linux x64, Codex 0.162.0, credential-free native probe | [Passed CI on source 3597943](https://github.com/Graindevue/sandy/actions/runs/37960014657) | Concurrent turns and reversed event routing; usage attribution; cancellation and drained shutdown; private workspace/HOME/TMP writes; credential and peer denial; read-only seed, siblings and Git metadata; untrusted reviewed config. |
 | macOS arm64, same exact executable, local probe | Passed | The same mechanical probe on the local platform, with actual sandboxed tools and a controlled Responses provider. |
-| Native managed and serial adapter probes | Passed locally | Actual Node cwd/realpath, copied dependency resolution, private tool writes, peer/auth denial and seed/shared-temp write denial through the public adapters. Provider output was controlled. |
-| Shipped dependency cache adapter, actual Linux Actions provider | [Passed CI](https://github.com/Graindevue/sandy/actions/runs/37935720559/job/113837137172) | Save, remove and restore of a harmless download fixture through the real provider, with identical-byte verification. It does not measure reviewed lifecycles or model speed. |
+| Native managed and serial adapter probes | Passed locally; managed fixture also [passed Linux CI on source 3597943](https://github.com/Graindevue/sandy/actions/runs/37960014657) | Actual Node cwd/realpath, copied dependency resolution, private tool writes, peer/auth denial and seed/shared-temp write denial through the public adapters. The synthetic ChatGPT HTTPS fixture also exercises retained workspace-routing configuration. Provider output was controlled. |
+| Shipped dependency cache adapter, actual Linux Actions provider | [Passed CI on source 3597943](https://github.com/Graindevue/sandy/actions/runs/37960014657) | Save, remove and restore of a harmless download fixture through the real provider and maintained cache SDK, with identical-byte verification. It does not measure reviewed lifecycles or model speed. |
+| Security and dependency gates | [Passed CI on source 3597943](https://github.com/Graindevue/sandy/actions/runs/37960014690) | Dependency audit and secret scanning remain enforced after the main security integration and cache SDK upgrade. |
 | Fixture verification and report tests | Passed locally | Authored defects and clean revisions behave as specified with installed Zod 4.1.12; report math, missing metrics, aggregation and critical-severity gates work. These checks do not measure model quality. |
-| Dedicated test login refresh and writeback | Pending | Needs the isolated test environment described in [the setup guide](../setup/review-benchmark.md). |
-| Repeated, adjudicated real-model serial/parallel runs | Pending | Needs that test login and human evaluation of retained Findings. |
+| Dedicated test login refresh and writeback | [Passed isolated live run](https://github.com/Graindevue/graindevue/actions/runs/37960496740) | Native refresh observed before Agent admission; caller secret persistence and local credential removal succeeded. This uses the separate test environment described in [the setup guide](../setup/review-benchmark.md). |
+| Repeated, adjudicated real-model serial/parallel runs | One defects-only repetition completed; remaining gates pending | The [isolated live run](https://github.com/Graindevue/graindevue/actions/runs/37960496740) completed all four cache/mode cells. Clean-case coverage, three matched repetitions and human adjudication remain required. |
 
 The probe is reproducible with `node scripts/codex-compatibility-probe.mjs /path/to/codex report.json`. It requires `codex-cli 0.162.0`, uses a local provider without authentication, has a 90-second bound and retains only bounded assertions. The separate Linux CI job installs bubblewrap and its dedicated AppArmor profile, passes no model/auth secrets and uploads `codex-compatibility.json`. Mock Responses usage proves attribution and parsing; it is not real token billing, auth refresh, model reasoning or latency evidence.
+
+## First live smoke: one defects-only repetition
+
+The private caller [run 37960496740](https://github.com/Graindevue/graindevue/actions/runs/37960496740) used exact Sandy source [359794396baa4c40259f62049fe5aea2d84aff95](https://github.com/Graindevue/sandy/commit/359794396baa4c40259f62049fe5aea2d84aff95) and Codex 0.162.0 on Linux. That source retains the [security checks merged in main PR #8](https://github.com/Graindevue/sandy/pull/8) and includes the maintained Actions cache SDK repair. The values below belong to that source, not later review fixes.
+
+| Cache | Mode | Total elapsed (ms) | Completed Agents | Tarball requests | Download bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Cold | Parallel | 149383 | 3/3 | 1 | 639968 |
+| Cold | Serial | 305135 | 3/3 | 1 | 639968 |
+| Warm | Parallel | 127862 | 3/3 | 0 | 0 |
+| Warm | Serial | 335810 | 3/3 | 0 | 0 |
+
+All 12 Agent Runs completed with authoritative usage, and both parallel samples retained observed tool activity. Native auth refresh was observed, and the caller's secret persistence, local credential removal and artifact upload succeeded. Parallel elapsed time was lower in these two matched cells; one repetition cannot establish stable median or p95 improvement. The controlled source counter shows download reuse for this fixture only.
+
+Earlier live parallel attempts failed before investigation with native `failed to load workspace requirements`. The shipped public-adapter probe reproduces that exact failure with synthetic ChatGPT auth and a loopback HTTPS backend: retained configuration rebuilding loses the RPC-only profile selection. Setting per-thread `default_permissions: 'sandy'` preserves the existing named profile during rebuilding. With only that setting changed, the same native fixture completes three Agents with separate usage and real tool checks for private writes, read-only seed and denied peers/auth. Run the credential-free fixture with `node scripts/codex-managed-runtime-probe.mjs /path/to/codex > report.json`; its synthetic credentials and routes remain local.
+
+These live Findings have not been human-adjudicated. Their emitted severities are all P1, including output against a fixture containing a P0 ground-truth defect; P0 recall or correct severity is therefore not established. This defects-only smoke does not cover the clean case, and it does not promote parallel execution. Three complete matched repetitions covering both cases, human producer/severity/source judgments and all operational gates remain required.
 
 ## Run a bounded live evaluation
 
