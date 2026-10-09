@@ -96,7 +96,7 @@ test('an immutable fingerprint excludes only its exact historical match', async 
   try {
     git(scratch, 'init', '-b', 'main');
     const path = 'credential.txt';
-    const historicalToken = randomBytes(32).toString('base64url');
+    const historicalToken = `ghp_${randomBytes(18).toString('hex')}`;
     await writeFile(join(scratch, path), `API_KEY="${historicalToken}"\n`);
     git(scratch, 'add', path);
     git(
@@ -135,14 +135,14 @@ test('an immutable fingerprint excludes only its exact historical match', async 
 
     const historical = (await scanReport()).findings;
     assert.equal(historical.length, 1);
-    assert.equal(historical[0].RuleID, 'generic-api-key');
+    assert.equal(historical[0].RuleID, 'github-pat');
     assert.equal(historical[0].File, path);
     assert.equal(historical[0].StartLine, 1);
-    assert.equal(historical[0].Fingerprint, `${historical[0].Commit}:${path}:generic-api-key:1`);
+    assert.equal(historical[0].Fingerprint, `${historical[0].Commit}:${path}:github-pat:1`);
     await writeFile(join(scratch, '.gitleaksignore'), `${historical[0].Fingerprint}\n`);
     assert.equal(scan(scratch).status, 0, 'Only the reviewed historical fingerprint is excluded');
 
-    const laterToken = randomBytes(32).toString('base64url');
+    const laterToken = `ghp_${randomBytes(18).toString('hex')}`;
     await writeFile(join(scratch, path), `API_KEY="${laterToken}"\n`);
     git(scratch, 'add', path, '.gitleaksignore');
     git(
