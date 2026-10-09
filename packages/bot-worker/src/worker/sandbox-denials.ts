@@ -6,23 +6,25 @@ export async function minimalSandboxDenials(
   paths: readonly string[],
   grantedPaths: readonly string[],
 ): Promise<string[]> {
-  const entries = await Promise.all(
+  const denied = await Promise.all(
     [...new Set(paths.map((path) => resolve(path)))].map(async (path) => ({
       path,
       canonical: await canonicalPath(path),
     })),
   );
-  const denied = [...new Map(entries.map((entry) => [entry.canonical, entry])).values()];
   const grants = await Promise.all(grantedPaths.map(canonicalPath));
+  // Keep logical aliases explicit for the native writable-symlink checks.
   return denied
     .filter(
-      ({ canonical: path }) =>
+      ({ path, canonical }) =>
         !denied.some(
-          ({ canonical: parent }) =>
+          ({ path: parent, canonical: canonicalParent }) =>
             parent !== path &&
+            canonicalParent !== canonical &&
             contains(parent, path) &&
+            contains(canonicalParent, canonical) &&
             // A nested grant can reopen this child; its explicit deny must survive.
-            !grants.some((grant) => contains(parent, grant) && contains(grant, path)),
+            !grants.some((grant) => contains(canonicalParent, grant) && contains(grant, canonical)),
         ),
     )
     .map(({ path }) => path);
