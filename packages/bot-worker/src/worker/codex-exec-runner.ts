@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
@@ -490,6 +490,10 @@ export class CodexExecRunner {
         '":slash_tmp"="write"',
         '"/opt"="read"',
       );
+      // Linux resolvers can symlink into /run, outside :minimal's /etc mount.
+      const resolver = await realpath('/etc/resolv.conf');
+      if (!(await stat(resolver)).isFile()) throw new Error('DNS resolver must be a regular file');
+      filesystem.push(`${JSON.stringify(resolver)}="read"`);
       const commonDirectories = new Set<string>();
       for (const path of new Set([worktreePath, ...siblings.map((sibling) => sibling.hostPath)])) {
         const { stdout } = await exec(

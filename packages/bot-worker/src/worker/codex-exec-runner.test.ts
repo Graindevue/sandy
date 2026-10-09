@@ -92,6 +92,9 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
         if (!profile?.includes(grant)) throw new Error('Missing Linux runtime grant: ' + grant);
       }
       const fs = await import('node:fs');
+      const resolver = fs.realpathSync('/etc/resolv.conf');
+      if (!profile.includes(JSON.stringify(resolver) + '="read"')) throw new Error('Canonical DNS resolver target is unreadable');
+      if (profile.includes('"/run"="read"')) throw new Error('DNS resolver grant exposes all runtime state');
       const childProcess = await import('node:child_process');
       const common = fs.realpathSync(childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim());
       if (!profile.includes(JSON.stringify(common) + '="read"')) throw new Error('Linked worktree cannot read its shared Git history');
@@ -630,6 +633,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         `import assert from 'node:assert/strict';
          import fs from 'node:fs';
          import { execFileSync } from 'node:child_process';
+         import { lookup } from 'node:dns/promises';
          import { dirname, join } from 'node:path';
          for (const path of ${JSON.stringify([join(f.codexHome, 'auth.json'), keyPath, `/proc/${process.pid}/environ`, `/proc/${process.pid}/mem`])}) {
            assert.throws(() => fs.openSync(path, 'r'), 'Credential path readable: ' + path);
@@ -637,6 +641,18 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
          assert.throws(() => fs.writeFileSync(${JSON.stringify(join(sandboxHome, 'config.toml'))}, 'malicious override'));
          assert.equal(process.env.GH_TOKEN, undefined);
          assert.equal(process.env.CODEX_AUTH_JSON, undefined);
+         const stage = process.argv[2];
+         if (stage === 'install') {
+           const resolver = fs.realpathSync('/etc/resolv.conf');
+           assert.ok(fs.readFileSync(resolver).length > 0, 'DNS resolver target is unreadable');
+           console.log('Native DNS resolver target readable:', resolver);
+           let dnsTimeout;
+           const registry = await Promise.race([
+             lookup('registry.npmjs.org'),
+             new Promise((_, reject) => { dnsTimeout = setTimeout(() => reject(new Error('Registry DNS lookup exceeded 10 seconds')), 10000); }),
+           ]).finally(() => clearTimeout(dnsTimeout));
+           assert.ok(registry.address, 'Package registry DNS lookup returned no address');
+         }
          assert.match(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(), /^[a-f0-9]{40}$/);
          const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim();
          assert.throws(() => { const fd = fs.openSync(join(common, 'config'), 'a'); fs.closeSync(fd); }, 'Shared Git metadata became writable');
@@ -651,7 +667,6 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
          }
          const countsPath = 'probe-counts.json';
          const counts = fs.existsSync(countsPath) ? JSON.parse(fs.readFileSync(countsPath, 'utf8')) : {install:0,test:0};
-         const stage = process.argv[2];
          const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
          assert.equal(manifest.scripts.prepare, stage === 'install' ? undefined : 'lefthook install');
          counts[stage]++;
@@ -683,6 +698,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       console.info(
         'Native Linux cache: every cache ancestor has trusted ownership and permissions; Git history is readable and shared Git metadata stays read-only.',
       );
+      console.info('Native Linux DNS: registry.npmjs.org resolves inside the protected sandbox.');
     },
     60_000,
   );
