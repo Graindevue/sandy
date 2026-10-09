@@ -28,6 +28,36 @@ const pr: PullRequestFacts = {
 };
 
 describe('review action configuration', () => {
+  it('keeps serial execution as the rollout default and bounds explicitly enabled parallel Reviews', () => {
+    expect(loadReviewActionConfig(env)).toMatchObject({
+      executionMode: 'serial',
+      maxAgentConcurrency: 1,
+    });
+    expect(
+      loadReviewActionConfig({ ...env, SANDY_REVIEW_EXECUTION_MODE: 'parallel' }),
+    ).toMatchObject({
+      executionMode: 'parallel',
+      maxAgentConcurrency: 3,
+    });
+    expect(
+      loadReviewActionConfig({
+        ...env,
+        SANDY_REVIEW_EXECUTION_MODE: 'parallel',
+        SANDY_REVIEW_AGENT_CONCURRENCY: '1',
+      }),
+    ).toMatchObject({
+      executionMode: 'serial',
+      maxAgentConcurrency: 1,
+    });
+    for (const cap of ['0', '-1', '1.5', '9007199254740992']) {
+      expect(() => loadReviewActionConfig({ ...env, SANDY_REVIEW_AGENT_CONCURRENCY: cap })).toThrow(
+        'SANDY_REVIEW_AGENT_CONCURRENCY',
+      );
+    }
+    expect(() => loadReviewActionConfig({ ...env, SANDY_REVIEW_EXECUTION_MODE: 'fast' })).toThrow(
+      'SANDY_REVIEW_EXECUTION_MODE',
+    );
+  });
   it('defaults to focused verification with a bounded optional full suite', () => {
     expect(loadReviewActionConfig(env)).toMatchObject({
       testMode: 'targeted',
