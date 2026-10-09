@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { enableDependabotAutoMerge } from '../dependabot-auto-merge.mjs';
+import { mergeDependabotUpdates } from '../dependabot-auto-merge.mjs';
 
-async function attempt({ pull = {}, review = {}, current = {} } = {}) {
+const context = {
+  repo: { owner: 'Graindevue', repo: 'sandy' },
+  payload: { repository: { default_branch: 'main' } },
+};
+
+async function attempt({ pull = {}, review = {}, current = {}, failFirst = false } = {}) {
   const candidate = {
     number: 1,
     user: { login: 'dependabot[bot]' },
@@ -11,25 +16,35 @@ async function attempt({ pull = {}, review = {}, current = {} } = {}) {
     base: { ref: 'main' },
     head: { sha: 'reviewed', repo: { full_name: 'Graindevue/sandy' } },
     title: 'build(deps): bump yaml',
-    node_id: 'pr-1',
+    mergeable_state: 'clean',
     ...pull,
   };
   const mutations = [];
+  const warnings = [];
+  const failures = [];
   const github = {
     rest: {
       pulls: {
         list: 'pulls',
         listReviews: 'reviews',
-        get: async () => ({ data: { ...candidate, ...current } }),
+        get: async ({ pull_number }) => ({
+          data: { ...candidate, number: pull_number, ...current },
+        }),
         merge: async (variables) => {
           mutations.push({ merge: variables });
+          if (failFirst && variables.pull_number === 1) throw new Error('Head moved (409)');
           return { data: { merged: true } };
         },
+      },
+      actions: {
+        createWorkflowDispatch: async (variables) => mutations.push({ dispatch: variables }),
       },
     },
     paginate: async (method) =>
       method === 'pulls'
-        ? [candidate]
+        ? failFirst
+          ? [candidate, { ...candidate, number: 2 }]
+          : [candidate]
         : [
             {
               user: { login: 'coderabbitai[bot]' },
@@ -38,27 +53,48 @@ async function attempt({ pull = {}, review = {}, current = {} } = {}) {
               ...review,
             },
           ],
-    graphql: async (query, variables) => mutations.push({ query, variables }),
   };
-  await enableDependabotAutoMerge({
+  await mergeDependabotUpdates({
     github,
-    context: {
-      repo: { owner: 'Graindevue', repo: 'sandy' },
-      payload: { repository: { default_branch: 'main' } },
+    context,
+    core: {
+      info() {},
+      warning(message) {
+        warnings.push(message);
+      },
+      setFailed(message) {
+        failures.push(message);
+      },
     },
-    core: { info() {} },
   });
-  return mutations;
+  return { mutations, warnings, failures };
 }
 
-test('queues an approved Dependabot PR without approving or bypassing branch rules', async () => {
-  const mutations = await attempt();
-  assert.equal(mutations.length, 1);
-  assert.match(mutations[0].query, /enablePullRequestAutoMerge/);
-  assert.deepEqual(mutations[0].variables, {
-    id: 'pr-1',
-    title: 'fix: bump yaml',
-    head: 'reviewed',
+async function assertNotMerged(options) {
+  assert.deepEqual(await attempt(options), { mutations: [], warnings: [], failures: [] });
+}
+
+test('merges the reviewed head only when green and dispatches post-merge checks', async () => {
+  assert.deepEqual(await attempt(), {
+    mutations: [
+      {
+        merge: {
+          owner: 'Graindevue',
+          repo: 'sandy',
+          pull_number: 1,
+          sha: 'reviewed',
+          merge_method: 'squash',
+          commit_title: 'fix: bump yaml',
+          commit_message: '',
+        },
+      },
+      { dispatch: { owner: 'Graindevue', repo: 'sandy', workflow_id: 'ci.yml', ref: 'main' } },
+      {
+        dispatch: { owner: 'Graindevue', repo: 'sandy', workflow_id: 'security.yml', ref: 'main' },
+      },
+    ],
+    warnings: [],
+    failures: [],
   });
 });
 
@@ -69,25 +105,8 @@ test('rejects skipped, blocking, stale and non-CodeRabbit reviews', async () => 
     { state: 'DISMISSED' },
     { commit_id: 'old' },
     { user: { login: 'maintainer' } },
-  ]) {
-    assert.deepEqual(await attempt({ review }), []);
-  }
-});
-
-test('merges an already green PR while requiring the exact reviewed head', async () => {
-  assert.deepEqual(await attempt({ current: { mergeable_state: 'clean' } }), [
-    {
-      merge: {
-        owner: 'Graindevue',
-        repo: 'sandy',
-        pull_number: 1,
-        sha: 'reviewed',
-        merge_method: 'squash',
-        commit_title: 'fix: bump yaml',
-        commit_message: '',
-      },
-    },
-  ]);
+  ])
+    await assertNotMerged({ review });
 });
 
 test('restricts write access to ready same-repository Dependabot PRs on main', async () => {
@@ -96,20 +115,31 @@ test('restricts write access to ready same-repository Dependabot PRs on main', a
     { draft: true },
     { base: { ref: 'staging' } },
     { head: { sha: 'reviewed', repo: { full_name: 'attacker/sandy' } } },
-  ]) {
-    assert.deepEqual(await attempt({ pull }), []);
-  }
+  ])
+    await assertNotMerged({ pull });
 });
 
-test('does not queue a pushed, closed or drafted PR after fetching its reviews', async () => {
+test('rejects pushes, retargets, closures and pending checks after fetching reviews', async () => {
   for (const current of [
-    { head: { sha: 'new' } },
+    { head: { sha: 'new', repo: { full_name: 'Graindevue/sandy' } } },
     { state: 'closed' },
     { draft: true },
-    { auto_merge: {} },
     { base: { ref: 'staging' } },
-    { mergeable: false },
-  ]) {
-    assert.deepEqual(await attempt({ current }), []);
-  }
+    { mergeable_state: 'blocked' },
+    { mergeable_state: 'behind' },
+    { mergeable_state: 'unknown' },
+  ])
+    await assertNotMerged({ current });
+});
+
+test('a merge race is reported without preventing later PRs from merging', async () => {
+  const result = await attempt({ failFirst: true });
+  assert.deepEqual(
+    result.mutations.filter((entry) => entry.merge).map((entry) => entry.merge.pull_number),
+    [1, 2],
+  );
+  assert.equal(result.mutations.filter((entry) => entry.dispatch).length, 2);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /#1.*409/);
+  assert.equal(result.failures.length, 1);
 });
