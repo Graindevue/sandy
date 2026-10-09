@@ -646,6 +646,7 @@ export class ReviewExecutor {
         : AbortSignal.any([input.cancellationSignal, cancellation.signal]);
     const results: SelectedAgentReviewResult[] = [];
     const privateWorkspaces = new Map<number, ReviewWorktree>();
+    let maxConcurrency = this.#maxAgentConcurrency;
     const failBeforeStart = async (index: number, agent: AgentDefinition, error: string) => {
       const timestamp = this.#now();
       await this.#store.recordAgentRun({
@@ -682,6 +683,22 @@ export class ReviewExecutor {
           );
         } catch (error) {
           await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+          const capacityError = workspaceCapacityErrorCode(error);
+          if (capacityError !== undefined) {
+            // No Agent has started yet. Release the copies before opening the
+            // serial runtime so the prepared seed can serve the complete roster.
+            this.#logProgress(
+              input.context.job.id,
+              `Private Agent workspace storage exhausted (${capacityError}); removing prepared copies and using serial mode.`,
+            );
+            for (const worktree of privateWorkspaces.values()) {
+              await this.#cloneManager.removeWorktree(worktree);
+              input.worktrees.splice(input.worktrees.indexOf(worktree), 1);
+            }
+            privateWorkspaces.clear();
+            maxConcurrency = 1;
+            break;
+          }
           await failBeforeStart(
             index,
             agent,
@@ -694,11 +711,10 @@ export class ReviewExecutor {
       worktreePath: input.workspace.prWorktree.path,
       siblingWorktrees: input.workspace.siblingWorktrees,
       privateWorkspacePaths: [...privateWorkspaces.values()].map((worktree) => worktree.path),
-      maxConcurrency: this.#maxAgentConcurrency,
+      maxConcurrency,
       signal,
     });
-    const cap =
-      runtime === undefined ? 1 : Math.min(this.#maxAgentConcurrency, runtime.maxConcurrency);
+    const cap = runtime === undefined ? 1 : Math.min(maxConcurrency, runtime.maxConcurrency);
     let next = 0;
     let teardownError: unknown;
     let checking: Promise<void> | undefined;
@@ -1102,6 +1118,11 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function workspaceCapacityErrorCode(error: unknown): 'ENOSPC' | 'EDQUOT' | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  return error.code === 'ENOSPC' || error.code === 'EDQUOT' ? error.code : undefined;
 }
 
 function reviewTestSummary(result: DependencyInstallResult | undefined): string {

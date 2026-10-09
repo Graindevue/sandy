@@ -183,6 +183,18 @@ mode/cap appears in phase logs. An incompatible pinned runtime falls back before
 any Agent starts; runtime failure during execution retains completed outcomes
 and fails affected work rather than starting another investigation.
 
+Private workspace preparation also falls back before Agent admission when a
+copy exhausts disk space (`ENOSPC`) or a storage quota (`EDQUOT`). Sandy removes
+the prepared private copies, opens a serial runtime, and runs the selected
+roster against the existing installation. Cleanup must succeed before Agents
+start. Ordinary preparation failures and errors after Agent execution starts
+retain their failure semantics. The fallback appears in phase logs.
+
+For callers encountering this while pinned to an earlier Sandy revision,
+`SANDY_AGENT_EXECUTION_MODE=serial` avoids private installation copies. See the
+[PR #743 diagnosis](../diagnostics/pr-743-workspace-disk.md) for the reproduction,
+recovery validation, and remaining capacity limits.
+
 Keep the mode at `serial` until the
 [runtime and quality gates](../benchmarks/review-speed.md) pass on your Linux
 execution environment and dedicated login. Mock protocol tests cannot establish
