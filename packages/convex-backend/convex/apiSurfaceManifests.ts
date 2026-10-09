@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import type { Id } from './_generated/dataModel.js';
-import { mutation } from './_generated/server.js';
+import { mutation } from './serviceFunctions.js';
 
 export const API_SURFACE_MANIFEST_RETENTION = 20;
 

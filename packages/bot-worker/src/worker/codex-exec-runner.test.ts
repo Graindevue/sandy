@@ -20,6 +20,19 @@ import { readPackageJson } from './dependency-install.js';
 
 const exec = promisify(execFile);
 const directories: string[] = [];
+
+async function isProcessRunning(pid: number | undefined): Promise<boolean> {
+  if (pid === undefined) throw new Error('The child process did not start');
+  try {
+    const { stdout } = await exec('ps', ['-p', String(pid), '-o', 'stat=']);
+    const state = stdout.trim();
+    // Linux can retain a terminated orphan as a zombie until its parent reaps it.
+    return state !== '' && !state.startsWith('Z');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 1) return false;
+    throw error;
+  }
+}
 const findings =
   '<findings>{"findings":[],"crossRepoSearch":{"status":"skipped","trigger":"none","rationale":"Local change"}}</findings>';
 const agent: AgentDefinition = {
@@ -356,8 +369,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     controller.abort(new Error('Review cancelled'));
     await rejected;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(() => process.kill(pid ?? 0, 0)).toThrow();
+    await expect.poll(() => isProcessRunning(pid), { timeout: 2_000 }).toBe(false);
   });
 
   it('ends a hung agent at its deadline instead of starting another invocation', async () => {
@@ -374,9 +386,10 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 
   it('keeps write credentials out of the agent environment and enforces denied credential paths', async () => {
     const f = await fixture(`
-      for await (const chunk of process.stdin) {}
+      let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       if (process.env.GH_TOKEN || process.env.SANDY_APP_PRIVATE_KEY || process.env.OPENAI_API_KEY) throw new Error('Write credentials inherited');
+      if (process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN || process.env.ACTIONS_ID_TOKEN_REQUEST_URL || prompt.includes('oidc-fixture-must-stay-in-host')) throw new Error('Service authentication inherited');
       if (args.includes('--dangerously-bypass-approvals-and-sandbox') || args.includes('--sandbox')) throw new Error('Filesystem denies bypassed');
       if (!args.includes('default_permissions="sandy"')) throw new Error('Missing enforced permissions');
       const profile = args.find(arg => arg.startsWith('permissions.sandy='));
@@ -392,6 +405,9 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
         GH_TOKEN: 'do-not-inherit',
         SANDY_APP_PRIVATE_KEY: 'do-not-inherit',
         OPENAI_API_KEY: 'do-not-inherit',
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-fixture-must-stay-in-host',
+        ACTIONS_ID_TOKEN_REQUEST_URL:
+          'https://pipelines.actions.githubusercontent.com/oidc-fixture-must-stay-in-host',
       },
     });
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
@@ -616,8 +632,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
     await new Promise((resolve) => setTimeout(resolve, 100));
     controller.abort(new Error('Review cancelled by operator'));
     await rejected;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(() => process.kill(pid ?? 0, 0)).toThrow();
+    await expect.poll(() => isProcessRunning(pid), { timeout: 2_000 }).toBe(false);
   });
 
   it('honors an explicit suite timeout without changing the install budget', async () => {
@@ -945,6 +960,8 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
          assert.throws(() => fs.writeFileSync(${JSON.stringify(join(sandboxHome, 'config.toml'))}, 'malicious override'));
          assert.equal(process.env.GH_TOKEN, undefined);
          assert.equal(process.env.CODEX_AUTH_JSON, undefined);
+         assert.equal(process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, undefined);
+         assert.equal(process.env.ACTIONS_ID_TOKEN_REQUEST_URL, undefined);
          const stage = process.argv[2];
          if (stage === 'install') {
            const resolver = fs.realpathSync('/etc/resolv.conf');
@@ -983,7 +1000,13 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         testMode: 'suite',
         codexHome: f.codexHome,
         protectedPaths: [keyPath],
-        env: { GH_TOKEN: 'dummy-probe-token', CODEX_AUTH_JSON: 'dummy-probe-auth' },
+        env: {
+          GH_TOKEN: 'dummy-probe-token',
+          CODEX_AUTH_JSON: 'dummy-probe-auth',
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-fixture-must-stay-in-host',
+          ACTIONS_ID_TOKEN_REQUEST_URL:
+            'https://pipelines.actions.githubusercontent.com/oidc-fixture-must-stay-in-host',
+        },
       });
       const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
       if (result.status === 'failed') throw new Error(result.error);
@@ -1117,6 +1140,7 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       if (process.env.TURBO_CACHE_DIR !== turboCache || !shellPolicy?.includes('TURBO_CACHE_DIR=' + JSON.stringify(turboCache))) throw new Error('Install/test Turbo cache must stay inside this reviewed worktree');
       if (!(await import('node:fs')).existsSync(process.env.HOME)) throw new Error('Writable tool home must exist before Linux constructs its mounts');
       if (process.env.GH_TOKEN || process.env.CODEX_AUTH_JSON || process.env.SANDY_APP_PRIVATE_KEY) throw new Error('Credentials inherited');
+      if (process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN || process.env.ACTIONS_ID_TOKEN_REQUEST_URL) throw new Error('Service authentication inherited');
       if (process.env.pnpm_config_verify_deps_before_run !== 'false' || process.env.pnpm_config_manage_package_manager_versions !== 'false') throw new Error('Test command could repeat dependency installation');
       if (process.env.CODEX_HOME.endsWith('/ci-codex')) throw new Error('Sandbox utility uses authenticated home');
       const command = args.at(-1);
@@ -1137,6 +1161,9 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       env: {
         GH_TOKEN: 'never-inherit',
         CODEX_AUTH_JSON: 'never-inherit',
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-fixture-must-stay-in-host',
+        ACTIONS_ID_TOKEN_REQUEST_URL:
+          'https://pipelines.actions.githubusercontent.com/oidc-fixture-must-stay-in-host',
         TURBO_CACHE_DIR: join(f.root, 'outside-cache'),
       },
     });

@@ -1,18 +1,17 @@
 import { v } from 'convex/values';
+import { doc } from 'convex-helpers/validators';
 import { internal } from './_generated/api.js';
 import type { Id } from './_generated/dataModel.js';
 import {
   type ActionCtx,
-  action,
   internalAction,
   internalMutation,
   internalQuery,
-  mutation,
-  query,
 } from './_generated/server.js';
 import { labelFromFindingSummary } from './archetypeLabels.js';
 import { clampLimit } from './limits.js';
-import { FINDING_EMBEDDING_DIMENSIONS } from './schema.js';
+import schema, { FINDING_EMBEDDING_DIMENSIONS } from './schema.js';
+import { action, mutation, query } from './serviceFunctions.js';
 
 const ARCHETYPE_SIMILARITY_THRESHOLD = 0.8;
 const MAX_EXAMPLE_FINDING_IDS = 5;
@@ -49,6 +48,7 @@ export const byProduct = query({
     productId: v.id('products'),
     limit: v.optional(v.number()),
   },
+  returns: v.array(doc(schema, 'archetypes')),
   handler: async (ctx, { productId, limit }) => {
     return await ctx.db
       .query('archetypes')

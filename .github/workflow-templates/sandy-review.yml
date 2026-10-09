@@ -33,6 +33,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: sandy-codex
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
     steps:
       # No source checkout, App key, or Codex auth is consumed before this gate.
       # A read-only GITHUB_TOKEN can check repository metadata and actor access.

@@ -1,5 +1,5 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { createRepoFileSnapshot, type RepoFileSnapshot } from '@sandy/manifest-builder';
+import type { ApiSurfaceRepoInput } from '@sandy/shared-types';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 import { parseIgnoreGitignore } from './ignore.js';
 import type { ReviewBotContext } from './review-bot-context.js';
@@ -22,6 +22,8 @@ export interface BotConfigReaderOptions {
 
 export interface ReadReviewBotConfigOptions {
   reviewRepoPath?: string;
+  reviewRepoSha?: string;
+  repoSources?: readonly Pick<ApiSurfaceRepoInput, 'fullName' | 'worktreePath' | 'sha'>[];
 }
 
 export class BotConfigReader {
@@ -39,11 +41,20 @@ export class BotConfigReader {
     const reviewRepoKey = repoKey(reviewRepo);
     const repos = await Promise.all(
       product.repos.map(async (repo) => {
+        const source = options.repoSources?.find(
+          (source) => source.fullName.toLowerCase() === repoKey(repo),
+        );
+        if (options.repoSources !== undefined && source === undefined) {
+          throw new Error(`Pinned source is missing for ${repo.fullName}`);
+        }
         const root =
-          repoKey(repo) === reviewRepoKey && options.reviewRepoPath !== undefined
+          source?.worktreePath ??
+          (repoKey(repo) === reviewRepoKey && options.reviewRepoPath !== undefined
             ? options.reviewRepoPath
-            : await this.#repoPath(repo);
-        return await readRepoBotConfig(repo, root);
+            : await this.#repoPath(repo));
+        const sha =
+          source?.sha ?? (repoKey(repo) === reviewRepoKey ? options.reviewRepoSha : undefined);
+        return await readRepoBotConfig(repo, root, sha);
       }),
     );
     const reviewedConfig = repos.find((repoConfig) => repoKey(repoConfig.repo) === reviewRepoKey);
@@ -56,13 +67,17 @@ export class BotConfigReader {
   }
 }
 
-async function readRepoBotConfig(repo: RepoConfig, root: string): Promise<RepoBotConfig> {
-  const botDir = join(root, '.bot');
+async function readRepoBotConfig(
+  repo: RepoConfig,
+  root: string,
+  sha?: string,
+): Promise<RepoBotConfig> {
+  const snapshot = await createRepoFileSnapshot(root, sha);
   const [rules, productRules, agentsYaml, ignoreGitignore] = await Promise.all([
-    readOptionalBotFile(root, join(botDir, 'rules.md')),
-    readOptionalBotFile(root, join(botDir, 'product-rules.md')),
-    readOptionalBotFile(root, join(botDir, 'agents.yaml')),
-    readOptionalBotFile(root, join(botDir, 'ignore.gitignore')),
+    readOptionalBotFile(snapshot, '.bot/rules.md'),
+    readOptionalBotFile(snapshot, '.bot/product-rules.md'),
+    readOptionalBotFile(snapshot, '.bot/agents.yaml'),
+    readOptionalBotFile(snapshot, '.bot/ignore.gitignore'),
   ]);
 
   return {
@@ -74,26 +89,17 @@ async function readRepoBotConfig(repo: RepoConfig, root: string): Promise<RepoBo
   };
 }
 
-async function readOptionalBotFile(root: string, path: string): Promise<string | null> {
-  let contents: string;
+async function readOptionalBotFile(
+  snapshot: RepoFileSnapshot,
+  path: string,
+): Promise<string | null> {
+  let contents: string | null;
   try {
-    // PR-owned symlinks must not turn host-side context reads into credential
-    // reads outside the checkout, before the Agent sandbox can protect them.
-    const [repoRoot, resolvedPath] = await Promise.all([realpath(root), realpath(path)]);
-    const fromRoot = relative(repoRoot, resolvedPath);
-    if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
-      throw new Error('.bot files must not resolve outside the repository');
-    }
-    if (!(await stat(resolvedPath)).isFile()) {
-      throw new Error('.bot entries must be a regular file');
-    }
-    contents = await readFile(resolvedPath, 'utf8');
+    contents = await snapshot.readText(path);
   } catch (error) {
-    if (isNotFound(error)) {
-      return null;
-    }
     throw new Error(`could not read ${path}: ${describeError(error)}`);
   }
+  if (contents === null) return null;
   const normalized = contents.replace(/\r\n/g, '\n').trim();
   return normalized.length === 0 ? null : normalized;
 }
@@ -119,15 +125,6 @@ function mergeProductRules(repos: readonly RepoBotConfig[]): string | null {
 
 function repoKey(repo: Pick<RepoConfig, 'owner' | 'name'>): string {
   return `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
-}
-
-function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'ENOENT'
-  );
 }
 
 function describeError(error: unknown): string {

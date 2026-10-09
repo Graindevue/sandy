@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { mutation } from './_generated/server.js';
+import { mutation } from './serviceFunctions.js';
 import { agentRunStatus, agentRunUsage, crossRepoSearchRationale } from './validators.js';
 
 /** Record the terminal outcome of one Agent execution within a ReviewJob. */

@@ -30,11 +30,7 @@ const extractor: ApiSurfaceExtractor = {
       }
 
       for (const entrypoint of entrypoints) {
-        const resolved = await resolveExistingEntryPath(
-          context.repo.worktreePath,
-          pkg.dir,
-          entrypoint.path,
-        );
+        const resolved = await resolveExistingEntryPath(context.readFile, pkg.dir, entrypoint.path);
         if (resolved === null) {
           continue;
         }

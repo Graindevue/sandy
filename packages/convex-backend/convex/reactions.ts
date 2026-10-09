@@ -1,8 +1,9 @@
 import type { ReactionKind } from '@sandy/shared-types';
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server.js';
+import { internalQuery } from './_generated/server.js';
 import { clampLimit } from './limits.js';
 import { type RecentArchetypeReaction, recentArchetypeReactions } from './reactionEvidence.js';
+import { mutation } from './serviceFunctions.js';
 import { reactionKind } from './validators.js';
 
 const DEFAULT_RECENT_REACTION_LIMIT = 50;
@@ -29,11 +30,21 @@ export const recordReaction = mutation({
 });
 
 /** Recent feedback signals attached to Findings in one Archetype. */
-export const recentByArchetype = query({
+export const recentByArchetype = internalQuery({
   args: {
     archetypeId: v.id('archetypes'),
     limit: v.optional(v.number()),
   },
+  returns: v.array(
+    v.object({
+      _id: v.id('reactions'),
+      _creationTime: v.number(),
+      findingId: v.id('findings'),
+      kind: reactionKind,
+      replyText: v.optional(v.string()),
+      findingSummary: v.string(),
+    }),
+  ),
   handler: async (ctx, { archetypeId, limit }): Promise<RecentArchetypeReaction[]> => {
     const resolvedLimit = clampLimit(
       limit,

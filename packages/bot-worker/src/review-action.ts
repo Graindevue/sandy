@@ -2,7 +2,6 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { api } from '@sandy/convex-backend/api';
-import { ConvexHttpClient } from 'convex/browser';
 import { BotConfigReader } from './config/bot-config-reader.js';
 import { ConfigLoader } from './config/loader.js';
 import { defaultCloneBaseDir, defaultConfigLoaderOptions } from './config/paths.js';
@@ -16,6 +15,7 @@ import { GitHubAppClient } from './github/app-client.js';
 import type { PullRequestFacts, RepoRef } from './github/types.js';
 import { disabledArchetypeAssigner } from './learning/archetype-assigner.js';
 import { ConvexSink } from './state/convex-sink.js';
+import { ReviewServiceClient } from './state/review-service-client.js';
 import { CodexExecRunner, type ReviewTestMode } from './worker/codex-exec-runner.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
 import { PullRequestPoster } from './worker/poster.js';
@@ -100,9 +100,7 @@ export async function runReviewAction(
   assertReviewablePullRequest(config.repository, pr);
   signal?.throwIfAborted();
 
-  const client = new ConvexHttpClient(config.convexUrl);
-  // Existing public Convex mutations work with HTTP clients; no reactive client
-  // or deployment change is required for a one-shot Actions invocation.
+  const client = new ReviewServiceClient(config.convexUrl, process.env);
   await client.mutation(api.products.syncProduct, {
     slug: configured.product.slug,
     name: configured.product.name,
@@ -193,8 +191,15 @@ export async function runReviewAction(
     },
     resolveAgent: (repo, key) => resolveConfiguredAgent(loader, repo, key),
     resolveAgents: (repo) => resolveConfiguredAgents(loader, repo),
-    resolveReviewBotConfig: ({ repo, worktreePath }) =>
-      resolveReviewBotConfig(loader, botConfigReader, repo, worktreePath),
+    resolveReviewBotConfig: ({ context, repo, worktreePath, repoSources }) =>
+      resolveReviewBotConfig(
+        loader,
+        botConfigReader,
+        repo,
+        worktreePath,
+        worktreePath === undefined ? undefined : context.job.headSha,
+        repoSources,
+      ),
   });
   const result = await executor.executeClaimedJob(jobId);
   const status = await store.getReviewJobStatus(jobId);

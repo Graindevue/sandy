@@ -5,15 +5,23 @@ is) and `CONTEXT.md` (domain glossary).
 
 ## Branching & PRs
 
-- Branch feature work from **`main`** (default / production), using
+- Branch feature work from **`staging`** (integration), using
   `phase-N/<slug>` names.
-- Open feature PRs against **`main`**.
+- Open feature PRs against **`staging`**.
+- Promote `staging` to **`main`** (production) through a separate release PR
+  reviewed by a maintainer.
 
 ## Code review
 
 Review feature work locally and pass lint, type-check, and tests before opening
-a PR. GitHub Actions CI checks PRs to `main` and pushes to `main`. A maintainer
+a PR. GitHub Actions CI checks PRs and pushes to `staging` and `main`.
+CodeRabbit reviews feature and release PRs using `.coderabbit.yaml`; a maintainer
 reviews each PR before merge.
+
+Use [coderabbit-review](.agents/skills/coderabbit-review/SKILL.md) to request and
+verify a review. Public repositories with fewer than 10 stars require manual
+review requests, including after pushes. A successful status can mean the review
+was skipped; verify a completed review of the current head and its findings.
 
 ## Runtime
 
