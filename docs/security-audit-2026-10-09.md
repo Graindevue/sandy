@@ -2,7 +2,7 @@
 
 No confirmed credential leak was found in the audited public contents. The review did find a high-priority backend authorization vulnerability, a reproducible host file-read race, vulnerable dependency versions, and published personal/deployment metadata. These findings do not establish that anyone has exploited the service.
 
-The most urgent action is to authenticate and authorize the deployed Convex functions. Making the GitHub repository private again would not fix an independently reachable Convex backend.
+The most urgent remaining action is to release and activate the prepared Convex authorization fix. Making the GitHub repository private again would not fix an independently reachable Convex backend.
 
 ## Remediation follow-up
 
@@ -14,7 +14,9 @@ The fixes are prepared from public `main` at `c1eaf919e7f0704335516c579f35ea5959
 | F2 | Manifest, bot rules and agent selection read immutable Git blobs at each pinned repository SHA. Context capture finishes before dependency scripts execute. File and ancestor swap regressions pass. | Active after the caller adopts the corrected Sandy revision. |
 | F3 | Direct and transitive packages are patched. Full and production dependency audits report zero advisories. | Active in checkouts using the updated lockfile; release the source pin to update reviews. |
 | F4 | Live GitHub secret scanning, push protection, dependency alerts, security updates and private vulnerability reporting are enabled. New CI scans full history with a checksum-verified scanner and audits dependencies; local staged scanning and credential ignores are added. | Repository settings are active. CI and Dependabot configuration activate when merged. GitHub's additional non-provider and validity flags remain disabled: repository updates ignored them, and organization configuration required an unavailable `admin:org` token scope. Gitleaks supplies an independent generic-secret check. |
-| F6 | An active ruleset requires PR review and passing CI for main and staging, and prevents force pushes and deletion. Administrator bypass is limited to PRs. Workflow action references are pinned to full SHAs. | Branch rules are active; source changes and additional required checks are validated in the remediation PR. |
+| F6 | An active ruleset requires PR review and all four CI/security checks for main and staging, and prevents force pushes and deletion. Administrator bypass is limited to PRs. Repository Actions policy enforces full SHA pins and permits only GitHub-owned actions and `pnpm/action-setup`. | Settings are active and verified through the API. Older branches must adopt the new workflows and pins before their PRs can satisfy the gates. |
+
+Reviewable changes are in [Sandy PR #7](https://github.com/Graindevue/sandy/pull/7) and [the caller's OIDC permission PR #739](https://github.com/Graindevue/graindevue/pull/739), both targeting `staging`. The caller change adds job-scoped `id-token: write`; it does not update the active Sandy source pin. The maintainer-reviewed release required by `AGENTS.md` remains the activation gate. No backend code has been redeployed and the current caller still uses the audited source revision, so the live F1/F2 vulnerabilities remain until the coordinated rollout.
 
 Deployment discovery found **40 public functions on the linked development deployment**, whose URL matches the local worker configuration. The project's production deployment has no functions. Do not blindly deploy with `--prod`: first confirm which endpoint the caller's encrypted `CONVEX_URL` actually selects. Deployment identifiers and URLs are intentionally omitted here.
 
@@ -25,10 +27,12 @@ F5 privacy/history changes are outside the requested high, medium, dependency an
 Remediation validation:
 
 - Lint, type checks and the worker/shared-types/manifest TypeScript builds pass.
-- **393 Vitest tests** and **17 Actions/scanner tests** pass locally. Two native Linux tests are skipped on macOS; the new Ubuntu job requires the credential-fixture test to actually execute and pass.
+- **393 Vitest tests** and **17 Actions/scanner tests** pass locally. Two native Linux tests are skipped on macOS. All four Ubuntu CI checks pass, including actual execution of the hostile credential-fixture probe through the native sandbox and its never-skip gate. Fresh-checkout CI also verifies tests without prebuilt local package output.
 - Both full and production `pnpm audit` report **zero advisories**.
 - An isolated Convex push regenerated the committed types. Actual HTTP calls verified anonymous denial, authorized reads and writes, and rejection of wrong audience, expired or invalid signatures, repository/workflow/environment mismatches, wrong events and retries. Signed test tokens used a disposable local JWKS, then the real GitHub provider was restored and pushed again. No production data was used.
 - Staged files and all locally fetched history pass completely redacted Gitleaks scans.
+
+For activation, first confirm the caller's encrypted `CONVEX_URL`, let active reviews finish, release both reviewed changes, and coordinate the authenticated backend deployment with the caller's new immutable Sandy source pin. Verify anonymous HTTP rejection and one authorized review against the actual endpoint before considering F1/F2 closed in operation.
 
 ## Scope and evidence
 
@@ -164,4 +168,4 @@ Validation completed:
 
 No exposed credential was identified that this audit establishes needs rotation. If an independently confirmed credential exposure is found, revoke/rotate it before considering history removal; GitHub cautions that rewrites cannot remove copies already cloned elsewhere. [GitHub sensitive-data removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
 
-This is a repository exposure and code audit, not proof that no breach occurred. Production Convex access logs, private caller runtime logs, GitHub App activity, and identity-provider credential-use logs were not inspected. Deleted/unreferenced GitHub caches, third-party clones, masked log values, and secrets in unusual encodings can also escape the available evidence. Runtime findings apply to the pinned public main revision; deployments pinned to a different revision need matching validation.
+This is a repository exposure and code audit, not proof that no breach occurred. The original audit did not inspect production Convex access logs, private caller runtime logs, GitHub App activity, or identity-provider credential-use logs. The remediation follow-up inspected the limited backend execution records described above; they do not identify callers. Deleted/unreferenced GitHub caches, third-party clones, masked log values, and secrets in unusual encodings can also escape the available evidence. Runtime findings apply to the pinned public main revision; deployments pinned to a different revision need matching validation.

@@ -60,8 +60,13 @@ isolation, and read-only shared Git metadata. It makes no LLM request and needs
 no login or consumer repository access. A skipped probe fails the check.
 
 Keep GitHub secret scanning, push protection, dependency alerts, and automatic
-security updates enabled in repository settings. Keep branch rules requiring CI
-and PR review, and prevent force pushes and branch deletion. Security updates
+security updates enabled in repository settings. Keep branch rules requiring PR
+review and all four checks: `Lint, type-check & test`, `Secret scanning`,
+`Dependency audit`, and `Native Linux sandbox`. Prevent force pushes and branch
+deletion; administrator bypass should apply only through a PR. Require full
+commit SHA pins in the Actions repository policy, and allow only GitHub-owned
+actions and `pnpm/action-setup`. Older branches must adopt these workflows and
+pins before their PRs can satisfy the checks. Security updates
 for the default branch still need a release through the integration workflow;
 do not leave a fixed version only on an unmerged branch.
 
