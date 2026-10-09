@@ -7,7 +7,7 @@ import type { AgentEffort, AgentVendor } from '@sandy/shared-types';
  */
 export const VENDOR_EFFORTS: Record<AgentVendor, readonly AgentEffort[]> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh'],
+  codex: ['low', 'medium', 'high', 'xhigh', 'max'],
   copilot: ['low', 'medium', 'high'],
   cursor: [],
 };

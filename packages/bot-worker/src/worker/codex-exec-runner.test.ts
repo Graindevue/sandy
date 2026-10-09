@@ -239,11 +239,14 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
   });
 
-  it('reviews the actual PR diff in one invocation and records final-message usage without double-counting cached input', async () => {
+  it.each([
+    'xhigh',
+    'max',
+  ] as const)('reviews the actual PR diff at %s effort and records final-message usage without double-counting cached input', async (effort) => {
     const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
-      if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
+      if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes(${JSON.stringify(`model_reasoning_effort="${effort}"`)})) throw new Error('Wrong model options');
       const shellPolicy = args.find(value => value.startsWith('shell_environment_policy.set='));
       const path = await import('node:path');
       const turboCache = process.env.TURBO_CACHE_DIR;
@@ -261,6 +264,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       process.stdout.write(line.slice(0,23)); process.stdout.write(line.slice(23));
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:1000,cached_input_tokens:800,output_tokens:70,reasoning_output_tokens:20}}));
     `);
+    f.input.agent = { ...agent, effort };
 
     const runner = new CodexExecRunner({
       codexHome: f.codexHome,
@@ -278,17 +282,21 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     });
   });
 
-  it('resumes only the explicit review thread once and adds both turns of usage', async () => {
+  it.each([
+    'xhigh',
+    'max',
+  ] as const)('preserves %s effort when resuming only the explicit review thread and adds both turns of usage', async (effort) => {
     const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       const resumed = args.includes('resume');
-      if (args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options on exec or resume');
+      if (args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes(${JSON.stringify(`model_reasoning_effort="${effort}"`)})) throw new Error('Wrong model options on exec or resume');
       if (resumed && (!args.includes('review-thread') || args.includes('--last') || prompt.includes('PR diff:'))) throw new Error('Wrong resume context');
       process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'review-thread'}) + '\\n');
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:resumed ? ${JSON.stringify(findings)} : 'I inspected the change.'}}) + '\\n');
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:resumed ? {input_tokens:600,cached_input_tokens:500,output_tokens:10} : {input_tokens:1000,cached_input_tokens:800,output_tokens:70}}) + '\\n');
     `);
+    f.input.agent = { ...agent, effort };
     const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
     await expect(runner.runAgent(f.input)).resolves.toEqual({
       stdout: findings,
