@@ -22,6 +22,114 @@ import {
 } from './review-executor.test-support.js';
 
 describe('claimed ReviewJob concurrency', () => {
+  it.each([
+    { code: 'ENOSPC', agentKey: 'logic' },
+    { code: 'ENOSPC', agentKey: 'security' },
+    { code: 'EDQUOT', agentKey: 'security' },
+  ])(
+    'runs the complete roster serially after $code while preparing the $agentKey workspace',
+    async ({ code, agentKey }) => {
+      const paths: string[] = [];
+      const info = vi.fn();
+      let opened:
+        | { privatePaths: readonly string[] | undefined; cap: number; removed: string[] }
+        | undefined;
+      const fixture = managedReview({
+        logger: { info, warn: vi.fn() },
+        onOpen: (privatePaths, cap) => {
+          opened = { privatePaths, cap, removed: [...fixture.clones.removed] };
+        },
+        runAgent: async ({ worktreePath }) => {
+          paths.push(worktreePath);
+          return runnerOutput(findingsOutput([]));
+        },
+      });
+      const materialize = fixture.clones.materializeAgentWorkspace;
+      const copied: string[] = [];
+      fixture.clones.materializeAgentWorkspace = async (seed, key) => {
+        copied.push(key);
+        if (key === agentKey) {
+          throw Object.assign(new Error('no space left on device, copyfile node_modules'), {
+            code,
+          });
+        }
+        return materialize(seed, key);
+      };
+
+      expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 0 });
+
+      expect(copied).toEqual(agentKey === 'logic' ? ['logic'] : ['logic', 'security']);
+      expect(opened).toEqual({
+        privatePaths: [],
+        cap: 1,
+        removed: agentKey === 'logic' ? [] : ['acme/widget@job-1-logic'],
+      });
+      expect(paths).toEqual(['/tmp/worktree/acme/widget/job-1', '/tmp/worktree/acme/widget/job-1']);
+      expect(fixture.store.agentRuns.map(({ agentKey, status }) => ({ agentKey, status }))).toEqual(
+        [
+          { agentKey: 'logic', status: 'completed' },
+          { agentKey: 'security', status: 'completed' },
+        ],
+      );
+      expect(fixture.clones.removed).toHaveLength(agentKey === 'logic' ? 1 : 2);
+      expect(fixture.poster.results[0]?.summary).not.toContain('Partial Review');
+      expect(fixture.store.status).toBe('completed');
+      expect(info.mock.calls.flat().join('\n')).toContain('using serial mode');
+    },
+  );
+
+  it('does not start serial Agents when the prepared copies cannot be removed', async () => {
+    const starts: string[] = [];
+    const fixture = managedReview({
+      logger: { info: vi.fn(), warn: vi.fn() },
+      runAgent: async ({ agent }) => {
+        starts.push(agent.key);
+        return runnerOutput(findingsOutput([]));
+      },
+    });
+    const materialize = fixture.clones.materializeAgentWorkspace;
+    fixture.clones.materializeAgentWorkspace = async (seed, key) => {
+      if (key === 'security') throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return materialize(seed, key);
+    };
+    const remove = fixture.clones.removeWorktree.bind(fixture.clones);
+    fixture.clones.removeWorktree = vi
+      .fn(remove)
+      .mockRejectedValueOnce(new Error('cleanup denied'));
+
+    await fixture.executor.executeClaimedJob('job-1');
+
+    expect(starts).toEqual([]);
+    expect(fixture.store.agentRuns).toEqual([]);
+    expect(fixture.store.status).toBe('failed');
+    expect(fixture.store.failed[0]?.error).toContain('cleanup denied');
+    expect(fixture.poster.results).toEqual([]);
+  });
+
+  it('retains ordinary workspace preparation failures instead of switching to serial mode', async () => {
+    const starts: string[] = [];
+    const fixture = managedReview({
+      runAgent: async ({ agent }) => {
+        starts.push(agent.key);
+        return runnerOutput(findingsOutput([]));
+      },
+    });
+    const materialize = fixture.clones.materializeAgentWorkspace;
+    fixture.clones.materializeAgentWorkspace = async (seed, key) => {
+      if (key === 'security') throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      return materialize(seed, key);
+    };
+
+    expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 1 });
+
+    expect(starts).toEqual(['logic']);
+    expect(fixture.store.agentRuns.find(({ agentKey }) => agentKey === 'security')).toMatchObject({
+      status: 'failed',
+      error: 'Agent workspace could not be prepared: access denied',
+    });
+    expect(fixture.poster.results[0]?.summary).toContain('Partial Review');
+  });
+
   it('uses the shared prepared worktree in serial rollback without private copies', async () => {
     const paths: string[] = [];
     const fixture = managedReview({
@@ -456,7 +564,7 @@ function managedReview(options: {
   close?: () => Promise<void>;
   runAgent: ReviewAgentRuntime['runAgent'];
   agentTimeoutMs?: number;
-  onOpen?: (paths: readonly string[] | undefined) => void;
+  onOpen?: (paths: readonly string[] | undefined, cap: number) => void;
   logger?: ConstructorParameters<typeof ReviewExecutor>[0]['logger'];
 }) {
   const agents = options.agents ?? [logicAgent, securityAgent];
@@ -485,11 +593,11 @@ function managedReview(options: {
       runAgent: async () => {
         throw new Error('legacy runner must not be used');
       },
-      openReview: async ({ privateWorkspacePaths }) => {
-        options.onOpen?.(privateWorkspacePaths);
+      openReview: async ({ privateWorkspacePaths, maxConcurrency }) => {
+        options.onOpen?.(privateWorkspacePaths, maxConcurrency);
         return {
-          mode: (options.cap ?? 2) === 1 ? 'serial' : 'parallel',
-          maxConcurrency: options.cap ?? 2,
+          mode: maxConcurrency === 1 ? 'serial' : 'parallel',
+          maxConcurrency,
           ...(options.failureSignal === undefined ? {} : { failureSignal: options.failureSignal }),
           runAgent: options.runAgent,
           close: options.close ?? (async () => {}),
