@@ -93,7 +93,10 @@ The review job's `sandy-codex-session` concurrency group serializes Reviews
 with queueing and `cancel-in-progress: false`. Its review job selects the
 `sandy-codex` environment so the current auth is read after the lock is acquired.
 Skipped jobs for unrelated events do not acquire this lock.
-Agent Runs are also serial. Keep those settings together.
+Keep that whole-job lock and environment together for every workflow using the
+login. Agent execution defaults to serial. An explicitly enabled parallel
+Review uses one managed app-server, so thread concurrency does not remove the
+job-level authentication lock.
 
 The action validates a human requester with repository write access, an open PR,
 a private caller, and a same-repository PR head. Fork PRs are declined. Reviewed
@@ -111,6 +114,35 @@ Linux uses explicit filesystem grants for required system tools, writable review
 and temporary cache directories, and read-only shared Git metadata and sibling
 source. Native caches must also satisfy ownership checks on their ancestor
 directories, including those enforced by SWC.
+
+Optional dependency caching restores npm or pnpm download stores for the actual
+reviewed head, independently from Sandy's own build cache. The namespace includes
+Repo, OS/architecture, Node compatibility, exact package-manager pin, lockfile
+and relevant install configuration. Every preparation still runs a fresh frozen
+install; an unavailable cache is a cold install, and an unusable restored store
+permits one cold retry inside the preparation budget. Unsupported/unverified
+stores keep ordinary preparation. Installed trees, credentials, configuration
+and Review outputs are never published as cache artifacts.
+
+Parallel Reviews prepare dependencies once and copy private source/installation
+workspaces before starting the runtime. This complete inventory lets the
+sandbox deny each peer explicitly while allowing native tools to resolve their
+own directory ancestors. Each Agent owns its temporary files and writable
+caches; the prepared seed, sibling sources and Git metadata are read-only.
+Copy time and disk overhead count toward benchmark costs.
+
+The action accepts `agent-execution-mode: serial|parallel` and
+`max-agent-concurrency` (a positive integer; parallel default three, one selects
+serial). Environment equivalents for the entry point are
+`SANDY_REVIEW_EXECUTION_MODE` and `SANDY_REVIEW_AGENT_CONCURRENCY`. The effective
+mode/cap appears in phase logs. An incompatible pinned runtime falls back before
+any Agent starts; runtime failure during execution retains completed outcomes
+and fails affected work rather than starting another investigation.
+
+Keep the mode at `serial` until the
+[runtime and quality gates](../benchmarks/review-speed.md) pass on your Linux
+execution environment and dedicated login. Mock protocol tests cannot establish
+live authentication rotation, finding recall or production latency.
 
 ## 4. Choose Product configuration
 
@@ -130,6 +162,8 @@ reports this deferral. Optional repository variables:
 | `SANDY_CONFIG_PATH` | Trusted `bot.yaml` path relative to `GITHUB_WORKSPACE`. |
 | `SANDY_TEST_MODE` | `targeted` (default) leaves full-suite execution to CI; `suite` runs the root test script once before reviewers. |
 | `SANDY_TEST_TIMEOUT_SECONDS` | Full-suite budget in `suite` mode: 1–600 seconds, default 120. |
+| `SANDY_AGENT_EXECUTION_MODE` | `serial` (default) or `parallel`, gated by runtime/authentication and quality evidence. |
+| `SANDY_AGENT_CONCURRENCY` | Positive maximum selected Agents in parallel mode; default three, one selects serial. |
 
 The workflow template passes these test settings to the action's `test-mode`
 and `test-timeout-seconds` inputs. Existing callers that omit them use focused
