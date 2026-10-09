@@ -1,4 +1,4 @@
-import { parentDir, repoFileExists } from '../fs-utils.js';
+import { parentDir, RepoFileReadError } from '../fs-utils.js';
 
 export interface PackageJson {
   name?: string;
@@ -37,7 +37,7 @@ export async function loadPackageJsonFiles(context: {
 }
 
 export async function resolveExistingEntryPath(
-  root: string,
+  readFile: (path: string) => Promise<string | null>,
   packageDir: string,
   rawPath: string,
 ): Promise<string | null> {
@@ -45,7 +45,14 @@ export async function resolveExistingEntryPath(
   const base = packageDir.length === 0 ? withoutPrefix : `${packageDir}/${withoutPrefix}`;
   const candidates = entryCandidates(base);
   for (const candidate of candidates) {
-    if (await repoFileExists(root, candidate)) {
+    let contents: string | null;
+    try {
+      contents = await readFile(candidate);
+    } catch (error) {
+      if (error instanceof RepoFileReadError) continue;
+      throw error;
+    }
+    if (contents !== null) {
       return candidate;
     }
   }

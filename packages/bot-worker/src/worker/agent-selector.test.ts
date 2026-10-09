@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fixtureGit } from '../../../../test-support/git.js';
 import { selectAgentsForReview } from './agent-selector.js';
 
 let root: string;
@@ -111,6 +112,9 @@ async function writePackageJson(
 ): Promise<void> {
   await mkdir(repoRoot, { recursive: true });
   await writeFile(join(repoRoot, 'package.json'), JSON.stringify(packageJson, null, 2));
+  await fixtureGit(['init', '-q', repoRoot]);
+  await fixtureGit(['-C', repoRoot, 'add', '.']);
+  await fixtureGit(['-C', repoRoot, 'commit', '-q', '-m', 'Fixture']);
 }
 
 function agent(key: string, defaultEnabled: AgentDefinition['defaultEnabled']): AgentDefinition {

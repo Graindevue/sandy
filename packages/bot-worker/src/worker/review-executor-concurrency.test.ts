@@ -12,6 +12,7 @@ import {
   FakePoster,
   finding,
   findingsOutput,
+  fixtureExecutorOptions,
   logicAgent,
   makeContext,
   runnerOutput,
@@ -65,6 +66,7 @@ describe('claimed ReviewJob concurrency', () => {
     });
     let closed = false;
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: clones,
       poster,
@@ -399,6 +401,7 @@ function managedReview(options: {
     ) => ({ ...seed, path: `${seed.path}-${key}`, reviewJobId: `${seed.reviewJobId}-${key}` }),
   });
   const executor = new ReviewExecutor({
+    ...fixtureExecutorOptions,
     store,
     cloneManager: clones,
     poster,

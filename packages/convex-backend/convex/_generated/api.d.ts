@@ -22,6 +22,7 @@ import type * as reactions from "../reactions.js";
 import type * as reviewJobReaper from "../reviewJobReaper.js";
 import type * as reviewJobWrites from "../reviewJobWrites.js";
 import type * as reviewJobs from "../reviewJobs.js";
+import type * as serviceFunctions from "../serviceFunctions.js";
 import type * as suggestedRuleInference from "../suggestedRuleInference.js";
 import type * as suggestedRules from "../suggestedRules.js";
 import type * as validators from "../validators.js";
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   reviewJobReaper: typeof reviewJobReaper;
   reviewJobWrites: typeof reviewJobWrites;
   reviewJobs: typeof reviewJobs;
+  serviceFunctions: typeof serviceFunctions;
   suggestedRuleInference: typeof suggestedRuleInference;
   suggestedRules: typeof suggestedRules;
   validators: typeof validators;

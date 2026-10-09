@@ -90,6 +90,15 @@ Copy [.github/workflow-templates/sandy-review.yml](../../.github/workflow-templa
 into the caller as `.github/workflows/sandy-review.yml`, and merge its PR.
 The default branch supplies both the workflow and any trusted Product config.
 
+The review job grants `id-token: write` to authenticate to Convex with GitHub's
+short-lived job identity. Configure the three deployment trust values in
+[convex.md](./convex.md) for this immutable repository ID, workflow ref, and signed environment claim.
+The backend rejects other repositories, workflows, branches, environments,
+events, and reruns even when they carry a valid GitHub OIDC token. These tokens
+stay in the trusted runtime's memory and are never passed to Codex or package
+scripts. Existing caller workflows must adopt this permission along with a
+Sandy commit containing the authenticated client.
+
 The review job's `sandy-codex-session` concurrency group serializes Reviews
 with queueing and `cancel-in-progress: false`. Its review job selects the
 `sandy-codex` environment so the current auth is read after the lock is acquired.

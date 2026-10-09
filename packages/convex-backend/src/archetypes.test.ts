@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assignmentContext,
   assignOrCreateArchetype,
   persistAssignment,
 } from '../convex/archetypes.js';
+import { serviceAuth, stubReviewServiceConfig } from './serviceAuthTestUtils.js';
+
+beforeEach(stubReviewServiceConfig);
+afterEach(() => vi.unstubAllEnvs());
 
 describe('Archetype assignment', () => {
   it('clusters similar embeddings only within the same agent', async () => {
@@ -73,12 +77,14 @@ function invoke<T>(
 
 function fakeActionCtx(): {
   db: FakeDb;
+  auth: typeof serviceAuth;
   runMutation: RunFunction;
   runQuery: RunFunction;
   vectorSearch: VectorSearch;
 } {
   const ctx = {
     db: new FakeDb(),
+    auth: serviceAuth,
     runQuery: async (_ref: unknown, args: Record<string, unknown>) => {
       return await assignmentContext._handler(ctx, args);
     },

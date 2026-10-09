@@ -285,6 +285,7 @@ export interface ResolveReviewBotConfigInput {
   context: ReviewJobContext;
   repo: RepoForWorktree;
   worktreePath?: string;
+  repoSources?: readonly ApiSurfaceRepoInput[];
 }
 
 export interface ReviewExecutorOptions {
@@ -405,33 +406,47 @@ export class ReviewExecutor {
       worktrees.push(...workspace.worktrees);
       await this.#store.recordSiblingShas(jobId, workspace.siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      // Manifest build and dependency install are independent of each other,
-      // so they run concurrently. allSettled keeps the slower one from being
-      // orphaned mid-flight (and rejecting unhandled) when the other throws.
-      const [manifestSettled, installSettled] = await Promise.allSettled([
+      // Capture all host-side context and Agent selection before running any
+      // reviewed scripts. Scripts may replace the checkout's files/directories;
+      // the context must remain tied to the pinned source, never those writes.
+      const [manifestSettled, botConfigSettled] = await Promise.allSettled([
         this.#manifestBuilder === null
           ? Promise.resolve(undefined)
           : this.#runPhase(jobId, 'API surface manifest', () =>
               this.#buildAndRecordManifest(context, workspace.manifestRepos),
             ),
+        this.#resolveReviewBotConfig({
+          context,
+          repo,
+          worktreePath: workspace.prWorktree.path,
+          repoSources: workspace.manifestRepos,
+        }),
+      ]);
+      if (manifestSettled.status === 'rejected') {
+        throw manifestSettled.reason;
+      }
+      if (botConfigSettled.status === 'rejected') {
+        throw botConfigSettled.reason;
+      }
+      const manifest = manifestSettled.value;
+      const reviewBotConfig = botConfigSettled.value;
+      const agents = await this.#selectAgents(
+        context,
+        repo,
+        workspace.manifestRepos,
+        reviewBotConfig,
+      );
+      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
+      const dependencyInstall =
         this.#runner.installDependencies === undefined
-          ? Promise.resolve(undefined)
-          : this.#runPhase(jobId, 'Dependency preparation', () =>
+          ? undefined
+          : await this.#runPhase(jobId, 'Dependency preparation', () =>
               this.#installWorkspaceDependencies(
                 workspace.prWorktree.path,
                 `${context.repo.owner}/${context.repo.name}`,
                 cancellationSignal,
               ),
-            ),
-      ]);
-      if (manifestSettled.status === 'rejected') {
-        throw manifestSettled.reason;
-      }
-      if (installSettled.status === 'rejected') {
-        throw installSettled.reason;
-      }
-      const manifest = manifestSettled.value;
-      const dependencyInstall = installSettled.value;
+            );
       const testSummary = reviewTestSummary(dependencyInstall);
       this.#logger.info?.(testSummary);
       if (
@@ -449,19 +464,6 @@ export class ReviewExecutor {
         );
       }
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const reviewBotConfig = await this.#resolveReviewBotConfig({
-        context,
-        repo,
-        worktreePath: workspace.prWorktree.path,
-      });
-      await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-
-      const agents = await this.#selectAgents(
-        context,
-        repo,
-        workspace.manifestRepos,
-        reviewBotConfig,
-      );
       this.#logProgress(
         jobId,
         `Selected Agent order: ${agents.map((agent) => JSON.stringify(agent.key)).join(' -> ') || 'none'}.`,
@@ -1125,6 +1127,7 @@ function agentSelectionRepo(
   const repo: AgentSelectionRepo = {
     fullName: manifestRepo.fullName,
     worktreePath: manifestRepo.worktreePath,
+    sha: manifestRepo.sha,
   };
   const agentsYaml = repoAgentsYaml(reviewBotConfig, manifestRepo.fullName);
   if (agentsYaml !== undefined) {

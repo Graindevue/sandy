@@ -18,6 +18,10 @@
     "type-check": "pnpm -r type-check",
     "test": "vitest run",
     "test:watch": "vitest",
+    "security:setup": "node scripts/install-gitleaks.mjs",
+    "security:scan": "bash scripts/check-secrets.sh",
+    "security:scan:staged": "bash scripts/check-secrets.sh --staged",
+    "security:audit": "pnpm audit",
     "review": "pnpm --filter @sandy/bot-worker review"
   },
   "devDependencies": {
@@ -25,6 +29,6 @@
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^6.0.0",
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.11"
   }
 }

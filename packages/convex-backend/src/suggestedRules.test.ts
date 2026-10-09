@@ -1,5 +1,5 @@
 import type { SuggestedRuleStatus } from '@sandy/shared-types';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recentByArchetype } from '../convex/reactions.js';
 import {
   candidatesForReactionInference,
@@ -14,6 +14,10 @@ import {
   subscribePositivePromotions,
   subscribeSuppressionPromotions,
 } from '../convex/suggestedRules.js';
+import { serviceAuth, stubReviewServiceConfig } from './serviceAuthTestUtils.js';
+
+beforeEach(stubReviewServiceConfig);
+afterEach(() => vi.unstubAllEnvs());
 
 const originalFetch = globalThis.fetch;
 const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -422,8 +426,8 @@ function invoke<T>(
   return fn._handler(ctx, args) as Promise<T>;
 }
 
-function fakeCtx(): { db: FakeDb } {
-  return { db: new FakeDb() };
+function fakeCtx(): { db: FakeDb; auth: typeof serviceAuth } {
+  return { db: new FakeDb(), auth: serviceAuth };
 }
 
 function fakeActionCtx(): ReturnType<typeof fakeCtx> & {

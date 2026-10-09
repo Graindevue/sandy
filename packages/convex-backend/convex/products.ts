@@ -1,5 +1,5 @@
 import { v } from 'convex/values';
-import { mutation } from './_generated/server.js';
+import { mutation } from './serviceFunctions.js';
 
 /**
  * Reconcile one Product and its Repos from `.config/bot.yaml` into Convex. This

@@ -1,0 +1,11 @@
+# Reviewed false positives: fixed dependency-install cache identifiers in the
+# benchmark on phase-4/review-performance. These are not authentication values.
+# Each exception is bound to an immutable commit, file, rule, and line; it cannot
+# suppress a credential added to the same file or line in a later commit.
+80e4ed10ae0084544b610c0a1e918a367ca314cf:scripts/review-benchmark.mjs:generic-api-key:236
+80e4ed10ae0084544b610c0a1e918a367ca314cf:scripts/review-benchmark.mjs:generic-api-key:287
+# Identical benchmark blob after the performance branch was rebased.
+ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:236
+ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:287
+# The credential-free preparation probe reuses the first reviewed cache identifier.
+280a0ecf2b62b75fc87077ae9460fee9f8409ee1:scripts/review-preparation-probe.mjs:generic-api-key:125

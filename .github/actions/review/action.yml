@@ -12,7 +12,7 @@ inputs:
     description: Sandy GitHub App PEM private key.
     required: true
   convex-url:
-    description: Convex deployment URL.
+    description: Convex deployment URL configured to trust this workflow's GitHub OIDC identity; requires id-token write permission.
     required: true
   codex-auth-json:
     description: CODEX_AUTH_JSON from the sandy-codex GitHub Environment; never a repository secret.

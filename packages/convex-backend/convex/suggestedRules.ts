@@ -1,16 +1,18 @@
 import { v } from 'convex/values';
-import { api, internal } from './_generated/api.js';
+import { doc } from 'convex-helpers/validators';
+import { internal } from './_generated/api.js';
 import type { Doc, Id } from './_generated/dataModel.js';
 import {
   internalAction,
+  internalMutation,
   internalQuery,
   type MutationCtx,
-  mutation,
-  query,
 } from './_generated/server.js';
 import { clampLimit } from './limits.js';
 import { type RecentArchetypeReaction, recentArchetypeReactions } from './reactionEvidence.js';
 import { insertPendingReviewJob } from './reviewJobWrites.js';
+import schema from './schema.js';
+import { mutation, query } from './serviceFunctions.js';
 import {
   draftSuggestedRuleDescription,
   evidenceMeetsSuggestedRuleThreshold,
@@ -21,7 +23,7 @@ import {
   reactionForInference,
   scoreReactionEvidence,
 } from './suggestedRuleInference.js';
-import { pullRequestState, suggestedRuleStatus } from './validators.js';
+import { findingAnchor, pullRequestState, suggestedRuleStatus } from './validators.js';
 
 export { draftSuggestedRuleDescription, scoreReactionEvidence } from './suggestedRuleInference.js';
 
@@ -56,6 +58,7 @@ export const subscribePending = query({
   args: {
     limit: v.optional(v.number()),
   },
+  returns: v.array(doc(schema, 'suggestedRules')),
   handler: async (ctx, { limit }) => {
     const boundedLimit = clampLimit(limit, DEFAULT_PENDING_LIMIT, MAX_PENDING_LIMIT);
     return await ctx.db
@@ -71,6 +74,7 @@ export const subscribeSuppressionPromotions = query({
   args: {
     limit: v.optional(v.number()),
   },
+  returns: v.array(doc(schema, 'suggestedRules')),
   handler: async (ctx, { limit }) => {
     return await ctx.db
       .query('suggestedRules')
@@ -86,6 +90,30 @@ export const subscribePositivePromotions = query({
     limit: v.optional(v.number()),
     exemplarLimit: v.optional(v.number()),
   },
+  returns: v.array(
+    v.object({
+      _id: v.id('suggestedRules'),
+      description: v.string(),
+      sourceArchetypeId: v.id('archetypes'),
+      archetypeLabel: v.string(),
+      targetRepo: v.object({
+        _id: v.id('repos'),
+        owner: v.string(),
+        name: v.string(),
+        fullName: v.string(),
+        defaultBranch: v.string(),
+      }),
+      exemplars: v.array(
+        v.object({
+          findingId: v.id('findings'),
+          summary: v.string(),
+          evidence: v.string(),
+          category: v.string(),
+          anchor: findingAnchor,
+        }),
+      ),
+    }),
+  ),
   handler: async (ctx, { limit, exemplarLimit }) => {
     const rules = await ctx.db
       .query('suggestedRules')
@@ -151,7 +179,7 @@ export const subscribePositivePromotions = query({
 });
 
 /** Create a suppression SuggestedRule once reaction evidence crosses the threshold. */
-export const createIfEvidenceThresholdMet = mutation({
+export const createIfEvidenceThresholdMet = internalMutation({
   args: {
     sourceArchetypeId: v.id('archetypes'),
     description: v.string(),
@@ -304,7 +332,7 @@ export const inferSuggestedRulesFromReactions = internalAction({
     for (const candidate of candidates) {
       try {
         const recentReactions: RecentArchetypeReaction[] = await ctx.runQuery(
-          api.reactions.recentByArchetype,
+          internal.reactions.recentByArchetype,
           {
             archetypeId: candidate.archetypeId,
             limit: reactionLimit ?? DEFAULT_RECENT_REACTION_LIMIT,
@@ -320,7 +348,7 @@ export const inferSuggestedRulesFromReactions = internalAction({
           : fallbackDraftDescription({ archetypeLabel: candidate.label, reactions });
 
         const suggestedRuleId: Id<'suggestedRules'> | null = await ctx.runMutation(
-          api.suggestedRules.createIfEvidenceThresholdMet,
+          internal.suggestedRules.createIfEvidenceThresholdMet,
           {
             sourceArchetypeId: candidate.archetypeId,
             description,

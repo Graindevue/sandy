@@ -1,4 +1,4 @@
-import type { AgentDefinition } from '@sandy/shared-types';
+import type { AgentDefinition, ApiSurfaceRepoInput } from '@sandy/shared-types';
 import type { RepoForWorktree } from '../worker/review-executor.js';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 import { applyProductRuntimeOverride } from './loader.js';
@@ -42,6 +42,8 @@ interface ReviewBotConfigReader {
     repo: RepoConfig,
     options?: {
       reviewRepoPath?: string;
+      reviewRepoSha?: string;
+      repoSources?: readonly Pick<ApiSurfaceRepoInput, 'fullName' | 'worktreePath' | 'sha'>[];
     },
   ): Promise<ReviewBotContext>;
 }
@@ -85,16 +87,20 @@ export async function resolveReviewBotConfig(
   reader: ReviewBotConfigReader,
   repo: RepoForWorktree,
   worktreePath?: string,
+  sha?: string,
+  repoSources?: readonly Pick<ApiSurfaceRepoInput, 'fullName' | 'worktreePath' | 'sha'>[],
 ): Promise<ReviewBotContext> {
   const resolved = loader.resolveForRepo(repo.owner, repo.name);
   if (resolved === null) {
     return EMPTY_REVIEW_BOT_CONTEXT;
   }
   const options =
-    worktreePath === undefined
+    worktreePath === undefined && repoSources === undefined
       ? undefined
       : {
-          reviewRepoPath: worktreePath,
+          ...(worktreePath === undefined ? {} : { reviewRepoPath: worktreePath }),
+          ...(sha === undefined ? {} : { reviewRepoSha: sha }),
+          ...(repoSources === undefined ? {} : { repoSources }),
         };
   return await reader.readReviewBotConfig(resolved.product, resolved.repo, options);
 }

@@ -1,6 +1,8 @@
 import { v } from 'convex/values';
+import { doc } from 'convex-helpers/validators';
 import type { Id } from './_generated/dataModel.js';
-import { mutation, query } from './_generated/server.js';
+import schema from './schema.js';
+import { mutation, query } from './serviceFunctions.js';
 import { confidence, crossRepoReference, findingAnchor, severity } from './validators.js';
 
 const findingFields = {
@@ -72,6 +74,7 @@ export const markPosted = mutation({
 /** All Findings recorded for a PR, newest first. */
 export const listForPr = query({
   args: { pullRequestId: v.id('pullRequests') },
+  returns: v.array(doc(schema, 'findings')),
   handler: async (ctx, { pullRequestId }) => {
     return await ctx.db
       .query('findings')

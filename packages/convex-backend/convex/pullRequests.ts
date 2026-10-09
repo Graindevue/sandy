@@ -1,5 +1,7 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server.js';
+import { doc } from 'convex-helpers/validators';
+import schema from './schema.js';
+import { mutation, query } from './serviceFunctions.js';
 import { pullRequestState } from './validators.js';
 
 /**
@@ -77,6 +79,7 @@ export const upsert = mutation({
  */
 export const get = query({
   args: { repoId: v.id('repos'), number: v.number() },
+  returns: v.union(doc(schema, 'pullRequests'), v.null()),
   handler: async (ctx, { repoId, number }) => {
     return await ctx.db
       .query('pullRequests')

@@ -108,5 +108,13 @@ Repo-local Rules live in `.bot/rules.md`; Product Rules come from the union of
 `.bot/product-rules.md` in its Repos. They are reviewed-version context, not
 operator credentials or a choice of runtime provider.
 
+Sandy reads `.bot` files, API manifests, and framework dependencies from Git
+objects at the reviewed commit and the pinned sibling commits. Uncommitted and
+untracked files do not contribute to this context. Inputs must be Git checkout
+roots; Sandy fails closed instead of falling back to host filesystem reads.
+Tracked symlinks may resolve to another tracked file inside the same commit,
+but cannot read outside the repository. Context and Agent selection are captured
+before dependency installation or project tests can change the review worktree.
+
 Each Actions job loads config once. A default-branch config change applies to
 the next request; there is no persistent process to restart.

@@ -1,5 +1,4 @@
 import type { ApiSurfaceExtractor, JsonValue } from '@sandy/shared-types';
-import { readRepoText } from '../fs-utils.js';
 import { code, renderMarkdownTable } from '../markdown.js';
 import { loadPackageJsonFiles } from './package-json.js';
 
@@ -39,7 +38,7 @@ const extractor: ApiSurfaceExtractor = {
       }
     }
 
-    const lockfiles = await loadLockfiles(context.repo.worktreePath);
+    const lockfiles = await loadLockfiles(context.readFile);
     const entries: FrameworkVersionEntry[] = [...declared.entries()]
       .map(([packageName, entry]) => ({
         packageName,
@@ -66,11 +65,13 @@ const extractor: ApiSurfaceExtractor = {
 
 export default extractor;
 
-async function loadLockfiles(root: string): Promise<string[]> {
+async function loadLockfiles(
+  readFile: (path: string) => Promise<string | null>,
+): Promise<string[]> {
   const lockfiles = await Promise.all(
     ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'].map(async (path) => ({
       path,
-      text: await readRepoText(root, path),
+      text: await readFile(path),
     })),
   );
   return lockfiles.flatMap((lockfile) => (lockfile.text === null ? [] : [lockfile.text]));

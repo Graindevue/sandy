@@ -1,5 +1,9 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ApiSurfaceManifestBuildResult, Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
+import { fixtureGit } from '../../../../test-support/git.js';
 import { ReviewSupersededError } from './review-errors.js';
 import { ReviewExecutor } from './review-executor.js';
 import {
@@ -13,6 +17,8 @@ import {
   FakeRunner,
   finding,
   findingsOutput,
+  fixtureBotConfig,
+  fixtureExecutorOptions,
   logicAgent,
   makeContext,
   nextNow,
@@ -25,6 +31,76 @@ import {
 import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
+  it.each([
+    { name: 'no repo context', repos: undefined, expected: ['logic'] },
+    { name: 'empty repo context', repos: [], expected: ['logic'] },
+    {
+      name: 'unrelated repo context',
+      repos: [{ repo: { fullName: 'acme/other' }, agentsYaml: null }],
+      expected: ['logic'],
+    },
+    {
+      name: 'captured absence',
+      repos: [{ repo: { fullName: 'ACME/Widget' }, agentsYaml: null }],
+      expected: ['logic', 'security'],
+    },
+    {
+      name: 'captured overrides',
+      repos: [{ repo: { fullName: 'ACME/Widget' }, agentsYaml: 'disable: [logic]\n' }],
+      expected: ['security'],
+    },
+  ])('selects Agents from pinned config with $name', async ({ repos, expected }) => {
+    const root = await mkdtemp(join(tmpdir(), 'sandy-executor-config-'));
+    try {
+      await mkdir(join(root, '.bot'));
+      await writeFile(join(root, '.bot', 'agents.yaml'), 'disable: [security]\n');
+      await fixtureGit(['init', '-q', root]);
+      await fixtureGit(['-C', root, 'add', '.']);
+      await fixtureGit(['-C', root, 'commit', '-q', '-m', 'Pinned overrides']);
+      const { stdout } = await fixtureGit(['-C', root, 'rev-parse', 'HEAD']);
+      const sha = stdout.trim();
+      await writeFile(join(root, '.bot', 'agents.yaml'), 'disable: [logic]\n');
+      await fixtureGit(['-C', root, 'add', '.']);
+      await fixtureGit(['-C', root, 'commit', '-q', '-m', 'Later overrides']);
+
+      const context = makeContext({ agentKeys: ['logic', 'security'] });
+      context.job.headSha = sha;
+      context.pullRequest.headSha = sha;
+      const store = new FakeExecutionStore(context);
+      const cloneManager = new FakeCloneManager();
+      cloneManager.createWorktree = async (repo, request) => ({
+        repo,
+        reviewJobId: request.reviewJobId,
+        path: root,
+        sha: request.sha,
+      });
+      const runner = new FakeRunner(findingsOutput([]));
+      const executor = new ReviewExecutor({
+        store,
+        cloneManager,
+        poster: new FakePoster(),
+        archetypeAssigner: new FakeArchetypeAssigner(),
+        diffInspector: new FakeDiffInspector(42),
+        runner,
+        resolveAgent: (_repo, key) => (key === 'logic' ? logicAgent : securityAgent),
+        resolveReviewBotConfig: async () => ({
+          repoRules: null,
+          productRules: null,
+          ignorePatterns: [],
+          ...(repos === undefined ? {} : { repos }),
+        }),
+      });
+
+      await executor.executeClaimedJob('job-1');
+
+      expect(store.failed).toEqual([]);
+      expect(store.completed).toHaveLength(1);
+      expect(runner.calls.map((call) => call.agent.key)).toEqual(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('runs the Agent, persists findings, posts comments, and completes the job', async () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
@@ -32,11 +108,13 @@ describe('ReviewExecutor', () => {
     const diffInspector = new FakeDiffInspector(42);
     const runner = new FakeRunner(findingsOutput([finding], 'One issue.'), agentRunUsage);
     const botConfig = {
+      ...fixtureBotConfig,
       repoRules: '- Keep cache keys tenant-scoped.',
       productRules: '- API errors expose stable codes.',
       ignorePatterns: ['generated/**'],
     };
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -104,6 +182,7 @@ describe('ReviewExecutor', () => {
     const installCalls: { worktreePath: string; cacheKey?: string }[] = [];
     const agentInstalls: unknown[] = [];
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster: new FakePoster(),
@@ -133,11 +212,110 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
   });
 
+  it('captures manifest, rules, and Agent selection before reviewed dependency scripts begin', async () => {
+    const events: string[] = [];
+    const capturedRules = { ...fixtureBotConfig, repoRules: 'Pinned PR rules' };
+    let scriptsStarted = false;
+    const store = new FakeExecutionStore(makeContext());
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      resolveAgent: () => logicAgent,
+      resolveAgents: () => {
+        expect(scriptsStarted).toBe(false);
+        events.push('selection');
+        return [logicAgent];
+      },
+      resolveReviewBotConfig: async ({ worktreePath }) => {
+        expect(scriptsStarted).toBe(false);
+        if (worktreePath !== undefined) events.push('rules');
+        return { ...capturedRules };
+      },
+      manifestBuilder: {
+        buildManifest: async () => {
+          expect(scriptsStarted).toBe(false);
+          events.push('manifest');
+          return {
+            markdown: 'Pinned manifest',
+            structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+          };
+        },
+      },
+      runner: {
+        installDependencies: async () => {
+          scriptsStarted = true;
+          events.push('install');
+          capturedRules.repoRules = 'Poisoned mutable rules';
+          return { status: 'skipped', reason: 'No dependencies' };
+        },
+        runAgent: async ({ botConfig, apiSurfaceManifest }) => {
+          events.push('agent');
+          expect(botConfig?.repoRules).toBe('Pinned PR rules');
+          expect(apiSurfaceManifest).toBe('Pinned manifest');
+          return runnerOutput(findingsOutput([]));
+        },
+      },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(events).toEqual(['manifest', 'rules', 'selection', 'install', 'agent']);
+    expect(store.completed).toHaveLength(1);
+    expect(store.failed).toEqual([]);
+  });
+
+  it.each([
+    'manifest',
+    'rules',
+  ])('does not start reviewed scripts when %s capture fails', async (phase) => {
+    let installCalls = 0;
+    const store = new FakeExecutionStore(makeContext());
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      resolveAgent: () => logicAgent,
+      resolveReviewBotConfig: async ({ worktreePath }) => {
+        if (phase === 'rules' && worktreePath !== undefined) throw new Error('Invalid rules');
+        return fixtureBotConfig;
+      },
+      manifestBuilder: {
+        buildManifest: async () => {
+          if (phase === 'manifest') throw new Error('Invalid manifest');
+          return {
+            markdown: 'Manifest',
+            structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+          };
+        },
+      },
+      runner: {
+        installDependencies: async () => {
+          installCalls += 1;
+          return { status: 'skipped', reason: 'No dependencies' };
+        },
+        runAgent: async () => runnerOutput(findingsOutput([])),
+      },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(installCalls).toBe(0);
+    expect(store.failed).toHaveLength(1);
+  });
+
   it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
     const statusLines: string[] = [];
     const poster = new FakePoster();
     const diagnostics = `pnpm test exited 1.\nFIRST ERROR\n${'untrusted output\n'.repeat(1000)}LAST ERROR`;
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store: new FakeExecutionStore(makeContext()),
       cloneManager: new FakeCloneManager(),
       poster,
@@ -184,6 +362,7 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster,
@@ -206,8 +385,15 @@ describe('ReviewExecutor', () => {
     const reviewing = executor.executeClaimedJob('job-1');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(logs).toContain('Sandy ReviewJob job-1: API surface manifest started.');
-    expect(logs).toContain('Sandy ReviewJob job-1: Dependency preparation started.');
+    expect(logs).not.toContain('Sandy ReviewJob job-1: Dependency preparation started.');
     expect(logs.join('\n')).not.toContain('Agent "logic" started.');
+
+    manifest.resolve({
+      markdown: 'untrusted manifest',
+      structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(logs).toContain('Sandy ReviewJob job-1: Dependency preparation started.');
 
     install.resolve({
       status: 'installed',
@@ -221,21 +407,16 @@ describe('ReviewExecutor', () => {
     expect(logs).toContainEqual(
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
     );
-    expect(logs.join('\n')).not.toContain('Agent "logic" started.');
 
-    manifest.resolve({
-      markdown: 'untrusted manifest',
-      structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
-    });
     await reviewing;
 
     expect(logs).toEqual([
       'Sandy ReviewJob job-1: Workspace preparation started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Workspace preparation finished in \d+ms\.$/),
       'Sandy ReviewJob job-1: API surface manifest started.',
+      expect.stringMatching(/^Sandy ReviewJob job-1: API surface manifest finished in \d+ms\.$/),
       'Sandy ReviewJob job-1: Dependency preparation started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
-      expect.stringMatching(/^Sandy ReviewJob job-1: API surface manifest finished in \d+ms\.$/),
       'Full project test suite deferred to CI; reviewers may run focused verification.',
       'Sandy ReviewJob job-1: Selected Agent order: "logic" -> "security".',
       'Sandy ReviewJob job-1: Execution mode: serial (maximum 1 Agents).',
@@ -261,6 +442,7 @@ describe('ReviewExecutor', () => {
     const completedChecks: Array<Parameters<ReviewStatusCheckReporter['complete']>[0]> = [];
     const agentInstalls: unknown[] = [];
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster,
@@ -316,6 +498,7 @@ describe('ReviewExecutor', () => {
     let peakAgents = 0;
     const runnerCalls: string[] = [];
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -385,6 +568,7 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster,
@@ -434,6 +618,7 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster,
@@ -465,6 +650,7 @@ describe('ReviewExecutor', () => {
   it('records a failed Agent run without blocking other Agents from posting findings', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster: new FakePoster(),
@@ -508,6 +694,7 @@ describe('ReviewExecutor', () => {
   it('records timed_out when one Agent exceeds its execution cap', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager: new FakeCloneManager(),
       poster: new FakePoster(),
@@ -571,6 +758,7 @@ describe('ReviewExecutor', () => {
     let runnerInput: unknown;
     const manifestBuilds: unknown[] = [];
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -665,6 +853,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -705,6 +894,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -743,6 +933,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -774,6 +965,7 @@ describe('ReviewExecutor', () => {
     const cancellations = new AbortController();
     const runnerStarted = deferred<void>();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -810,6 +1002,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -848,6 +1041,7 @@ describe('ReviewExecutor', () => {
       return store.status;
     };
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,
@@ -883,6 +1077,7 @@ describe('ReviewExecutor', () => {
     };
     let runnerCalls = 0;
     const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
       store,
       cloneManager,
       poster,

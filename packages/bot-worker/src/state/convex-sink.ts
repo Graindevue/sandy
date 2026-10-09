@@ -86,9 +86,9 @@ export type UpsertPullRequestInputWithoutRepo = Omit<UpsertPullRequestInput, 're
  * expects (a Convex client convention — runtime ids are plain strings).
  */
 export class ConvexSink implements ReviewSink, ReactionCaptureStore, MergeStateStore {
-  readonly #client: ConvexHttpClient;
+  readonly #client: Pick<ConvexHttpClient, 'query' | 'mutation'>;
 
-  constructor(client: ConvexHttpClient) {
+  constructor(client: Pick<ConvexHttpClient, 'query' | 'mutation'>) {
     this.#client = client;
   }
 
