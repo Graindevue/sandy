@@ -5,17 +5,15 @@ is) and `CONTEXT.md` (domain glossary).
 
 ## Branching & PRs
 
-- Branch feature work from **`staging`** (integration), using
+- Branch feature work from **`main`** (default / production), using
   `phase-N/<slug>` names.
-- Open feature PRs against **`staging`**.
-- Promote `staging` to **`main`** (production) through a separate release PR
-  reviewed by a maintainer.
+- Open feature PRs against **`main`**.
 
 ## Code review
 
 Review feature work locally and pass lint, type-check, and tests before opening
-a PR. GitHub Actions CI checks PRs and pushes to `staging` and `main`.
-CodeRabbit reviews feature and release PRs using `.coderabbit.yaml`; a maintainer
+a PR. GitHub Actions CI checks PRs to `main` and pushes to `main`.
+CodeRabbit reviews feature PRs using `.coderabbit.yaml`; a maintainer
 reviews each PR before merge.
 
 Use [coderabbit-review](.agents/skills/coderabbit-review/SKILL.md) to request and
@@ -27,7 +25,9 @@ was skipped; verify a completed review of the current head and its findings.
 
 For runtime, auth, or trigger changes, read
 `docs/adr/0018-github-actions-codex-runtime.md` and `docs/setup/README.md`.
-Reviews and Codex Agent Runs are serialized around one dedicated CI auth stream.
+Reviews are serialized around one dedicated CI auth stream. Codex Agent Runs
+are serial by default; opt-in `parallel` mode runs independent Agents inside
+one managed runtime with one auth owner.
 `CODEX_AUTH_JSON` belongs to the `sandy-codex` environment, whose latest secret
 is loaded after the review job's concurrency lock. Embeddings remain disabled.
 

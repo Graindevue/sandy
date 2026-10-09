@@ -493,9 +493,85 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
   });
+
+  it('includes literal unusual filenames and changed files beyond the first diff chunk', async () => {
+    const f = await fixture(`
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt.includes('LITERAL_FILENAME_CONTENT')||!prompt.includes('FINAL_CHUNK_CONTENT'))throw new Error('Changed file omitted');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    await writeFile(
+      join(f.input.worktreePath, ':(exclude)review.ts'),
+      'LITERAL_FILENAME_CONTENT\n',
+    );
+    for (let index = 0; index < 101; index++)
+      await writeFile(
+        join(f.input.worktreePath, `changed-${String(index).padStart(3, '0')}.ts`),
+        index === 100 ? 'FINAL_CHUNK_CONTENT\n' : 'changed\n',
+      );
+    await exec('git', ['add', '.'], { cwd: f.input.worktreePath });
+    await exec('git', ['commit', '-m', 'many changed files'], { cwd: f.input.worktreePath });
+    f.input.pullRequest.headSha = (
+      await exec('git', ['rev-parse', 'HEAD'], { cwd: f.input.worktreePath })
+    ).stdout.trim();
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it.each([
+    false,
+    true,
+  ])('starts preparation with a protected directory while retaining child protection after a workspace grant (symlink: %s)', async (aliased) => {
+    const f = await fixture(`
+      const path = await import('node:path');
+      const profile = process.argv.find(value => value.startsWith('permissions.sandy='));
+      const cwd = process.argv[process.argv.indexOf('--cd') + 1];
+      const root = path.resolve(cwd, '..', '..');
+      const commandFiles = path.join(root, 'command-files');
+      const child = path.join(commandFiles, 'environment');
+      const deny = value => profile?.includes(JSON.stringify(value)+'="deny"');
+      if (!deny(commandFiles)) throw new Error('Command directory protection lost');
+      if (deny(child)) throw new Error('bwrap cannot create a child mask beneath a frozen denied directory');
+      if (!deny(path.join(root, 'workspaces', 'repo', 'private.key'))) throw new Error('Workspace grant reopened a protected child');
+    `);
+    const privateParent = join(f.root, 'workspaces');
+    f.input.worktreePath = join(privateParent, 'repo');
+    await exec(
+      'git',
+      ['worktree', 'add', '--detach', f.input.worktreePath, f.input.pullRequest.headSha],
+      { cwd: join(f.root, 'repo') },
+    );
+    const commandFiles = join(f.root, 'command-files');
+    await mkdir(commandFiles);
+    await writeFile(join(commandFiles, 'environment'), 'DISPOSABLE_COMMAND_CANARY');
+    await writeFile(join(f.input.worktreePath, 'private.key'), 'DISPOSABLE_PRIVATE_CANARY');
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ packageManager: 'npm@11.19.0' }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    if (aliased) {
+      const alias = join(f.root, 'workspaces-alias');
+      await symlink(privateParent, alias);
+      f.input.worktreePath = join(alias, 'repo');
+    }
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      protectedPaths: [
+        privateParent,
+        commandFiles,
+        join(commandFiles, 'environment'),
+        join(privateParent, 'repo', 'private.key'),
+      ],
+    });
+    const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+    if (result.status === 'failed') throw new Error(result.error.slice(0, 2000));
+    expect(result).toMatchObject({ status: 'installed' });
+  });
+
   it.each([
     undefined,
     'turbo run test && pnpm test:sandcastle',

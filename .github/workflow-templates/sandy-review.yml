@@ -150,3 +150,5 @@ jobs:
           model: ${{ vars.SANDY_MODEL || 'gpt-6.1-sol' }}
           test-mode: ${{ vars.SANDY_TEST_MODE || 'targeted' }}
           test-timeout-seconds: ${{ vars.SANDY_TEST_TIMEOUT_SECONDS || '120' }}
+          agent-execution-mode: ${{ vars.SANDY_AGENT_EXECUTION_MODE || 'serial' }}
+          max-agent-concurrency: ${{ vars.SANDY_AGENT_CONCURRENCY || '3' }}

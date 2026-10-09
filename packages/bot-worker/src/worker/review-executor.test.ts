@@ -419,6 +419,7 @@ describe('ReviewExecutor', () => {
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
       'Full project test suite deferred to CI; reviewers may run focused verification.',
       'Sandy ReviewJob job-1: Selected Agent order: "logic" -> "security".',
+      'Sandy ReviewJob job-1: Execution mode: serial (maximum 1 Agents).',
       'Sandy ReviewJob job-1: Agent "logic" started.',
       'Sandy ReviewJob job-1: Agent "logic" completed in 100ms (1 finding).',
       'Sandy ReviewJob job-1: Agent "security" started.',
