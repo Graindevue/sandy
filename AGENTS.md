@@ -13,8 +13,10 @@ is) and `CONTEXT.md` (domain glossary).
 
 Review feature work locally and pass lint, type-check, and tests before opening
 a PR. GitHub Actions CI checks PRs to `main` and pushes to `main`.
-CodeRabbit reviews feature PRs using `.coderabbit.yaml`; a maintainer
-reviews each PR before merge.
+CodeRabbit reviews PRs using `.coderabbit.yaml`; a maintainer reviews feature
+PRs before merge. Same-repository Dependabot PRs to `main` merge automatically
+after CodeRabbit approves the current head and all required checks pass, with
+review threads resolved. Keep Node declarations aligned with the Node runtime.
 
 Use [coderabbit-review](.agents/skills/coderabbit-review/SKILL.md) to request and
 verify a review. Public repositories with fewer than 10 stars require manual
@@ -46,7 +48,7 @@ pnpm lint          # biome check .
 pnpm test          # vitest
 ```
 
-Stack: Node 24, TypeScript 6, pnpm 10, Biome, Vitest, Convex Cloud.
+Stack: Node 24, TypeScript 7, pnpm 10, Biome, Vitest, Convex Cloud.
 Committed Convex generated types support CI checks without a deployment.
 For backend edits, regenerate them using the procedure in
 `packages/convex-backend/README.md` before running checks.

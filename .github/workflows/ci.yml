@@ -6,6 +6,7 @@ on:
     branches: [main, staging]
   push:
     branches: [main, staging]
+  workflow_dispatch:
 
 # A newer commit on the same ref supersedes any in-flight run for it.
 concurrency:
