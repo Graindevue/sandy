@@ -20,7 +20,7 @@ const names = [
 function exportStep(steps) {
   const step = steps.find((entry) => entry.id === 'cache-runtime');
   assert.ok(step, 'Trusted Node action must expose runtime cache credentials to later shell steps');
-  assert.equal(step.uses, 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd');
+  assert.equal(step.uses, 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3');
   return step;
 }
 
