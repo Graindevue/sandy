@@ -659,7 +659,8 @@ export class ReviewExecutor {
     // Snapshot from the quiescent seed; investigation budgets start later.
     if (
       this.#runner.openReview !== undefined &&
-      this.#cloneManager.materializeAgentWorkspace !== undefined
+      this.#cloneManager.materializeAgentWorkspace !== undefined &&
+      this.#maxAgentConcurrency > 1
     ) {
       for (const [index, agent] of input.agents.entries()) {
         await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);

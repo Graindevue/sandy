@@ -62,6 +62,11 @@ is discarded before one bounded cold retry. Only successful preparation can
 publish downloads. Installed trees, source, tool homes, credentials and mutable
 Review outputs are excluded.
 
+The key is derived from the actual reviewed head's files, rather than the
+caller's default branch. Revisions with identical installation inputs can
+reuse downloads; source revisions are not themselves cache-key components.
+Restoration uses the exact key without fallback keys.
+
 The optional parallel adapter owns one Codex app-server for a Review. Sandy
 admits selected Agents up to a positive cap (three initially in parallel mode),
 creates a fresh thread for each, and preserves its configured persona, model,

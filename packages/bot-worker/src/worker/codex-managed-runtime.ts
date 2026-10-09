@@ -298,8 +298,8 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
         'cumulative usage',
       );
       const input = count(usage.inputTokens);
-      const cached = count(usage.cachedInputTokens);
-      const created = count(usage.cacheWriteInputTokens);
+      const cached = count(usage.cachedInputTokens ?? 0);
+      const created = count(usage.cacheWriteInputTokens ?? 0);
       if (cached + created > input) throw new Error('Codex cached input exceeds total input');
       state.usage = {
         inputTokens: input - cached - created,

@@ -19,14 +19,17 @@ New authorized PR comment containing @sandy
   → Create and claim a ReviewJob through the Convex HTTP client
   → Materialize the PR head and sibling default-branch worktrees
   → Build the Product API surface manifest and install review dependencies
-  → Run the selected Codex personas serially against the diff and source
+  → Run the selected Codex personas serially by default against the diff and source
   → Dedupe and score Findings, post comments and an advisory Check Run
   → Persist refreshed Codex auth for the next review
 ```
 
-Reviews and Agent Runs share a dedicated Codex login and are serialized to
-preserve its rotating refresh token. Each Agent uses one `codex exec --json`
-invocation, with at most one resume to finish the structured Findings response.
+Reviews share a dedicated Codex login and are serialized to preserve its
+rotating refresh token. In the default serial mode, each Agent uses one
+`codex exec --json` invocation, with at most one resume to finish the structured
+Findings response. The opt-in [parallel mode](docs/setup/github-actions.md)
+runs independent Agent threads in one managed Codex app-server with a bounded
+concurrency cap.
 This uses ChatGPT plan quota; GitHub Actions compute remains a separate cost.
 Default `logic`, `security`, and conditional `convex` reviewers use
 `gpt-6.1-sol` with `xhigh` effort. Optional shipped personas use the same model

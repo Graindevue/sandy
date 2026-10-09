@@ -53,9 +53,12 @@ test('the exact trusted cache script masks the token before exporting only cache
     ...names.map((name) => ['export', name, `fixture-${name}`]),
   ]);
   const position = action.runs.steps.indexOf(step);
-  assert.ok(position < action.runs.steps.findIndex((entry) => entry.id === 'auth'));
   assert.ok(
-    position < action.runs.steps.findIndex((entry) => entry.name === 'Review the pull request'),
+    position > action.runs.steps.findIndex((entry) => entry.name === 'Install and build Sandy'),
+  );
+  assert.equal(
+    position + 1,
+    action.runs.steps.findIndex((entry) => entry.name === 'Review the pull request'),
   );
 });
 

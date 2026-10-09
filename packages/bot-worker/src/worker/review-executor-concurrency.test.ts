@@ -21,6 +21,26 @@ import {
 } from './review-executor.test-support.js';
 
 describe('claimed ReviewJob concurrency', () => {
+  it('uses the shared prepared worktree in serial rollback without private copies', async () => {
+    const paths: string[] = [];
+    const fixture = managedReview({
+      cap: 1,
+      onOpen: (privatePaths) => expect(privatePaths).toEqual([]),
+      runAgent: async ({ worktreePath }) => {
+        paths.push(worktreePath);
+        return runnerOutput(findingsOutput([]));
+      },
+    });
+    fixture.clones.materializeAgentWorkspace = async () => {
+      throw new Error('Serial rollback must not copy the prepared installation');
+    };
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(paths).toEqual(['/tmp/worktree/acme/widget/job-1', '/tmp/worktree/acme/widget/job-1']);
+    expect(fixture.store.agentRuns.every((run) => run.status === 'completed')).toBe(true);
+    expect(fixture.clones.removed).toHaveLength(1);
+    expect(fixture.store.status).toBe('completed');
+  });
+
   it('overlaps independent Agents, persists completions promptly, and synthesizes in selected order', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const poster = new FakePoster();
@@ -189,7 +209,7 @@ describe('claimed ReviewJob concurrency', () => {
     }
     expect(fixture.poster.results).toEqual([]);
     expect(fixture.store.status).toBe('failed');
-    expect(fixture.clones.removed).toHaveLength(3);
+    expect(fixture.clones.removed).toHaveLength(1);
   });
 
   it('bounds fan-out and gives queued Agents a full timeout budget after admission', async () => {
@@ -279,7 +299,7 @@ describe('claimed ReviewJob concurrency', () => {
     }
     expect(fixture.poster.results).toEqual([]);
     expect(fixture.store.status).toBe('superseded');
-    expect(fixture.clones.removed).toHaveLength(3);
+    expect(fixture.clones.removed).toHaveLength(1);
   });
 
   it('records authoritative usage on failed Agents without borrowing successful peer usage', async () => {

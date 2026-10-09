@@ -250,6 +250,51 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
     }
   });
 
+  it.each([
+    'missing',
+    'null',
+  ])('accepts %s optional cached counters without aborting peer turns', async (variant) => {
+    const f = await executable(
+      protocolFixture.replace(
+        'cachedInputTokens:index===0?40:10,cacheWriteInputTokens:0,',
+        variant === 'null' ? 'cachedInputTokens:null,cacheWriteInputTokens:null,' : '',
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runner = new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    });
+    const runtime = await runner.openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+      expect(results.map((result) => result.usage)).toEqual(
+        expect.arrayContaining([
+          {
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 15,
+          },
+          {
+            inputTokens: 200,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 25,
+          },
+        ]),
+      );
+      expect(runtime.failureSignal?.aborted).toBe(false);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('interrupts only the cancelled thread, drains its usage, and preserves its successful peer', async () => {
     const f = await executable(`${protocolFixture
       .replace('if (turns.length === 2)', 'if (false)')
