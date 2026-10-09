@@ -63,6 +63,8 @@ export interface CodexExecRunnerOptions {
   codexHome: string;
   /** Agent-owned tool caches; preparation retains the default shared tool home. */
   toolHome?: string;
+  /** Scope temporary writes to this directory for an isolated Agent workspace. */
+  temporaryDirectory?: string;
   executable?: string;
   env?: Record<string, string>;
   protectedPaths?: readonly string[];
@@ -779,8 +781,9 @@ export class CodexExecRunner {
       filesystem.push(
         '":minimal"="read"',
         '":workspace_roots"="write"',
-        '":tmpdir"="write"',
-        '":slash_tmp"="write"',
+        ...(this.#options.temporaryDirectory === undefined
+          ? ['":tmpdir"="write"', '":slash_tmp"="write"']
+          : []),
         '"/opt"="read"',
       );
       // Linux resolvers can symlink into /run, outside :minimal's /etc mount.
@@ -809,9 +812,18 @@ export class CodexExecRunner {
       // enters other users' fd/ns/task directories, which makes Linux sandbox
       // construction fail before the reviewed command starts.
       filesystem.push('glob_scan_max_depth=2', '"/proc/*/environ"="deny"', '"/proc/*/mem"="deny"');
+    } else if (this.#options.temporaryDirectory !== undefined) {
+      filesystem.push('":root"="read"', '":workspace_roots"="write"');
     }
     const shellEnvironment = {
       HOME: this.#toolHome,
+      ...(this.#options.temporaryDirectory === undefined
+        ? {}
+        : {
+            TMPDIR: this.#options.temporaryDirectory,
+            TMP: this.#options.temporaryDirectory,
+            TEMP: this.#options.temporaryDirectory,
+          }),
       TURBO_CACHE_DIR: join(resolvePath(worktreePath), '.turbo', 'cache'),
       CI: 'true',
       LEFTHOOK: '0',
@@ -826,7 +838,7 @@ export class CodexExecRunner {
       '-c',
       'default_permissions="sandy"',
       '-c',
-      `permissions.sandy={${process.platform === 'linux' ? '' : 'extends=":workspace",'}filesystem={${filesystem.join(',')}},network={enabled=true}}`,
+      `permissions.sandy={${process.platform === 'linux' || this.#options.temporaryDirectory !== undefined ? '' : 'extends=":workspace",'}filesystem={${filesystem.join(',')}},network={enabled=true}}`,
       '-c',
       `projects={${JSON.stringify(resolvePath(worktreePath))}={trust_level="untrusted"}}`,
       '-c',
