@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -8,9 +7,9 @@ import type {
 } from './dependency-download-cache.js';
 
 const worker = `
-  const cache = require(process.argv[1]);
   const [operation, key, path] = process.argv.slice(2);
   (async () => {
+    const cache = await import(process.argv[1]);
     if (!cache.isFeatureAvailable()) throw new Error('Cache service unavailable');
     const result = operation === 'restore'
       ? await cache.restoreCache([path], key, [], { timeoutInMs: 25000 })
@@ -24,7 +23,7 @@ const worker = `
 export function createGitHubDependencyDownloadCache(
   options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): DependencyDownloadCache {
-  const modulePath = createRequire(import.meta.url).resolve('@actions/cache');
+  const modulePath = import.meta.resolve('@actions/cache');
   const operation = (
     kind: 'restore' | 'save',
     input: DependencyDownloadCacheInput,
