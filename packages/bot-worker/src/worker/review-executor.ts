@@ -875,14 +875,26 @@ export class ReviewExecutor {
       parentSignal.addEventListener('abort', onParentAbort, { once: true });
     });
 
-    const running = Promise.resolve().then(() =>
-      (runtime ?? this.#runner).runAgent({ ...input, signal: controller.signal }),
-    );
+    let terminalFailure: unknown;
+    const running = Promise.resolve()
+      .then(() => (runtime ?? this.#runner).runAgent({ ...input, signal: controller.signal }))
+      .catch((error: unknown) => {
+        terminalFailure = error;
+        throw error;
+      });
     try {
       return await Promise.race([running, timeoutPromise, parentAbortPromise]);
     } catch (error) {
-      if (timeoutError !== null && !isAgentTimedOutError(error)) {
-        throw timeoutError;
+      if (runtime !== undefined) {
+        controller.abort(error);
+        await running.catch(() => {});
+      }
+      if (timeoutError !== null) {
+        throw new AgentTimedOutError(
+          agentKey,
+          this.#agentTimeoutMs,
+          terminalFailure instanceof AgentRunError ? terminalFailure.usage : undefined,
+        );
       }
       throw error;
     } finally {

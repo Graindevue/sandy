@@ -327,6 +327,34 @@ describe('claimed ReviewJob concurrency', () => {
       '/tmp/worktree/acme/widget/job-1-security',
     ]);
   });
+
+  it('retains final per-thread usage drained after an individual timeout', async () => {
+    vi.useFakeTimers();
+    const started = deferred<void>();
+    const fixture = managedReview({
+      agentTimeoutMs: 100,
+      runAgent: async ({ agent, signal }) => {
+        if (agent.key === 'security') return runnerOutput(findingsOutput([]));
+        started.resolve();
+        await new Promise<void>((resolve) =>
+          signal?.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        throw new AgentRunError('turn interrupted', agentRunUsage);
+      },
+    });
+    const reviewing = fixture.executor.executeClaimedJob('job-1');
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(100);
+      await reviewing;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fixture.store.agentRuns.find((run) => run.agentKey === 'logic')).toMatchObject({
+      status: 'timed_out',
+      usage: agentRunUsage,
+    });
+  });
 });
 
 function managedReview(options: {
