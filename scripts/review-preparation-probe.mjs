@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,13 +17,15 @@ const { CodexAppServerRunner } = await import(
 );
 
 /** Reviewed lifecycle checks disposable canaries through the actual preparation adapter. */
-async function preparationCanary(executable, root, codexHome, environment) {
-  const parent = join(root, 'canary-workspaces');
+async function preparationCanary(executable, root, codexHome, environment, denyAncestor = false) {
+  const profile = denyAncestor ? 'protected-ancestor' : 'production';
+  const parent = join(root, `canary-workspaces-${profile}`);
   const workspace = join(parent, 'repo');
-  const directory = join(root, 'command-files');
+  const directory = join(root, `command-files-${profile}`);
   const commandFile = join(directory, 'environment');
   const privateFile = join(workspace, 'private.key');
   const marker = join(workspace, 'canary-result.json');
+  const started = join(workspace, 'canary-lifecycle-started');
   await mkdir(workspace, { recursive: true });
   await mkdir(directory);
   await writeFile(commandFile, 'DISPOSABLE_COMMAND_CANARY');
@@ -43,6 +45,7 @@ async function preparationCanary(executable, root, codexHome, environment) {
     join(workspace, 'check-denials.cjs'),
     `
     const fs = require('node:fs');
+    fs.writeFileSync('canary-lifecycle-started', 'started');
     const checks = [];
     ${operations
       .map(
@@ -88,9 +91,8 @@ async function preparationCanary(executable, root, codexHome, environment) {
       directory,
       commandFile,
       privateFile,
-      // Linux reconstructs the granted descendant after masking its parent.
-      // Darwin rejects Node's realpath ancestor traversal for this shape.
-      ...(process.platform === 'linux' ? [parent] : []),
+      // Retain the protected child even when the pinned native mount shape is unsupported.
+      ...(denyAncestor ? [parent] : []),
     ],
     logger: { info() {} },
     installTimeoutMs: 30_000,
@@ -103,6 +105,13 @@ async function preparationCanary(executable, root, codexHome, environment) {
       (await readFile(commandFile, 'utf8')) === 'DISPOSABLE_COMMAND_CANARY' &&
       (await readFile(privateFile, 'utf8')) === 'DISPOSABLE_PRIVATE_CANARY',
     checks: [],
+    lifecycleStarted: await stat(started).then(
+      () => true,
+      (error) => {
+        if (error.code !== 'ENOENT') throw error;
+        return false;
+      },
+    ),
   };
   if (result.status === 'installed')
     Object.assign(report, JSON.parse(await readFile(marker, 'utf8')));
@@ -131,11 +140,16 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
     ).stdout.trim();
     assert.equal(version, 'codex-cli 0.162.0', 'Use the exact deployed Codex pin');
     const canary = await preparationCanary(executable, root, codexHome, environment);
+    const protectedAncestor =
+      process.platform === 'linux'
+        ? await preparationCanary(executable, root, codexHome, environment, true)
+        : undefined;
     const canaryReport = {
       platform: process.platform,
       node: process.version,
       codexVersion: version,
       canary,
+      ...(protectedAncestor ? { protectedAncestor } : {}),
     };
     if (outputPath) await writeFile(outputPath, `${JSON.stringify(canaryReport, null, 2)}\n`);
     process.stdout.write(`${JSON.stringify(canaryReport)}\n`);
@@ -143,6 +157,14 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
     assert.equal(canary.unchangedBytes, true);
     assert.equal(canary.checks.length, 6);
     assert.equal(canary.lifecycleCount, 1);
+    assert.equal(canary.lifecycleStarted, true);
+    if (protectedAncestor) {
+      assert.equal(protectedAncestor.status, 'failed', 'Unsupported native shape must fail closed');
+      assert.match(protectedAncestor.error, /^bwrap:.*Read-only file system/s);
+      assert.equal(protectedAncestor.unchangedBytes, true);
+      assert.equal(protectedAncestor.lifecycleStarted, false);
+      assert.deepEqual(protectedAncestor.checks, []);
+    }
     suite = await prepareBenchmarkFixtures(root);
     const fixture = suite.fixtures.find((fixture) => fixture.id === 'defects');
     assert.ok(fixture);
@@ -245,6 +267,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
         codexVersion: version,
         packageManager: fixture.packageManager,
         canary,
+        ...(protectedAncestor ? { protectedAncestor } : {}),
         outcomes,
         phases,
       };
