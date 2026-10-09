@@ -25,7 +25,7 @@
     "review": "pnpm --filter @sandy/bot-worker review"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.0",
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typescript": "^6.0.0",
