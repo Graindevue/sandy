@@ -4,7 +4,6 @@ import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
-import { isIgnoredPath } from '../config/ignore.js';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
 import {
   type DependencyDownloadCache,
@@ -21,6 +20,7 @@ import {
   installWithoutHookOnlyPrepare,
   readPackageJson,
 } from './dependency-install.js';
+import { readReviewDiff } from './review-diff.js';
 import { buildReviewPrompt } from './review-prompt.js';
 
 export interface RunnerPullRequest {
@@ -261,12 +261,14 @@ export class CodexExecRunner {
                 : remaining(),
             ),
           );
-        if (key !== undefined && detected.packageManager === 'pnpm' && cache !== undefined) {
+        if (key !== undefined && cache !== undefined) {
           const fetchStartedAt = Date.now();
           try {
             const fetched = await this.#sandboxCommand(
               { ...input, downloadStorePath: store },
-              `CI=true LEFTHOOK=0 HUSKY=0 ${detected.packageManagerCommand ?? 'pnpm'} fetch --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`,
+              detected.packageManager === 'npm'
+                ? `${installCommand} --ignore-scripts`
+                : `CI=true LEFTHOOK=0 HUSKY=0 ${detected.packageManagerCommand ?? 'pnpm'} fetch --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`,
               remaining(),
             );
             if (fetched.exitCode !== 0) throw new Error('Download-only preparation failed');
@@ -275,8 +277,11 @@ export class CodexExecRunner {
             publicationReady = true;
           } catch {
             input.signal?.throwIfAborted();
-            cache.restore = 'unavailable';
+            cache.restore = restored ? 'discarded' : 'unavailable';
+            cache.coldRetry = restored;
+            restored = false;
             await resetDownloadStore(store);
+            await rm(join(input.worktreePath, 'node_modules'), { recursive: true, force: true });
           }
           cache.fetchMs = Date.now() - fetchStartedAt;
           this.#logger.info(
@@ -301,7 +306,7 @@ export class CodexExecRunner {
           service !== undefined &&
           key !== undefined &&
           cache !== undefined &&
-          (detected.packageManager === 'npm' || publicationReady) &&
+          publicationReady &&
           !restored
         ) {
           const saveStartedAt = Date.now();
@@ -313,10 +318,6 @@ export class CodexExecRunner {
             });
             if (preparedKey?.key !== key)
               throw new Error('Reviewed install configuration changed during preparation');
-            if (detected.packageManager === 'npm') {
-              await discardMutableStoreState(downloads, detected.packageManager);
-              await snapshotDownloadStore(downloads, publishedDownloads, detected.packageManager);
-            }
             await validateDownloadStore(publishedDownloads, detected.packageManager);
             await service.save({
               key,
@@ -518,55 +519,8 @@ export class CodexExecRunner {
 
   async #runAgent(input: RunAgentInput): Promise<AgentRunResult> {
     input.signal?.throwIfAborted();
-    const pr = input.pullRequest;
     await mkdir(this.#toolHome, { recursive: true });
-    const gitOptions = {
-      cwd: input.worktreePath,
-      env: safeEnvironment(process.env),
-      maxBuffer: 16 * 1024 * 1024,
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
-    };
-    const revision = `refs/remotes/origin/${pr.baseRef}...${pr.headSha}`;
-    const { stdout: changedPaths } = await exec(
-      'git',
-      ['diff', '--name-status', '--find-renames', '-z', revision, '--'],
-      gitOptions,
-    );
-    const entries = changedPaths.split('\0');
-    const paths: string[][] = [];
-    for (let index = 0; index < entries.length && entries[index] !== ''; ) {
-      const status = entries[index++];
-      const before = entries[index++];
-      const renamed = status?.startsWith('R') || status?.startsWith('C');
-      const after = renamed ? entries[index++] : before;
-      if (before === undefined || after === undefined)
-        throw new Error('Git emitted incomplete changed-path metadata');
-      if (!isIgnoredPath(after, input.botConfig?.ignorePatterns))
-        paths.push(renamed ? [before, after] : [after]);
-    }
-    let diff = '';
-    // Literal pathspecs protect unusual PR filenames and chunks avoid argv limits.
-    for (let index = 0; index < paths.length; index += 100) {
-      const { stdout } = await exec(
-        'git',
-        [
-          'diff',
-          '--no-ext-diff',
-          '--no-textconv',
-          '--no-color',
-          '--find-renames',
-          revision,
-          '--',
-          ...[...new Set(paths.slice(index, index + 100).flat())].map(
-            (path) => `:(literal)${path}`,
-          ),
-        ],
-        gitOptions,
-      );
-      diff += stdout;
-      if (diff.length > 16 * 1024 * 1024)
-        throw new Error('Review diff exceeds 16MiB after ignored paths are excluded');
-    }
+    const diff = await readReviewDiff(input, safeEnvironment(process.env));
     let result = await this.#invoke(input, `${buildReviewPrompt(input)}\nPR diff:\n${diff}`);
     if (!result.stdout.includes(input.agent.completionSignal)) {
       if (result.threadId === undefined)
