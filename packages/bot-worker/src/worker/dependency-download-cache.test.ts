@@ -291,65 +291,69 @@ it('retries once with discarded downloads when a restored installation fails', a
   );
 }, 20_000);
 
-it.each([
-  'repository',
-  'lockfile',
-  'configuration',
-])('does not reuse downloads after changing reviewed %s identity', async (change) => {
-  const fixture = await preparationFixture();
-  expect(
-    await fixture.runner.installDependencies({
-      worktreePath: fixture.repo,
-      cacheKey: 'acme/fixture',
-    }),
-  ).toMatchObject({ status: 'installed' });
-  if (change === 'lockfile')
-    await writeFile(join(fixture.repo, 'package-lock.json'), `${fixture.lockfile}\n`);
-  if (change === 'configuration')
-    await writeFile(join(fixture.repo, '.npmrc'), 'strict-ssl=true\n');
-  expect(
-    await fixture.runner.installDependencies({
-      worktreePath: fixture.repo,
-      cacheKey: change === 'repository' ? 'other/fixture' : 'acme/fixture',
-    }),
-  ).toMatchObject({ status: 'installed', cache: { restore: 'miss' } });
-  expect(fixture.downloads()).toBe(2);
-  expect(fixture.entries.size).toBe(2);
-  expect([...fixture.entries.keys()][0]).toContain(
-    `-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-npm@`,
-  );
-}, 20_000);
+it.each(['repository', 'lockfile', 'configuration'])(
+  'does not reuse downloads after changing reviewed %s identity',
+  async (change) => {
+    const fixture = await preparationFixture();
+    expect(
+      await fixture.runner.installDependencies({
+        worktreePath: fixture.repo,
+        cacheKey: 'acme/fixture',
+      }),
+    ).toMatchObject({ status: 'installed' });
+    if (change === 'lockfile')
+      await writeFile(join(fixture.repo, 'package-lock.json'), `${fixture.lockfile}\n`);
+    if (change === 'configuration')
+      await writeFile(join(fixture.repo, '.npmrc'), 'strict-ssl=true\n');
+    expect(
+      await fixture.runner.installDependencies({
+        worktreePath: fixture.repo,
+        cacheKey: change === 'repository' ? 'other/fixture' : 'acme/fixture',
+      }),
+    ).toMatchObject({ status: 'installed', cache: { restore: 'miss' } });
+    expect(fixture.downloads()).toBe(2);
+    expect(fixture.entries.size).toBe(2);
+    expect([...fixture.entries.keys()][0]).toContain(
+      `-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-npm@`,
+    );
+  },
+  20_000,
+);
 
 it.each([
   'missing repository',
   'unpinned manager',
   'different manager version',
   'credential configuration',
-])('keeps ordinary preparation for %s', async (reason) => {
-  const fixture = await preparationFixture();
-  if (reason === 'unpinned manager')
-    await writeFile(
-      join(fixture.repo, 'package.json'),
-      JSON.stringify({ ...fixture.manifest, packageManager: undefined }),
-    );
-  if (reason === 'different manager version')
-    await writeFile(
-      join(fixture.repo, 'package.json'),
-      JSON.stringify({ ...fixture.manifest, packageManager: 'npm@1.0.0' }),
-    );
-  if (reason === 'credential configuration')
-    await writeFile(
-      join(fixture.repo, '.npmrc'),
-      '//example.test/:_authToken=private-fixture-token\n',
-    );
-  expect(
-    await fixture.runner.installDependencies({
-      worktreePath: fixture.repo,
-      ...(reason === 'missing repository' ? {} : { cacheKey: 'acme/fixture' }),
-    }),
-  ).toMatchObject({ status: 'installed', cache: { restore: 'unverified' } });
-  expect(fixture.saved).toHaveLength(0);
-}, 20_000);
+])(
+  'keeps ordinary preparation for %s',
+  async (reason) => {
+    const fixture = await preparationFixture();
+    if (reason === 'unpinned manager')
+      await writeFile(
+        join(fixture.repo, 'package.json'),
+        JSON.stringify({ ...fixture.manifest, packageManager: undefined }),
+      );
+    if (reason === 'different manager version')
+      await writeFile(
+        join(fixture.repo, 'package.json'),
+        JSON.stringify({ ...fixture.manifest, packageManager: 'npm@1.0.0' }),
+      );
+    if (reason === 'credential configuration')
+      await writeFile(
+        join(fixture.repo, '.npmrc'),
+        '//example.test/:_authToken=private-fixture-token\n',
+      );
+    expect(
+      await fixture.runner.installDependencies({
+        worktreePath: fixture.repo,
+        ...(reason === 'missing repository' ? {} : { cacheKey: 'acme/fixture' }),
+      }),
+    ).toMatchObject({ status: 'installed', cache: { restore: 'unverified' } });
+    expect(fixture.saved).toHaveLength(0);
+  },
+  20_000,
+);
 
 it('retains dependency failure and publishes no cache when a cold install fails', async () => {
   const fixture = await preparationFixture();
@@ -366,61 +370,64 @@ it('retains dependency failure and publishes no cache when a cold install fails'
   expect(fixture.saved).toHaveLength(0);
 }, 20_000);
 
-it.each([
-  '10.34.1',
-  'current',
-])('uses pinned pnpm %s downloads without sharing installed dependencies or side effects', async (pin) => {
-  const fixture = await preparationFixture();
-  const version =
-    pin === 'current'
-      ? (await exec('pnpm', ['--version'], { cwd: fixture.root })).stdout.trim()
-      : pin;
-  const lock = JSON.parse(fixture.lockfile) as { packages: Record<string, { resolved?: string }> };
-  const url = lock.packages['node_modules/download-fixture']?.resolved;
-  if (!url) throw new Error('Missing dependency URL');
-  await writeFile(
-    join(fixture.repo, 'package.json'),
-    JSON.stringify({
-      ...fixture.manifest,
-      packageManager: `pnpm@${version}`,
-      dependencies: { 'download-fixture': url },
-    }),
-  );
-  await rm(join(fixture.repo, 'package-lock.json'));
-  await exec(
-    'npx',
-    [
-      '--yes',
-      `pnpm@${version}`,
-      'install',
-      '--lockfile-only',
-      '--ignore-scripts',
-      '--store-dir',
-      join(fixture.root, 'fixture-lock-store'),
-    ],
-    { cwd: fixture.repo },
-  );
-  fixture.resetDownloads();
-  const input = { worktreePath: fixture.repo, cacheKey: 'acme/pnpm-fixture' };
-  expect(await fixture.runner.installDependencies(input)).toMatchObject({
-    status: 'installed',
-    cache: { save: 'saved' },
-  });
-  expect(fixture.downloads()).toBe(1);
-  await rm(join(fixture.repo, 'node_modules'), { recursive: true });
-  expect(await fixture.runner.installDependencies(input)).toMatchObject({
-    status: 'installed',
-    cache: { restore: 'hit' },
-  });
-  expect(fixture.downloads()).toBe(1);
-  const resolved = await exec('node', ['-e', 'console.log(require("download-fixture"))'], {
-    cwd: fixture.repo,
-  });
-  expect(resolved.stdout.trim()).toBe('downloaded dependency');
-  expect(fixture.saved.flat().join('\n')).not.toMatch(
-    /node_modules|projects|side_effects|auth\.json|\.npmrc/,
-  );
-}, 60_000);
+it.each(['10.34.1', 'current'])(
+  'uses pinned pnpm %s downloads without sharing installed dependencies or side effects',
+  async (pin) => {
+    const fixture = await preparationFixture();
+    const version =
+      pin === 'current'
+        ? (await exec('pnpm', ['--version'], { cwd: fixture.root })).stdout.trim()
+        : pin;
+    const lock = JSON.parse(fixture.lockfile) as {
+      packages: Record<string, { resolved?: string }>;
+    };
+    const url = lock.packages['node_modules/download-fixture']?.resolved;
+    if (!url) throw new Error('Missing dependency URL');
+    await writeFile(
+      join(fixture.repo, 'package.json'),
+      JSON.stringify({
+        ...fixture.manifest,
+        packageManager: `pnpm@${version}`,
+        dependencies: { 'download-fixture': url },
+      }),
+    );
+    await rm(join(fixture.repo, 'package-lock.json'));
+    await exec(
+      'npx',
+      [
+        '--yes',
+        `pnpm@${version}`,
+        'install',
+        '--lockfile-only',
+        '--ignore-scripts',
+        '--store-dir',
+        join(fixture.root, 'fixture-lock-store'),
+      ],
+      { cwd: fixture.repo },
+    );
+    fixture.resetDownloads();
+    const input = { worktreePath: fixture.repo, cacheKey: 'acme/pnpm-fixture' };
+    expect(await fixture.runner.installDependencies(input)).toMatchObject({
+      status: 'installed',
+      cache: { save: 'saved' },
+    });
+    expect(fixture.downloads()).toBe(1);
+    await rm(join(fixture.repo, 'node_modules'), { recursive: true });
+    expect(await fixture.runner.installDependencies(input)).toMatchObject({
+      status: 'installed',
+      cache: { restore: 'hit' },
+    });
+    expect(fixture.downloads()).toBe(1);
+    const resolved = await exec('node', ['-e', 'console.log(require("download-fixture"))'], {
+      cwd: fixture.repo,
+    });
+    expect(resolved.stdout.trim()).toBe('downloaded dependency');
+    expect(fixture.saved.flat().join('\n')).not.toMatch(
+      /node_modules|projects|side_effects|auth\.json|\.npmrc/,
+    );
+  },
+  60_000,
+);
 
 it('falls back to preparation when the bounded GitHub cache adapter has no service', async () => {
   const fixture = await preparationFixture();

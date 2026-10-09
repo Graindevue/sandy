@@ -139,24 +139,22 @@ describe('BotConfigReader', () => {
     expect(config.repoRules).toBe('- PR-head rule.');
   });
 
-  it.each([
-    'rules.md',
-    'product-rules.md',
-    'agents.yaml',
-    'ignore.gitignore',
-  ])('rejects %s symlinks that would read outside the repository', async (filename) => {
-    const apiRoot = join(root, 'api');
-    await mkdir(join(apiRoot, '.bot'), { recursive: true });
-    const outsideFile = join(root, 'credential.txt');
-    await writeFile(outsideFile, 'DUMMY_PRIVATE_CONTENT');
-    await symlink(outsideFile, join(apiRoot, '.bot', filename));
-    await commitRepo(apiRoot);
-    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+  it.each(['rules.md', 'product-rules.md', 'agents.yaml', 'ignore.gitignore'])(
+    'rejects %s symlinks that would read outside the repository',
+    async (filename) => {
+      const apiRoot = join(root, 'api');
+      await mkdir(join(apiRoot, '.bot'), { recursive: true });
+      const outsideFile = join(root, 'credential.txt');
+      await writeFile(outsideFile, 'DUMMY_PRIVATE_CONTENT');
+      await symlink(outsideFile, join(apiRoot, '.bot', filename));
+      await commitRepo(apiRoot);
+      const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
-    await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
-      'outside the repository',
-    );
-  });
+      await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
+        'outside the repository',
+      );
+    },
+  );
 
   it('rejects a .bot directory symlink escaping the repository', async () => {
     const apiRoot = join(root, 'api');

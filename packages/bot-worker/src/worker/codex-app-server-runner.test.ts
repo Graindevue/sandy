@@ -169,43 +169,43 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
         requestParameter: 'text.verbosity',
       },
     },
-  ])('retains fixed diagnostic classes for native other errors without message values', async ({
-    message,
-    expected,
-  }) => {
-    const f = await executable(
-      protocolFixture.replace(
-        "status:'completed',items:[{type:'agentMessage',text}]",
-        `status:'failed',error:{message:${JSON.stringify(message)},codexErrorInfo:'other'},items:[]`,
-      ),
-    );
-    const w = await workspaces(f.root);
-    const runtime = await new CodexAppServerRunner({
-      codexHome: f.codexHome,
-      executable: f.path,
-      enableManagedRuntime: true,
-    }).openReview({
-      worktreePath: w.seed,
-      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
-      maxConcurrency: 2,
-    });
-    try {
-      const outcomes = await Promise.allSettled(w.inputs.map((input) => runtime.runAgent(input)));
-      for (const outcome of outcomes) {
-        expect(outcome.status).toBe('rejected');
-        if (outcome.status !== 'rejected') throw new Error('Expected failed native turn');
-        expect(outcome.reason.failure).toEqual({
-          stage: 'turn',
-          code: 'turn-failed',
-          codexErrorInfo: 'other',
-          ...expected,
-        });
-        expect(JSON.stringify(outcome.reason.failure)).not.toContain('PRIVATE_');
+  ])(
+    'retains fixed diagnostic classes for native other errors without message values',
+    async ({ message, expected }) => {
+      const f = await executable(
+        protocolFixture.replace(
+          "status:'completed',items:[{type:'agentMessage',text}]",
+          `status:'failed',error:{message:${JSON.stringify(message)},codexErrorInfo:'other'},items:[]`,
+        ),
+      );
+      const w = await workspaces(f.root);
+      const runtime = await new CodexAppServerRunner({
+        codexHome: f.codexHome,
+        executable: f.path,
+        enableManagedRuntime: true,
+      }).openReview({
+        worktreePath: w.seed,
+        privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+        maxConcurrency: 2,
+      });
+      try {
+        const outcomes = await Promise.allSettled(w.inputs.map((input) => runtime.runAgent(input)));
+        for (const outcome of outcomes) {
+          expect(outcome.status).toBe('rejected');
+          if (outcome.status !== 'rejected') throw new Error('Expected failed native turn');
+          expect(outcome.reason.failure).toEqual({
+            stage: 'turn',
+            code: 'turn-failed',
+            codexErrorInfo: 'other',
+            ...expected,
+          });
+          expect(JSON.stringify(outcome.reason.failure)).not.toContain('PRIVATE_');
+        }
+      } finally {
+        await runtime.close();
       }
-    } finally {
-      await runtime.close();
-    }
-  });
+    },
+  );
 
   it('requests native authentication refresh before admitting independent Agent threads', async () => {
     const f = await executable(
@@ -379,21 +379,19 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
     }
   });
 
-  it.each([
-    'completed',
-    'failed',
-    'cancelled',
-  ])('removes the serial Agent home after its %s owner stops without adding it to the seed', async (status) => {
-    const f = await executable('');
-    const w = await workspaces(f.root);
-    const input = w.inputs[0];
-    if (input === undefined) throw new Error('Missing fixture Agent');
-    await mkdir(f.codexHome);
-    const marker = join(f.root, 'tool-home');
-    const stopped = join(f.root, 'stopped');
-    await writeFile(
-      f.path,
-      `#!/usr/bin/env node
+  it.each(['completed', 'failed', 'cancelled'])(
+    'removes the serial Agent home after its %s owner stops without adding it to the seed',
+    async (status) => {
+      const f = await executable('');
+      const w = await workspaces(f.root);
+      const input = w.inputs[0];
+      if (input === undefined) throw new Error('Missing fixture Agent');
+      await mkdir(f.codexHome);
+      const marker = join(f.root, 'tool-home');
+      const stopped = join(f.root, 'stopped');
+      await writeFile(
+        f.path,
+        `#!/usr/bin/env node
 const fs=require('node:fs'), path=require('node:path');
 fs.writeFileSync(path.join(process.env.HOME,'owned-artifact'),'fixture');
 fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
@@ -407,34 +405,35 @@ if(${JSON.stringify(status)}==='cancelled') {
 } else if(${JSON.stringify(status)}==='failed') process.exit(1);
 else process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
 `,
-    );
-    const runtime = await new CodexAppServerRunner({
-      codexHome: f.codexHome,
-      executable: f.path,
-      logger: { info() {} },
-    }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
-    const originalEntries = await readdir(w.seed);
-    const outcome = Promise.allSettled([runtime.runAgent({ ...input, worktreePath: w.seed })]);
-    let toolHome = '';
-    try {
-      await vi.waitFor(
-        async () => {
-          toolHome = await readFile(marker, 'utf8');
-          expect(toolHome).not.toBe('');
-        },
-        { timeout: 5000, interval: 10 },
       );
-      if (status === 'cancelled') await runtime.close();
-      const [result] = await outcome;
-      expect(result?.status).toBe(status === 'completed' ? 'fulfilled' : 'rejected');
-      expect(toolHome.startsWith(`${w.seed}/`)).toBe(false);
-      await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
-      expect(await readdir(w.seed)).toEqual(originalEntries);
-      if (status === 'cancelled') expect(await readFile(stopped, 'utf8')).toBe('stopped');
-    } finally {
-      await runtime.close();
-    }
-  });
+      const runtime = await new CodexAppServerRunner({
+        codexHome: f.codexHome,
+        executable: f.path,
+        logger: { info() {} },
+      }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
+      const originalEntries = await readdir(w.seed);
+      const outcome = Promise.allSettled([runtime.runAgent({ ...input, worktreePath: w.seed })]);
+      let toolHome = '';
+      try {
+        await vi.waitFor(
+          async () => {
+            toolHome = await readFile(marker, 'utf8');
+            expect(toolHome).not.toBe('');
+          },
+          { timeout: 5000, interval: 10 },
+        );
+        if (status === 'cancelled') await runtime.close();
+        const [result] = await outcome;
+        expect(result?.status).toBe(status === 'completed' ? 'fulfilled' : 'rejected');
+        expect(toolHome.startsWith(`${w.seed}/`)).toBe(false);
+        await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readdir(w.seed)).toEqual(originalEntries);
+        if (status === 'cancelled') expect(await readFile(stopped, 'utf8')).toBe('stopped');
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it('cleans inaccessible owned directories without following symlinks or losing completed findings', async () => {
     const f = await executable('');
@@ -508,22 +507,21 @@ process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:1
     }
   });
 
-  it.each([
-    'completed',
-    'failed',
-  ])('reports unrecoverable cleanup from close and retries without masking the %s Agent outcome', async (status) => {
-    const f = await executable('');
-    const w = await workspaces(f.root);
-    const input = w.inputs[0];
-    if (input === undefined) throw new Error('Missing fixture Agent');
-    await mkdir(f.codexHome);
-    const temporaryParent = join(f.root, 'temporary-parent');
-    await mkdir(temporaryParent);
-    vi.stubEnv('TMPDIR', temporaryParent);
-    const marker = join(f.root, 'tool-home');
-    await writeFile(
-      f.path,
-      `#!/usr/bin/env node
+  it.each(['completed', 'failed'])(
+    'reports unrecoverable cleanup from close and retries without masking the %s Agent outcome',
+    async (status) => {
+      const f = await executable('');
+      const w = await workspaces(f.root);
+      const input = w.inputs[0];
+      if (input === undefined) throw new Error('Missing fixture Agent');
+      await mkdir(f.codexHome);
+      const temporaryParent = join(f.root, 'temporary-parent');
+      await mkdir(temporaryParent);
+      vi.stubEnv('TMPDIR', temporaryParent);
+      const marker = join(f.root, 'tool-home');
+      await writeFile(
+        f.path,
+        `#!/usr/bin/env node
 const fs=require('node:fs'), path=require('node:path');
 fs.writeFileSync(path.join(process.env.HOME,'artifact'),'fixture');
 fs.writeFileSync(${JSON.stringify(marker)},process.env.HOME);
@@ -531,38 +529,39 @@ fs.chmodSync(${JSON.stringify(temporaryParent)},0o500);
 if (${JSON.stringify(status)}==='failed') process.exit(1);
 process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>complete</findings>'}})+'\\n');
 `,
-    );
-    const runtime = await new CodexAppServerRunner({
-      codexHome: f.codexHome,
-      executable: f.path,
-      logger: { info() {} },
-    }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
-    try {
-      const [outcome] = await Promise.allSettled([runtime.runAgent(input)]);
-      if (status === 'completed') {
-        expect(outcome).toMatchObject({
-          status: 'fulfilled',
-          value: { stdout: '<findings>complete</findings>' },
-        });
-      } else {
-        expect(outcome).toMatchObject({
-          status: 'rejected',
-          reason: { message: 'Codex exited with 1: ' },
-        });
+      );
+      const runtime = await new CodexAppServerRunner({
+        codexHome: f.codexHome,
+        executable: f.path,
+        logger: { info() {} },
+      }).openReview({ worktreePath: w.seed, maxConcurrency: 1 });
+      try {
+        const [outcome] = await Promise.allSettled([runtime.runAgent(input)]);
+        if (status === 'completed') {
+          expect(outcome).toMatchObject({
+            status: 'fulfilled',
+            value: { stdout: '<findings>complete</findings>' },
+          });
+        } else {
+          expect(outcome).toMatchObject({
+            status: 'rejected',
+            reason: { message: 'Codex exited with 1: ' },
+          });
+        }
+        const toolHome = await readFile(marker, 'utf8');
+        await expect(runtime.close()).rejects.toThrow('Serial Agent home cleanup failed');
+        expect((await stat(temporaryParent)).mode & 0o777).toBe(0o500);
+        await expect(readdir(toolHome)).resolves.toBeDefined();
+        await chmod(temporaryParent, 0o700);
+        await expect(runtime.close()).resolves.toBeUndefined();
+        await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await chmod(temporaryParent, 0o700);
+        await runtime.close();
+        vi.unstubAllEnvs();
       }
-      const toolHome = await readFile(marker, 'utf8');
-      await expect(runtime.close()).rejects.toThrow('Serial Agent home cleanup failed');
-      expect((await stat(temporaryParent)).mode & 0o777).toBe(0o500);
-      await expect(readdir(toolHome)).resolves.toBeDefined();
-      await chmod(temporaryParent, 0o700);
-      await expect(runtime.close()).resolves.toBeUndefined();
-      await expect(readdir(toolHome)).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally {
-      await chmod(temporaryParent, 0o700);
-      await runtime.close();
-      vi.unstubAllEnvs();
-    }
-  });
+    },
+  );
 
   it('denies a retained serial home to the next Agent until cleanup succeeds', async () => {
     const f = await executable('');
@@ -679,50 +678,50 @@ process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_mes
     }
   });
 
-  it.each([
-    'missing',
-    'null',
-  ])('accepts %s optional cached counters without aborting peer turns', async (variant) => {
-    const f = await executable(
-      protocolFixture.replace(
-        'cachedInputTokens:index===0?40:10,cacheWriteInputTokens:0,',
-        variant === 'null' ? 'cachedInputTokens:null,cacheWriteInputTokens:null,' : '',
-      ),
-    );
-    const w = await workspaces(f.root);
-    const runner = new CodexAppServerRunner({
-      codexHome: f.codexHome,
-      executable: f.path,
-      enableManagedRuntime: true,
-    });
-    const runtime = await runner.openReview({
-      worktreePath: w.seed,
-      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
-      maxConcurrency: 2,
-    });
-    try {
-      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
-      expect(results.map((result) => result.usage)).toEqual(
-        expect.arrayContaining([
-          {
-            inputTokens: 100,
-            cacheReadInputTokens: 0,
-            cacheCreationInputTokens: 0,
-            outputTokens: 15,
-          },
-          {
-            inputTokens: 200,
-            cacheReadInputTokens: 0,
-            cacheCreationInputTokens: 0,
-            outputTokens: 25,
-          },
-        ]),
+  it.each(['missing', 'null'])(
+    'accepts %s optional cached counters without aborting peer turns',
+    async (variant) => {
+      const f = await executable(
+        protocolFixture.replace(
+          'cachedInputTokens:index===0?40:10,cacheWriteInputTokens:0,',
+          variant === 'null' ? 'cachedInputTokens:null,cacheWriteInputTokens:null,' : '',
+        ),
       );
-      expect(runtime.failureSignal?.aborted).toBe(false);
-    } finally {
-      await runtime.close();
-    }
-  });
+      const w = await workspaces(f.root);
+      const runner = new CodexAppServerRunner({
+        codexHome: f.codexHome,
+        executable: f.path,
+        enableManagedRuntime: true,
+      });
+      const runtime = await runner.openReview({
+        worktreePath: w.seed,
+        privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+        maxConcurrency: 2,
+      });
+      try {
+        const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+        expect(results.map((result) => result.usage)).toEqual(
+          expect.arrayContaining([
+            {
+              inputTokens: 100,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              outputTokens: 15,
+            },
+            {
+              inputTokens: 200,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              outputTokens: 25,
+            },
+          ]),
+        );
+        expect(runtime.failureSignal?.aborted).toBe(false);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it('interrupts only the cancelled thread, drains its usage, and preserves its successful peer', async () => {
     const f = await executable(`${protocolFixture
@@ -853,37 +852,37 @@ process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_mes
   it.each([
     { items: [{ type: 'webSearch' }], count: 1 },
     { items: [{ type: 'commandExecution', durationMs: 7 }, { type: 'webSearch' }], count: 2 },
-  ])('keeps tool duration unknown when completed tools omit it: $count tools', async ({
-    items,
-    count,
-  }) => {
-    const f = await executable(
-      protocolFixture.replace(
-        "const text = '<findings>'+entry.params.threadId+'</findings>';",
-        `const text = '<findings>'+entry.params.threadId+'</findings>';
+  ])(
+    'keeps tool duration unknown when completed tools omit it: $count tools',
+    async ({ items, count }) => {
+      const f = await executable(
+        protocolFixture.replace(
+          "const text = '<findings>'+entry.params.threadId+'</findings>';",
+          `const text = '<findings>'+entry.params.threadId+'</findings>';
       for (const item of ${JSON.stringify(items)}) send({method:'item/completed',params:{threadId:entry.params.threadId,turnId,item}});`,
-      ),
-    );
-    const w = await workspaces(f.root);
-    const runtime = await new CodexAppServerRunner({
-      codexHome: f.codexHome,
-      executable: f.path,
-      enableManagedRuntime: true,
-    }).openReview({
-      worktreePath: w.seed,
-      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
-      maxConcurrency: 2,
-    });
-    try {
-      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
-      expect(results.map((result) => result.activity)).toEqual([
-        { toolCount: count },
-        { toolCount: count },
-      ]);
-    } finally {
-      await runtime.close();
-    }
-  });
+        ),
+      );
+      const w = await workspaces(f.root);
+      const runtime = await new CodexAppServerRunner({
+        codexHome: f.codexHome,
+        executable: f.path,
+        enableManagedRuntime: true,
+      }).openReview({
+        worktreePath: w.seed,
+        privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+        maxConcurrency: 2,
+      });
+      try {
+        const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+        expect(results.map((result) => result.activity)).toEqual([
+          { toolCount: count },
+          { toolCount: count },
+        ]);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it('retains a completed thread while a runtime crash fails affected peers without restarting', async () => {
     const f = await executable(`${protocolFixture.replace('if (turns.length === 2)', 'if (false)')}
