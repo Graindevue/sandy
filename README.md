@@ -1,102 +1,85 @@
 # Sandy
 
-Self-hosted code review automation for GitHub pull requests, designed for solo developers who maintain a few related repositories.
+Self-managed code review for private GitHub pull requests, with specialized
+Codex reviewers and context from the repositories that form one Product.
 
-## What it is (and isn't)
-
-Sandy receives GitHub PR webhooks, runs one or more LLM agents over the diff in sandboxed Apple Containers, and posts inline comments back to the PR. It learns from your 👍/👎 reactions over time and can reason across multiple repositories that form one product.
-
-It is **not** a smarter reviewer than you'd get from `gh pr view --diff | claude -p "review this for bugs"` — the underlying review quality is bounded by whichever model is doing the thinking. What Sandy adds is workflow: it runs without you remembering, sees your other repositories, posts where PR conversations already happen, and over time learns which patterns to suppress.
-
-If 80% of the value of code-review automation is "an LLM reads the diff," Sandy is the other 20% — the integration, the cross-repo context, the learning loop — packaged into something self-hosted you can run on a Mac mini.
-
-## Honest scope
-
-**What Sandy does well**
-
-- Reviews any PR — code you wrote in Claude Code, manual edits, collaborator contributions. Not just bot-generated branches.
-- Multi-agent fan-out — specialized prompts (logic / security / Convex / Next.js / i18n) tend to find more than one general-purpose prompt does.
-- Cross-repo Product context — a backend rename that breaks a desktop-app consumer is visible to Sandy, invisible to a single-repo reviewer.
-- Reactive — every push retriggers automatically once you've opted a PR in. Nothing to remember.
-- Self-hosted — runs on your hardware. No SaaS reviewer in the loop.
-
-**What Sandy doesn't claim**
-
-- Bug-catching superpowers. If a model can't catch a bug from the diff + repo context, Sandy can't either, no matter how many agents fan out.
-- A finished learning loop. The reaction-driven suppression and rule-promotion system is the optimistic bet that separates Sandy from a one-shot review script. Hosted reviewers have struggled with this for years, and solo-rater bias is worse, not better. We'll see how it holds up.
-- Portability. Sandy is macOS-only — Apple Container is required for agent sandboxing.
-- Cost neutrality. Multi-agent fan-out across PRs adds up. Sandy is for people who'd happily pay for review quality, not people optimizing API spend.
-
-## Built on sandcastle 🏖️
-
-Sandy stands on the shoulders of [`sandcastle`](https://github.com/mattpocock/sandcastle) by [Matt Pocock](https://github.com/mattpocock).
-
-Sandcastle is the runtime layer that makes Sandy possible — it spawns LLM coding agents inside Apple Container sandboxes, dispatches across vendors (Claude, Codex, Cursor, Copilot), and handles every line of container-lifecycle plumbing you don't want to write yourself.
-
-Sandy is essentially what happens when you take sandcastle's "AFK long-running coding agent" runtime and graft a webhook server, a reactive Convex queue, a cross-repo manifest, a findings synthesizer, and a learning loop on top.
-
-Without sandcastle, Sandy would be ~10x the code and substantially worse. Go check it out.
+Sandy runs on **GitHub Actions** (`ubuntu-latest`). A human collaborator with
+repository write access requests a review by posting a new PR comment containing
+standalone **`@sandy`**. This is the sole review trigger. Each run posts inline
+Findings and a summary naming the reviewed commit, with a confidence score, and
+records its state and token usage in Convex Cloud. After new commits, post a new
+`@sandy` comment to request another review. Rerunning an earlier Actions workflow
+is rejected; create a new `@sandy` comment instead.
 
 ## How it works
 
-```
-GitHub PR webhook
-  → Sandy webhook receiver (Node, on your host)
-  → Convex (enqueue ReviewJob via OCC-protected mutation)
-  → Worker reactively subscribes to Convex pending queue
-  → Sandcastle spawns N parallel Agents in Apple Containers
-    → Each Agent reads the diff + Product context + framework sources via opensrc
-    → Each Agent emits structured findings via completion-signal output
-  → Synthesizer dedupes, applies learned suppressions, scores Findings
-  → Posts inline comments + summary to the PR via the GitHub App
-  → Reactions on bot comments feed back into Convex → Archetypes → SuggestedRules
+```text
+New authorized PR comment containing @sandy
+  → Check out Sandy and load trusted Product configuration
+  → Create and claim a ReviewJob through the Convex HTTP client
+  → Materialize the PR head and sibling default-branch worktrees
+  → Build the Product API surface manifest and install review dependencies
+  → Run the selected Codex personas serially against the diff and source
+  → Dedupe and score Findings, post comments and an advisory Check Run
+  → Persist refreshed Codex auth for the next review
 ```
 
-Read [`CONTEXT.md`](./CONTEXT.md) for the domain glossary, [`docs/adr/`](./docs/adr/) for architectural decisions, and [`docs/prds/`](./docs/prds/) for the implementation roadmap.
+Reviews and Agent Runs share a dedicated Codex login and are serialized to
+preserve its rotating refresh token. Each Agent uses one `codex exec --json`
+invocation, with at most one resume to finish the structured Findings response.
+This uses ChatGPT plan quota; GitHub Actions compute remains a separate cost.
+Default `logic`, `security`, and conditional `convex` reviewers use
+`gpt-6.1-sol` with `xhigh` effort. Optional shipped personas use the same model
+and effort when enabled.
 
-## Status
+Cross-repo review reads actual sibling source pinned to each Repo's default
+branch. The manifest identifies contracts worth searching; Findings cite
+affected consumers with SHA-pinned permalinks and post on the reviewed PR.
+Framework behavior is checked against installed-version source with `opensrc`
+before it becomes a Finding.
 
-Early. The architecture is settled — see the ADRs for the decisions and their rationale. Phase 1 (single-Agent end-to-end loop) is what ships first; subsequent phases activate multi-agent fan-out, the API surface manifest, and the learning loop.
+## Current scope
 
-## Requirements
+- Multiple specialized personas, Product context, Repo-local Rules, dependency
+  setup, Findings synthesis, GitHub posting, and durable review history.
+- Manual review cadence and an advisory Check Run: Findings do not block merges.
+- Codex CLI with a dedicated ChatGPT subscription login on private repositories.
+- Embeddings, automatic Archetype assignment, reaction collection, and Rule
+  promotion are disabled in this runtime. Historical learning data is retained.
 
-- **macOS on Apple Silicon (M1+)** — Apple Container is mac-only
-- **Node 24+**, **pnpm 10+**
-- **A Convex account** — free tier is sufficient for solo workloads
-- **A GitHub App** registered against the repositories you want reviewed
-- **[Tailscale](https://tailscale.com/)** (recommended) for webhook ingress
-- **[`opensrc`](https://opensrc.run)** installed globally — Sandy uses it to read framework source for the installed version, bypassing LLM training cutoffs
+The GitHub Actions runner replaces the local service, container runtime, and
+AFK implementation harness. [ADR 0018](./docs/adr/0018-github-actions-codex-runtime.md)
+records the migration. Earlier [PRDs](./docs/prds/) preserve their historical
+scope; the [setup guide](./docs/setup/) describes current operation.
 
-## Quickstart
+## Setup
 
-Detailed setup documentation lands with Phase 1. High-level shape:
+You need a private GitHub repository with Actions enabled, a Convex Cloud
+deployment, a GitHub App installed on the Product Repos, and a ChatGPT plan that
+includes Codex. Local development uses Node 24 and pnpm 10.
 
-1. Clone Sandy onto your host machine
-2. Install `opensrc` globally
-3. Build the Apple Container image used by agents
-4. Deploy the Convex schema
-5. Register a GitHub App, drop credentials in `.config/.env`
-6. Define your Products in `.config/bot.yaml`
-7. Start Tailscale Funnel on port 3007
-8. `pnpm start` — production runs supervised by launchd
+Follow [docs/setup/README.md](./docs/setup/README.md) to configure the App,
+deployment, trusted Product config, caller workflow, and dedicated CI login.
+The login is separate from your interactive Codex credentials. Auth is stored
+in the `sandy-codex` GitHub environment and written back after every run.
 
-## Configuration
+The canonical source is the private `Graindevue/sandy` repository. The caller
+checks out an audited Sandy commit with explicit read access and invokes the
+checked-out composite action at `.github/actions/review`. The original
+`tony-co/sandy` repository retains its history. The caller workflow and setup
+instructions explain the required access.
 
-Instance-specific configuration lives in `.config/` (gitignored). Default Agent personas and Extractors ship in the repository root (`agents/`, `extractors/`) and apply to any Product. Add custom Agents or Extractors by dropping files in `.config/agents/` or `.config/extractors/`.
+## Configuration and development
 
-To version-control your `.config/` privately, initialize git inside it as a nested repository — Sandy's `.gitignore` excludes the directory at the parent level, so it can carry its own private history.
+Default reviewer personas live in `agents/`; Extractors live in
+`packages/manifest-builder/src/extractors/`. Instance overrides belong in the
+gitignored `.config/` directory. In Actions, supply Product configuration from
+the caller's trusted default branch rather than a PR head.
 
-## Should you use Sandy?
-
-Probably no, unless:
-
-- You self-host services on a Mac mini and another runtime isn't friction.
-- You maintain 2+ repositories that share a domain and you keep getting bitten by cross-repo contract drift.
-- You're philosophically allergic to running your code through a SaaS code reviewer.
-- You like the idea of a reviewer you can teach, not one whose behavior is fixed by a vendor.
-
-If none of those describe you, a hosted code-review service is probably a faster path to value, and there's nothing wrong with that.
+Read [CONTEXT.md](./CONTEXT.md) for vocabulary and [AGENTS.md](./AGENTS.md) for
+contribution rules. Run `pnpm install`, `pnpm lint`, `pnpm type-check`, and
+`pnpm test` before opening a PR against `main`.
 
 ## License
 
-MIT. See [`LICENSE`](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

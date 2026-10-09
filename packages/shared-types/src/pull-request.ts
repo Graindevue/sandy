@@ -25,9 +25,10 @@ export interface PullRequest {
   /** Web URL of the PR. */
   url: string;
   /**
-   * Sticky Opt-In flag. Flipped `true` by the first `@bot review` mention or
-   * `gh pr ready` transition; cleared on close. While `true`, every push
-   * retriggers a Review automatically.
+   * Opt-in state flag. Set `true` by an `@bot review` mention or by re-running
+   * Sandy's Review Status Check; cleared on close. Records that a PR has been put
+   * under Sandy review, but does NOT trigger anything: reviews are manual-only, so
+   * a push never retriggers a Review off this flag.
    */
   reviewActive: boolean;
 }

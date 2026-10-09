@@ -30,6 +30,7 @@ const refs = {
     getForWorker: api.reviewJobs.getForWorker,
     getStatus: api.reviewJobs.getStatus,
     setSiblingShas: api.reviewJobs.setSiblingShas,
+    setCheckRunId: api.reviewJobs.setCheckRunId,
     markCompleted: api.reviewJobs.markCompleted,
     markFailed: api.reviewJobs.markFailed,
   },
@@ -122,6 +123,9 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     if (input.crossRepoSearch !== undefined) {
       args.crossRepoSearch = input.crossRepoSearch;
     }
+    if (input.usage !== undefined) {
+      args.usage = input.usage;
+    }
     await this.#client.mutation(refs.agentRuns.record, args);
   }
 
@@ -138,13 +142,30 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     await this.#client.mutation(refs.reviewJobs.setSiblingShas, { jobId, siblingShas });
   }
 
-  async markCompleted(jobId: string, finishedAt: number): Promise<void> {
-    await this.#client.mutation(refs.reviewJobs.markCompleted, { jobId, finishedAt });
+  async setReviewCheckRunId(jobId: string, checkRunId: number): Promise<void> {
+    await this.#client.mutation(refs.reviewJobs.setCheckRunId, { jobId, checkRunId });
   }
 
-  async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
-    await this.#client.mutation(refs.reviewJobs.markFailed, { jobId, finishedAt, error });
+  async markCompleted(jobId: string, finishedAt: number): Promise<boolean> {
+    return booleanMutationResult(
+      await this.#client.mutation(refs.reviewJobs.markCompleted, { jobId, finishedAt }),
+      'reviewJobs.markCompleted',
+    );
   }
+
+  async markFailed(jobId: string, finishedAt: number, error: string): Promise<boolean> {
+    return booleanMutationResult(
+      await this.#client.mutation(refs.reviewJobs.markFailed, { jobId, finishedAt, error }),
+      'reviewJobs.markFailed',
+    );
+  }
+}
+
+function booleanMutationResult(value: unknown, name: string): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  throw new Error(`Convex mutation ${name} did not return a boolean`);
 }
 
 function findingMutationArgs(finding: Finding): Record<string, unknown> {

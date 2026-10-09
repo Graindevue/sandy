@@ -34,6 +34,7 @@ export const reviewTrigger = v.union(
   v.literal('ready' satisfies ReviewTrigger),
   v.literal('push' satisfies ReviewTrigger),
   v.literal('opened' satisfies ReviewTrigger),
+  v.literal('rerun' satisfies ReviewTrigger),
 );
 
 export const pullRequestState = v.union(
@@ -63,6 +64,13 @@ export const agentRunStatus = v.union(
   v.literal('failed' satisfies AgentRunStatus),
   v.literal('timed_out' satisfies AgentRunStatus),
 );
+
+export const agentRunUsage = v.object({
+  inputTokens: v.number(),
+  cacheCreationInputTokens: v.number(),
+  cacheReadInputTokens: v.number(),
+  outputTokens: v.number(),
+});
 
 export const reactionKind = v.union(
   v.literal('👍' satisfies ReactionKind),

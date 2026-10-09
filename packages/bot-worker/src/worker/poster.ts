@@ -14,6 +14,16 @@ export interface PostedFinding {
   commentId: number;
 }
 
+export interface PostedSummaryComment {
+  commentId: number;
+  url: string;
+}
+
+export interface PostedReviewResult {
+  postedFindings: PostedFinding[];
+  summaryComment: PostedSummaryComment;
+}
+
 interface ReviewCommentInputBase {
   owner: string;
   repo: string;
@@ -37,9 +47,14 @@ export interface IssueCommentInput {
   body: string;
 }
 
+export interface CreatedIssueComment {
+  id: number;
+  url?: string;
+}
+
 export interface GitHubReviewPoster {
   createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }>;
-  createIssueComment(input: IssueCommentInput): Promise<{ id: number }>;
+  createIssueComment(input: IssueCommentInput): Promise<CreatedIssueComment>;
 }
 
 export interface PosterLogger {
@@ -72,7 +87,7 @@ export class PullRequestPoster {
     this.#logger = options.logger ?? defaultLogger;
   }
 
-  async postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]> {
+  async postReviewResult(input: PostReviewResultInput): Promise<PostedReviewResult> {
     const inlinePosted: PostedFinding[] = [];
     const summaryOnly: PostableFinding[] = [];
 
@@ -97,29 +112,56 @@ export class PullRequestPoster {
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
+      body: summaryForCommit(
+        input.target,
+        appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
+      ),
     });
 
-    return [
-      ...inlinePosted,
-      ...summaryOnly.map((persisted) => ({
-        findingId: persisted.id,
+    return {
+      postedFindings: [
+        ...inlinePosted,
+        ...summaryOnly.map((persisted) => ({
+          findingId: persisted.id,
+          commentId: summaryComment.id,
+        })),
+      ],
+      summaryComment: {
         commentId: summaryComment.id,
-      })),
-    ];
+        url: summaryComment.url ?? fallbackIssueCommentUrl(input.target, summaryComment.id),
+      },
+    };
   }
 
-  async postScopeDeclined(input: PostScopeDeclinedInput): Promise<void> {
-    await this.#github.createIssueComment({
+  async postScopeDeclined(input: PostScopeDeclinedInput): Promise<PostedSummaryComment> {
+    const comment = await this.#github.createIssueComment({
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body:
+      body: summaryForCommit(
+        input.target,
         `Sandy review skipped: this PR has ${formatCount(input.changedLines)} changed lines, ` +
-        `which is over the ${formatCount(input.maxChangedLines)} line Phase 1 limit. ` +
-        'Please request a smaller scope for review.',
+          `which is over the ${formatCount(input.maxChangedLines)} line Phase 1 limit. ` +
+          'Please request a smaller scope for review.',
+      ),
     });
+    return {
+      commentId: comment.id,
+      url: comment.url ?? fallbackIssueCommentUrl(input.target, comment.id),
+    };
   }
+}
+
+function summaryForCommit(target: PullRequestTarget, summary: string): string {
+  return [
+    `**Commit:** [\`${target.headSha}\`](https://github.com/${target.owner}/${target.repo}/commit/${target.headSha})`,
+    'This result applies only to that commit. To review later commits, add a new `@sandy` comment.',
+    summary,
+  ].join('\n\n');
+}
+
+function fallbackIssueCommentUrl(target: PullRequestTarget, commentId: number): string {
+  return `https://github.com/${target.owner}/${target.repo}/pull/${target.pullNumber}#issuecomment-${commentId}`;
 }
 
 function buildReviewCommentInput(

@@ -55,15 +55,18 @@ export interface CloneManagerOptions {
    * authenticated GitHub App URL (issue #6) while tests point at a local origin.
    */
   cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
+  signal?: AbortSignal;
 }
 
 export class CloneManager {
   readonly #baseDir: string;
   readonly #cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
+  readonly #signal: AbortSignal | undefined;
 
   constructor(options: CloneManagerOptions) {
     this.#baseDir = options.baseDir;
     this.#cloneUrl = options.cloneUrl;
+    this.#signal = options.signal;
   }
 
   /** Absolute path to a Repo's clone: `<baseDir>/<owner>/<name>`. */
@@ -87,13 +90,9 @@ export class CloneManager {
     // non-empty target; `rm` with `force` is a no-op when the path is absent.
     await rm(dest, { recursive: true, force: true });
     await mkdir(join(this.#baseDir, repo.owner), { recursive: true });
-    await this.#git(this.#baseDir, [
-      'clone',
-      '--branch',
-      repo.defaultBranch,
-      await this.#cloneUrl(repo),
-      dest,
-    ]);
+    const cloneUrl = await this.#cloneUrl(repo);
+    await this.#git(this.#baseDir, ['clone', '--branch', repo.defaultBranch, cloneUrl, dest]);
+    await this.#git(dest, ['remote', 'set-url', 'origin', credentialFreeUrl(cloneUrl)]);
     return dest;
   }
 
@@ -102,24 +101,17 @@ export class CloneManager {
    * branches and prunes deleted refs so the local clone tracks the remote.
    */
   async fetch(repo: RepoIdentity): Promise<void> {
-    await this.#refreshOrigin(repo);
-    await this.#git(this.repoPath(repo), ['fetch', '--prune', 'origin']);
-  }
-
-  /**
-   * Re-point `origin` at a freshly resolved clone URL before fetching. `cloneUrl`
-   * bakes a GitHub App installation token into the URL, and those tokens expire
-   * after ~1h; the long-lived clone's stored `origin` would otherwise keep the
-   * token minted at first clone, so every fetch past the first hour fails auth.
-   * Resolving `cloneUrl` per fetch re-mints the token (the app client caches and
-   * refreshes it on expiry). A no-op rewrite for tokenless URLs (e.g. tests).
-   */
-  async #refreshOrigin(repo: RepoIdentity): Promise<void> {
-    await this.#git(this.repoPath(repo), [
-      'remote',
-      'set-url',
-      'origin',
-      await this.#cloneUrl(repo),
+    const cloneUrl = await this.#cloneUrl(repo);
+    const repoDir = this.repoPath(repo);
+    // Credentials are supplied to this command only. They never reach the
+    // worktree's shared .git/config, which reviewed code and Agents can read.
+    await this.#git(repoDir, ['remote', 'set-url', 'origin', credentialFreeUrl(cloneUrl)]);
+    await this.#git(repoDir, [
+      'fetch',
+      '--no-write-fetch-head',
+      '--prune',
+      cloneUrl,
+      '+refs/heads/*:refs/remotes/origin/*',
     ]);
   }
 
@@ -205,7 +197,10 @@ export class CloneManager {
       return false;
     }
     try {
-      await exec('git', ['-C', dest, 'rev-parse', '--is-inside-work-tree']);
+      await exec('git', ['-C', dest, 'rev-parse', '--is-inside-work-tree'], {
+        timeout: 120_000,
+        ...(this.#signal === undefined ? {} : { signal: this.#signal }),
+      });
       return true;
     } catch {
       return false;
@@ -219,7 +214,11 @@ export class CloneManager {
    */
   async #git(cwd: string, args: string[]): Promise<string> {
     try {
-      const { stdout } = await exec('git', args, { cwd });
+      const { stdout } = await exec('git', args, {
+        cwd,
+        timeout: 120_000,
+        ...(this.#signal === undefined ? {} : { signal: this.#signal }),
+      });
       return stdout;
     } catch (error) {
       const stderr =
@@ -238,6 +237,17 @@ function redactCredentialsInText(value: string): string {
   return value.replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+@[^\s'"]+/gi, (match) =>
     redactCredentials(match),
   );
+}
+
+function credentialFreeUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
 }
 
 function redactCredentials(value: string): string {

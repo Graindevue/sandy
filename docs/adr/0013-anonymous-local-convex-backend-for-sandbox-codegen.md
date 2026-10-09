@@ -2,7 +2,9 @@
 
 Date: 2026-05-31
 
-Status: Accepted
+Status: Amended by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Current amendment (2026-10-09).** Anonymous local Convex remains an isolated development/codegen option. The Actions review runtime and ordinary CI use committed `convex/_generated/` without starting a backend. The `.sandcastle` mounts, sandbox warm hook, and automatic merge gate below are historical and have been removed; see the [current codegen procedure](../../packages/convex-backend/README.md).
 
 ## Context
 

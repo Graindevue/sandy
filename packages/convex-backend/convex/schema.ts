@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 import {
   agentRunStatus,
+  agentRunUsage,
   confidence,
   crossRepoReference,
   crossRepoSearchRationale,
@@ -68,6 +69,7 @@ export default defineSchema({
     confidenceScore: confidence,
     agentRuns: v.array(v.id('agentRuns')),
     siblingShas,
+    checkRunId: v.optional(v.number()),
     claimedAt: v.optional(v.number()),
     finishedAt: v.optional(v.number()),
     error: v.optional(v.string()),
@@ -142,6 +144,7 @@ export default defineSchema({
     finishedAt: v.optional(v.number()),
     findingCount: v.number(),
     crossRepoSearch: v.optional(crossRepoSearchRationale),
+    usage: v.optional(agentRunUsage),
     error: v.optional(v.string()),
   }).index('by_review_job', ['reviewJobId']),
 

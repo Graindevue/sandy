@@ -12,21 +12,25 @@ export interface ComputeConfidenceScoreInput {
 }
 
 export function computeConfidenceScore(input: ComputeConfidenceScoreInput): Confidence {
+  // Confidence Score: 5 = clean / most confidence the code is good, 0 = many
+  // severe findings. We compute the existing risk total, then subtract it from 5.
+  // Do not re-align this with per-Finding `confidence`, which runs the opposite
+  // direction (higher = more sure a finding is a real problem). See CONTEXT.md.
   if (input.findings.length === 0) {
-    return 0;
+    return 5;
   }
 
   const findingRisk = input.findings.reduce(
     (sum, finding) => sum + SEVERITY_WEIGHT[finding.severity] * finding.confidence,
     0,
   );
-  const blastRadiusBonus =
-    changedLineBonus(input.changedLineCount) + crossRepoReferenceBonus(input.findings);
+  const blastRadiusPenalty =
+    changedLinePenalty(input.changedLineCount) + crossRepoReferencePenalty(input.findings);
 
-  return toConfidence(Math.ceil(findingRisk / 6 + blastRadiusBonus));
+  return toConfidence(5 - Math.ceil(findingRisk / 6 + blastRadiusPenalty));
 }
 
-function changedLineBonus(changedLineCount: number): number {
+function changedLinePenalty(changedLineCount: number): number {
   if (changedLineCount >= 1000) {
     return 2;
   }
@@ -36,7 +40,7 @@ function changedLineBonus(changedLineCount: number): number {
   return 0;
 }
 
-function crossRepoReferenceBonus(findings: readonly Finding[]): number {
+function crossRepoReferencePenalty(findings: readonly Finding[]): number {
   const referenceCount = findings.reduce(
     (sum, finding) => sum + (finding.crossRepoReferences?.length ?? 0),
     0,

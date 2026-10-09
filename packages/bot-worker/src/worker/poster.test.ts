@@ -32,7 +32,7 @@ const target: PullRequestTarget = {
   headSha: 'abc123',
 };
 
-const noFindingsSummary = 'Confidence score: 0/5\n\nSandy review: no findings posted.';
+const noFindingsSummary = 'Confidence score: 5/5\n\nSandy review: no findings posted.';
 const oneFindingSummary = 'Confidence score: 3/5\n\nSandy review posted 1 finding.';
 const twoFindingsSummary = 'Confidence score: 3/5\n\nSandy review posted 2 findings.';
 const consumerReference: CrossRepoReference = {
@@ -49,14 +49,18 @@ describe('PullRequestPoster', () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: {},
       summary: 'Confidence score: 2/5\n\nSandy review posted 1 finding.',
       findings: [persistedFinding()],
     });
 
-    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.postedFindings).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.summaryComment).toEqual({
+      commentId: 102,
+      url: 'https://github.com/acme/widget/pull/12#issuecomment-102',
+    });
     expect(github.reviewComments).toEqual([
       {
         owner: 'acme',
@@ -76,25 +80,36 @@ describe('PullRequestPoster', () => {
     expect(github.issueComments[0]?.body).toContain('Sandy review posted 1 finding.');
   });
 
-  it('posts a clean no-issues summary when there are no findings', async () => {
+  it('pins a clean summary to its commit and explains how to review later commits', async () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
+    const reviewedTarget = {
+      ...target,
+      headSha: '9bfd378be19e4fc798b357f5b842eebcf3be4278',
+    };
 
-    const posted = await poster.postReviewResult({
-      target,
+    const result = await poster.postReviewResult({
+      target: reviewedTarget,
       siblingShas: {},
       summary: noFindingsSummary,
       findings: [],
     });
 
-    expect(posted).toEqual([]);
+    expect(result.postedFindings).toEqual([]);
+    expect(result.summaryComment).toEqual({
+      commentId: 101,
+      url: 'https://github.com/acme/widget/pull/12#issuecomment-101',
+    });
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments).toEqual([
       {
         owner: 'acme',
         repo: 'widget',
         issueNumber: 12,
-        body: noFindingsSummary,
+        body:
+          '**Commit:** [`9bfd378be19e4fc798b357f5b842eebcf3be4278`](https://github.com/acme/widget/commit/9bfd378be19e4fc798b357f5b842eebcf3be4278)\n\n' +
+          'This result applies only to that commit. To review later commits, add a new `@sandy` comment.\n\n' +
+          noFindingsSummary,
       },
     ]);
   });
@@ -104,7 +119,7 @@ describe('PullRequestPoster', () => {
     const logger = { warn: vi.fn() };
     const poster = new PullRequestPoster(github, { logger });
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: {},
       summary: twoFindingsSummary,
@@ -120,7 +135,7 @@ describe('PullRequestPoster', () => {
       ],
     });
 
-    expect(posted).toEqual([
+    expect(result.postedFindings).toEqual([
       { findingId: 'finding-2', commentId: 101 },
       { findingId: 'finding-1', commentId: 102 },
     ]);
@@ -238,7 +253,7 @@ describe('PullRequestPoster', () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
 
-    const posted = await poster.postReviewResult({
+    const result = await poster.postReviewResult({
       target,
       siblingShas: consumerSiblingShas,
       summary: oneFindingSummary,
@@ -255,7 +270,7 @@ describe('PullRequestPoster', () => {
       ],
     });
 
-    expect(posted).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
+    expect(result.postedFindings).toEqual([{ findingId: 'finding-1', commentId: 101 }]);
     expect(github.reviewComments).toEqual([]);
     expect(github.issueComments[0]?.body).toContain('Findings folded into the summary');
     expect(github.issueComments[0]?.body).toContain(
@@ -275,6 +290,12 @@ describe('PullRequestPoster', () => {
     });
 
     expect(github.reviewComments).toEqual([]);
+    expect(github.issueComments[0]?.body).toMatch(
+      /^\*\*Commit:\*\* \[`abc123`\]\(https:\/\/github\.com\/acme\/widget\/commit\/abc123\)/,
+    );
+    expect(github.issueComments[0]?.body).toContain(
+      'This result applies only to that commit. To review later commits, add a new `@sandy` comment.',
+    );
     expect(github.issueComments[0]?.body).toContain('request a smaller scope');
     expect(github.issueComments[0]?.body).toContain('5,001 changed lines');
   });
@@ -308,8 +329,12 @@ class FakeGitHubReviewPoster implements GitHubReviewPoster {
     return { id: this.#nextCommentId++ };
   }
 
-  async createIssueComment(input: IssueCommentInput): Promise<{ id: number }> {
+  async createIssueComment(input: IssueCommentInput): Promise<{ id: number; url: string }> {
     this.issueComments.push(input);
-    return { id: this.#nextCommentId++ };
+    const id = this.#nextCommentId++;
+    return {
+      id,
+      url: `https://github.com/${input.owner}/${input.repo}/pull/${input.issueNumber}#issuecomment-${id}`,
+    };
   }
 }

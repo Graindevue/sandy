@@ -1,6 +1,7 @@
 import type {
   AgentDefinition,
   AgentRunStatus,
+  AgentRunUsage,
   ApiSurfaceManifestBuildResult,
   ApiSurfaceRepoInput,
   Confidence,
@@ -17,23 +18,35 @@ import {
   synthesizePostableReview,
 } from '../synthesizer/synthesizer.js';
 import { type AgentSelectionRepo, selectAgentsForReview } from './agent-selector.js';
-import {
-  isReviewSupersededError,
-  type ReviewCancellationRegistry,
-  ReviewSupersededError,
-} from './cancellation.js';
+import type {
+  AgentRunResult,
+  RunnerPullRequest,
+  RunnerSiblingWorktree,
+} from './codex-exec-runner.js';
+import type { DependencyInstallResult } from './dependency-install.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
-  PostedFinding,
+  PostedReviewResult,
+  PostedSummaryComment,
   PostReviewResultInput,
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
+import { isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
 import type {
   ArchetypeAssignedFinding,
   PersistedFinding,
   PostableFinding,
 } from './review-findings.js';
+import {
+  type CompleteReviewStatusCheckRunInput,
+  completedReviewStatusCheckOutcome,
+  REVIEW_STATUS_CHECK_OUTCOMES,
+  type ReviewStatusCheckLogger,
+  type ReviewStatusCheckReporter,
+  type ReviewStatusCheckRun,
+  startReviewStatusCheck,
+} from './review-status-check.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -41,7 +54,6 @@ import {
   type ReviewCloneManager,
   type ReviewWorktree,
 } from './review-workspace.js';
-import type { RunnerPullRequest, RunnerSiblingWorktree } from './sandcastle-runner.js';
 
 export type {
   ProductRepoForReview,
@@ -60,6 +72,7 @@ export interface ReviewJobContext {
     agentKeys: string[];
     confidenceScore: Confidence;
     agentRuns: string[];
+    checkRunId?: number;
   };
   repo: {
     id: string;
@@ -97,6 +110,7 @@ interface RecordAgentRunBaseInput {
   agentKey: string;
   startedAt: number;
   finishedAt: number;
+  usage?: AgentRunUsage;
 }
 
 export type RecordAgentRunInput =
@@ -126,12 +140,14 @@ export interface ReviewExecutionStore {
   recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]>;
   markFindingPosted(findingId: string, githubCommentId: number): Promise<void>;
   recordAgentRun(input: RecordAgentRunInput): Promise<void>;
-  markCompleted(jobId: string, finishedAt: number): Promise<void>;
-  markFailed(jobId: string, finishedAt: number, error: string): Promise<void>;
+  setReviewCheckRunId(jobId: string, checkRunId: number): Promise<void>;
+  markCompleted(jobId: string, finishedAt: number): Promise<boolean>;
+  markFailed(jobId: string, finishedAt: number, error: string): Promise<boolean>;
 }
 
 export interface ReviewDiffInspector {
   changedLineCount(target: PullRequestTarget, ignorePatterns?: readonly string[]): Promise<number>;
+  changedPaths?(target: PullRequestTarget): Promise<string[]>;
 }
 
 export interface ReviewAgentRunner {
@@ -142,8 +158,19 @@ export interface ReviewAgentRunner {
     apiSurfaceManifest?: string;
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
     botConfig?: ReviewBotContext;
+    dependencyInstall?: DependencyInstallResult;
     signal?: AbortSignal;
-  }): Promise<string>;
+  }): Promise<AgentRunResult>;
+  /**
+   * Install the reviewed Repo's dependencies into the PR worktree, once per
+   * Review and before the Agent fan-out. Optional: runners without sandbox
+   * install support skip the step and Agents see no toolchain context.
+   */
+  installDependencies?(input: {
+    worktreePath: string;
+    cacheKey?: string;
+    signal?: AbortSignal;
+  }): Promise<DependencyInstallResult>;
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
@@ -153,13 +180,53 @@ type AgentExecutionOutcome =
       startedAt: number;
       finishedAt: number;
       payload: FindingsPayload;
+      usage?: AgentRunUsage;
     }
   | {
       status: FailedAgentRunStatus;
       startedAt: number;
       finishedAt: number;
       error: string;
+      usage?: AgentRunUsage;
     };
+
+type SelectedAgentReviewResult =
+  | { status: 'completed'; output: AgentReviewOutput }
+  | { status: 'failed' };
+
+interface SelectedAgentReviewResults {
+  outputs: AgentReviewOutput[];
+  failedAgentCount: number;
+  selectedAgentCount: number;
+}
+
+function agentRunRecordInput(
+  reviewJobId: string,
+  agentKey: string,
+  outcome: AgentExecutionOutcome,
+): RecordAgentRunInput {
+  const base = {
+    reviewJobId,
+    agentKey,
+    startedAt: outcome.startedAt,
+    finishedAt: outcome.finishedAt,
+    ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+  };
+  if (outcome.status !== 'completed') {
+    return {
+      ...base,
+      status: outcome.status,
+      findingCount: 0,
+      error: outcome.error,
+    };
+  }
+  return {
+    ...base,
+    status: 'completed',
+    findingCount: outcome.payload.findings.length,
+    crossRepoSearch: outcome.payload.crossRepoSearch,
+  };
+}
 
 interface AgentWorkspace {
   prWorktree: ReviewWorktree;
@@ -173,12 +240,13 @@ interface AgentExecutionInput {
   workspace: AgentWorkspace;
   manifest: ApiSurfaceManifestBuildResult | undefined;
   reviewBotConfig: ReviewBotContext;
+  dependencyInstall: DependencyInstallResult | undefined;
   cancellationSignal: AbortSignal | undefined;
 }
 
 export interface ReviewPoster {
-  postReviewResult(input: PostReviewResultInput): Promise<PostedFinding[]>;
-  postScopeDeclined(input: PostScopeDeclinedInput): Promise<void>;
+  postReviewResult(input: PostReviewResultInput): Promise<PostedReviewResult>;
+  postScopeDeclined(input: PostScopeDeclinedInput): Promise<PostedSummaryComment>;
 }
 
 export interface ReviewArchetypeAssigner {
@@ -204,19 +272,26 @@ export interface ReviewExecutorOptions {
   diffInspector: ReviewDiffInspector;
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
+  statusChecks?: ReviewStatusCheckReporter;
   archetypeAssigner: ReviewArchetypeAssigner;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
   manifestBuilder?: ReviewManifestBuilder;
   resolveReviewBotConfig?: (input: ResolveReviewBotConfigInput) => Promise<ReviewBotContext>;
-  cancellationRegistry?: ReviewCancellationRegistry;
+  signal?: AbortSignal;
   maxChangedLines?: number;
   agentTimeoutMs?: number;
   now?: () => number;
+  logger?: ReviewStatusCheckLogger;
 }
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
-const DEFAULT_AGENT_TIMEOUT_MS = 5 * 60 * 1000;
+// 10 minutes: now that the sandbox has node_modules, Agents execute real
+// test suites and type-checks; the heaviest Agent (logic) ran 4 scoped
+// vitest suites + a cross-package type-check and could not fit 5 minutes.
+// Reviews are manual-only (ADR 0017), so wall-clock is worth a complete run
+// — a timeout discards the Agent's entire work product.
+const DEFAULT_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class ReviewExecutor {
   readonly #store: ReviewExecutionStore;
@@ -224,6 +299,7 @@ export class ReviewExecutor {
   readonly #diffInspector: ReviewDiffInspector;
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
+  readonly #statusChecks: ReviewStatusCheckReporter | null;
   readonly #archetypeAssigner: ReviewArchetypeAssigner;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
@@ -231,10 +307,11 @@ export class ReviewExecutor {
   readonly #resolveReviewBotConfig: (
     input: ResolveReviewBotConfigInput,
   ) => Promise<ReviewBotContext>;
-  readonly #cancellationRegistry: ReviewCancellationRegistry | null;
+  readonly #signal: AbortSignal | undefined;
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
   readonly #now: () => number;
+  readonly #logger: ReviewStatusCheckLogger;
 
   constructor(options: ReviewExecutorOptions) {
     this.#store = options.store;
@@ -242,28 +319,38 @@ export class ReviewExecutor {
     this.#diffInspector = options.diffInspector;
     this.#runner = options.runner;
     this.#poster = options.poster;
+    this.#statusChecks = options.statusChecks ?? null;
     this.#archetypeAssigner = options.archetypeAssigner;
     this.#resolveAgent = options.resolveAgent;
     this.#resolveAgents = options.resolveAgents ?? null;
     this.#manifestBuilder = options.manifestBuilder ?? null;
     this.#resolveReviewBotConfig = options.resolveReviewBotConfig ?? resolveEmptyReviewBotContext;
-    this.#cancellationRegistry = options.cancellationRegistry ?? null;
+    this.#signal = options.signal;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
+    this.#logger = options.logger ?? console;
   }
 
-  async executeClaimedJob(jobId: string): Promise<void> {
+  async executeClaimedJob(jobId: string): Promise<{ failedAgentCount: number }> {
+    let failedAgentCount = 0;
     let context: ReviewJobContext | null = null;
+    let statusCheck: ReviewStatusCheckRun | null = null;
     const worktrees: ReviewWorktree[] = [];
-    const cancellation = this.#cancellationRegistry?.register(jobId);
-    const cancellationSignal = cancellation?.signal;
+    const cancellationSignal = this.#signal;
 
     try {
       cancellationSignal?.throwIfAborted();
       context = await this.#requiredContext(jobId);
       const repo = repoForWorktree(context);
       const target = pullRequestTarget(context);
+      statusCheck = await startReviewStatusCheck({
+        context,
+        reporter: this.#statusChecks,
+        store: this.#store,
+        now: this.#now,
+        logger: this.#logger,
+      });
       const preflightBotConfig = await this.#resolveReviewBotConfig({ context, repo });
       const changedLines = await this.#diffInspector.changedLineCount(
         target,
@@ -273,15 +360,58 @@ export class ReviewExecutor {
 
       if (changedLines > this.#maxChangedLines) {
         await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-        await this.#completeScopeDecline(jobId, target, changedLines);
-        return;
+        const summaryComment = await this.#completeScopeDecline(
+          jobId,
+          target,
+          changedLines,
+          cancellationSignal,
+        );
+        await statusCheck.complete({
+          outcome: REVIEW_STATUS_CHECK_OUTCOMES.scopeDeclined,
+          summaryComment,
+        });
+        return { failedAgentCount };
       }
 
       const workspace = await materializeReviewWorkspace(this.#cloneManager, context);
       worktrees.push(...workspace.worktrees);
       await this.#store.recordSiblingShas(jobId, workspace.siblingShas);
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      const manifest = await this.#buildAndRecordManifest(context, workspace.manifestRepos);
+      // Manifest build and dependency install are independent of each other,
+      // so they run concurrently. allSettled keeps the slower one from being
+      // orphaned mid-flight (and rejecting unhandled) when the other throws.
+      const [manifestSettled, installSettled] = await Promise.allSettled([
+        this.#buildAndRecordManifest(context, workspace.manifestRepos),
+        this.#installWorkspaceDependencies(
+          workspace.prWorktree.path,
+          `${context.repo.owner}/${context.repo.name}`,
+          cancellationSignal,
+        ),
+      ]);
+      if (manifestSettled.status === 'rejected') {
+        throw manifestSettled.reason;
+      }
+      if (installSettled.status === 'rejected') {
+        throw installSettled.reason;
+      }
+      const manifest = manifestSettled.value;
+      const dependencyInstall = installSettled.value;
+      const testSummary = reviewTestSummary(dependencyInstall);
+      this.#logger.info?.(testSummary);
+      if (
+        dependencyInstall?.status === 'installed' &&
+        dependencyInstall.testStatus === 'failed' &&
+        dependencyInstall.testResult !== undefined
+      ) {
+        const diagnostics = dependencyInstall.testResult;
+        this.#logger.info?.(
+          `Project test diagnostics:\n${
+            diagnostics.length <= 4000
+              ? diagnostics
+              : `${diagnostics.slice(0, 2000)}\n... [output truncated] ...\n${diagnostics.slice(-2000)}`
+          }`,
+        );
+      }
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
       const reviewBotConfig = await this.#resolveReviewBotConfig({
         context,
@@ -296,39 +426,67 @@ export class ReviewExecutor {
         workspace.manifestRepos,
         reviewBotConfig,
       );
-      const agentOutputs = await this.#runSelectedAgents({
+      const agentResults = await this.#runSelectedAgents({
         context,
         agents,
         workspace,
         manifest,
         reviewBotConfig,
+        dependencyInstall,
         cancellationSignal,
       });
-      if (agentOutputs.length > 0) {
-        await this.#synthesizePersistAndPostReview({
+      failedAgentCount = agentResults.failedAgentCount;
+      let postedReview: PostedReviewResult | null = null;
+      if (agentResults.outputs.length > 0) {
+        postedReview = await this.#synthesizePersistAndPostReview({
           context,
           target,
-          agentOutputs,
+          agentOutputs: agentResults.outputs,
           changedLineCount: changedLines,
           siblingShas: workspace.siblingShas,
           cancellationSignal,
+          testSummary,
         });
       }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
-      await this.#store.markCompleted(jobId, this.#now());
+      await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
+      const outcome = completedReviewStatusCheckOutcome({
+        selectedAgentCount: agentResults.selectedAgentCount,
+        failedAgentCount: agentResults.failedAgentCount,
+        postedFindingCount: postedReview?.postedFindings.length ?? 0,
+      });
+      if (
+        outcome.conclusion === 'success' &&
+        !(dependencyInstall?.status === 'installed' && dependencyInstall.testStatus === 'passed')
+      ) {
+        outcome.conclusion = 'neutral';
+        outcome.verdict = 'Sandy completed review';
+      }
+      outcome.verdict += `. ${testSummary.replace(/\.$/, '')}`;
+      const statusCheckCompletion: CompleteReviewStatusCheckRunInput = { outcome };
+      if (postedReview !== null) {
+        statusCheckCompletion.summaryComment = postedReview.summaryComment;
+      }
+      await statusCheck.complete(statusCheckCompletion);
     } catch (error) {
       if (isReviewSupersededError(error)) {
-        return;
+        await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
+        return { failedAgentCount };
       }
       const message = describeError(error);
-      await this.#store.markFailed(jobId, this.#now(), message);
+      const markedFailed = await this.#store.markFailed(jobId, this.#now(), message);
+      if (!markedFailed && (await this.#reviewWasSuperseded(jobId, cancellationSignal))) {
+        await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
+        return { failedAgentCount };
+      }
+      await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed });
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
       }
-      cancellation?.dispose();
     }
+    return { failedAgentCount };
   }
 
   async #selectAgents(
@@ -345,10 +503,52 @@ export class ReviewExecutor {
     return await selectAgentsForReview({
       agents: candidates,
       reviewRepoFullName: `${context.repo.owner}/${context.repo.name}`,
+      ...(this.#diffInspector.changedPaths === undefined
+        ? {}
+        : {
+            changedPaths: await this.#diffInspector.changedPaths(pullRequestTarget(context)),
+          }),
       productRepos: manifestRepos.map((manifestRepo) =>
         agentSelectionRepo(manifestRepo, reviewBotConfig),
       ),
     });
+  }
+
+  /**
+   * Run the once-per-Review dependency install when the runner supports it.
+   * Install failures degrade the Review to static analysis — loudly, via the
+   * warn log here and the toolchain banner in every Agent prompt — instead of
+   * failing it. Only abort/supersede propagates as a throw.
+   */
+  async #installWorkspaceDependencies(
+    worktreePath: string,
+    cacheKey: string,
+    signal: AbortSignal | undefined,
+  ): Promise<DependencyInstallResult | undefined> {
+    const install = this.#runner.installDependencies;
+    if (install === undefined) {
+      return undefined;
+    }
+
+    let result: DependencyInstallResult;
+    try {
+      result = await install.call(this.#runner, {
+        worktreePath,
+        cacheKey,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (error) {
+      if (isReviewSupersededError(error) || signal?.aborted === true) {
+        throw error;
+      }
+      result = { status: 'failed', error: describeError(error) };
+    }
+    if (result.status === 'failed') {
+      this.#logger.warn(
+        `Review dependency install failed; Agents will review statically: ${result.error}`,
+      );
+    }
+    return result;
   }
 
   async #runSelectedAgents(input: {
@@ -357,67 +557,57 @@ export class ReviewExecutor {
     workspace: AgentWorkspace;
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
+    dependencyInstall: DependencyInstallResult | undefined;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<AgentReviewOutput[]> {
-    const results = await Promise.allSettled(
-      input.agents.map((agent) => this.#runSelectedAgent({ ...input, agent })),
-    );
-
+  }): Promise<SelectedAgentReviewResults> {
     const outputs: AgentReviewOutput[] = [];
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        throw result.reason;
+    let failedAgentCount = 0;
+    // One managed Codex auth file belongs to one execution stream. Starting
+    // the timeout here also gives each Agent its full budget after the prior
+    // Agent has finished, rather than consuming it while waiting for auth.
+    for (const agent of input.agents) {
+      const result = await this.#runSelectedAgent({ ...input, agent });
+      if (result.status === 'failed') {
+        failedAgentCount += 1;
+        continue;
       }
-      if (result.value !== null) {
-        outputs.push(result.value);
-      }
+      outputs.push(result.output);
     }
-    return outputs;
+    return {
+      outputs,
+      failedAgentCount,
+      selectedAgentCount: input.agents.length,
+    };
   }
 
-  async #runSelectedAgent(input: AgentExecutionInput): Promise<AgentReviewOutput | null> {
+  async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
     const outcome = await this.#executeAgent(input);
+    await this.#store.recordAgentRun(agentRunRecordInput(context.job.id, agent.key, outcome));
     if (outcome.status !== 'completed') {
-      await this.#store.recordAgentRun({
-        reviewJobId: context.job.id,
-        agentKey: agent.key,
-        status: outcome.status,
-        startedAt: outcome.startedAt,
-        finishedAt: outcome.finishedAt,
-        findingCount: 0,
-        error: outcome.error,
-      });
-      return null;
+      return { status: 'failed' };
     }
 
-    await this.#store.recordAgentRun({
-      reviewJobId: context.job.id,
-      agentKey: agent.key,
-      status: 'completed',
-      startedAt: outcome.startedAt,
-      finishedAt: outcome.finishedAt,
-      findingCount: outcome.payload.findings.length,
-      crossRepoSearch: outcome.payload.crossRepoSearch,
-    });
-
-    return { agentKey: agent.key, payload: outcome.payload };
+    return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
   }
 
   async #executeAgent(input: AgentExecutionInput): Promise<AgentExecutionOutcome> {
     const { context, agent, cancellationSignal } = input;
     const startedAt = this.#now();
     const runInput = agentRunInput(input);
+    let usage: AgentRunUsage | undefined;
 
     try {
-      const stdout = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      const result = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      usage = result.usage;
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
-      const payload = parseFindingsPayload(stdout);
+      const payload = parseFindingsPayload(result.stdout);
       return {
         status: 'completed',
         startedAt,
         finishedAt: this.#now(),
         payload,
+        ...(usage !== undefined ? { usage } : {}),
       };
     } catch (error) {
       if (isReviewSupersededError(error)) {
@@ -433,6 +623,7 @@ export class ReviewExecutor {
         startedAt,
         finishedAt: this.#now(),
         error: describeError(error),
+        ...(usage !== undefined ? { usage } : {}),
       };
     }
   }
@@ -441,7 +632,7 @@ export class ReviewExecutor {
     input: ReviewAgentRunInput,
     agentKey: string,
     parentSignal: AbortSignal | undefined,
-  ): Promise<string> {
+  ): Promise<AgentRunResult> {
     parentSignal?.throwIfAborted();
 
     const controller = new AbortController();
@@ -510,13 +701,15 @@ export class ReviewExecutor {
     jobId: string,
     target: PullRequestTarget,
     changedLines: number,
-  ): Promise<void> {
-    await this.#poster.postScopeDeclined({
+    cancellationSignal: AbortSignal | undefined,
+  ): Promise<PostedSummaryComment> {
+    const summaryComment = await this.#poster.postScopeDeclined({
       target,
       changedLines,
       maxChangedLines: this.#maxChangedLines,
     });
-    await this.#store.markCompleted(jobId, this.#now());
+    await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
+    return summaryComment;
   }
 
   async #buildAndRecordManifest(
@@ -543,7 +736,8 @@ export class ReviewExecutor {
     changedLineCount: number;
     siblingShas: SiblingShas;
     cancellationSignal: AbortSignal | undefined;
-  }): Promise<void> {
+    testSummary: string;
+  }): Promise<PostedReviewResult> {
     const synthesized = synthesizeAgentOutputs({
       agentOutputs: input.agentOutputs,
       changedLineCount: input.changedLineCount,
@@ -565,11 +759,11 @@ export class ReviewExecutor {
       changedLineCount: input.changedLineCount,
       rawFindingCount: synthesized.rawFindingCount,
     });
-    await this.#postReviewResult(
+    return await this.#postReviewResult(
       input.target,
       postable.findings,
       input.siblingShas,
-      postable.summary,
+      `${input.testSummary}\n\n${postable.summary}`,
     );
   }
 
@@ -578,11 +772,12 @@ export class ReviewExecutor {
     findings: PostableFinding[],
     siblingShas: SiblingShas,
     summary: string,
-  ): Promise<void> {
-    const posted = await this.#poster.postReviewResult({ target, findings, siblingShas, summary });
-    for (const postedFinding of posted) {
+  ): Promise<PostedReviewResult> {
+    const result = await this.#poster.postReviewResult({ target, findings, siblingShas, summary });
+    for (const postedFinding of result.postedFindings) {
       await this.#store.markFindingPosted(postedFinding.findingId, postedFinding.commentId);
     }
+    return result;
   }
 
   async #throwIfCancelledOrSuperseded(jobId: string, signal?: AbortSignal): Promise<void> {
@@ -592,6 +787,28 @@ export class ReviewExecutor {
     if (status === 'superseded') {
       throw new ReviewSupersededError(jobId);
     }
+  }
+
+  async #markCompletedOrThrowIfSuperseded(
+    jobId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const markedCompleted = await this.#store.markCompleted(jobId, this.#now());
+    if (markedCompleted) {
+      return;
+    }
+    if (await this.#reviewWasSuperseded(jobId, signal)) {
+      throw new ReviewSupersededError(jobId);
+    }
+    throw new Error(`ReviewJob ${jobId} was not running when completion was recorded`);
+  }
+
+  async #reviewWasSuperseded(jobId: string, signal: AbortSignal | undefined): Promise<boolean> {
+    if (isReviewSupersededError(signal?.reason)) {
+      return true;
+    }
+    const status = await this.#store.getReviewJobStatus(jobId);
+    return status === 'superseded' || isReviewSupersededError(signal?.reason);
   }
 }
 
@@ -637,11 +854,29 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
   if (input.workspace.siblingWorktrees.length > 0) {
     runInput.siblingWorktrees = input.workspace.siblingWorktrees;
   }
+  if (input.dependencyInstall !== undefined) {
+    runInput.dependencyInstall = input.dependencyInstall;
+  }
   return runInput;
 }
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reviewTestSummary(result: DependencyInstallResult | undefined): string {
+  if (result?.status === 'failed') {
+    return 'Tests unavailable: dependency installation failed. Review used static analysis.';
+  }
+  if (result?.status === 'skipped') {
+    return 'Tests not run: no supported project test setup.';
+  }
+  if (result?.status === 'installed') {
+    if (result.testStatus === 'passed') return 'Tests passed: the project test suite ran once.';
+    if (result.testStatus === 'failed') return 'Tests failed: the project test suite did not pass.';
+    if (result.testStatus === 'skipped') return 'Tests not run: no project test script is defined.';
+  }
+  return 'Tests unavailable: no test-suite result was recorded.';
 }
 
 async function resolveEmptyReviewBotContext(): Promise<ReviewBotContext> {

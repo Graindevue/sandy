@@ -1,5 +1,8 @@
 # Phase 2 — Parallel Specialized Agents
 
+> **Historical plan (May–June 2026).** Preserved as the original implementation record, including its original status and unchecked criteria. Current execution is GitHub Actions with serial Codex Agent Runs; containers, host services, reactive workers, and learning provisioning below are retired. See [ADR 0018](../adr/0018-github-actions-codex-runtime.md) and the [current setup guide](../setup/README.md).
+
+
 Status: Draft
 Owner: Tony
 Target: Specialized agent fan-out with cross-repo product context.

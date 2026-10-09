@@ -126,13 +126,25 @@ describe('synthesizeReview', () => {
       agentSummaries: ['One issue found.'],
     });
 
-    expect(result.confidenceScore).toBe(2);
-    expect(result.summary).toContain('Confidence score: 2/5');
+    expect(result.confidenceScore).toBe(3);
+    expect(result.summary).toContain('Confidence score: 3/5');
     expect(result.summary).toContain('Sandy review posted 1 finding.');
     expect(result.summary).toContain('One issue found.');
   });
 
-  it('raises the confidence score for large cross-repo blast radius', () => {
+  it('reports full confidence when there are no findings', () => {
+    const result = synthesizeReview({
+      findings: [],
+      changedLineCount: 80,
+      agentSummaries: ['Nothing to flag.'],
+    });
+
+    expect(result.confidenceScore).toBe(5);
+    expect(result.summary).toContain('Confidence score: 5/5');
+    expect(result.summary).toContain('Sandy review: no findings posted.');
+  });
+
+  it('lowers the confidence score for large cross-repo blast radius', () => {
     const result = synthesizeReview({
       findings: [
         {
@@ -146,7 +158,7 @@ describe('synthesizeReview', () => {
       agentSummaries: [],
     });
 
-    expect(result.confidenceScore).toBe(4);
+    expect(result.confidenceScore).toBe(1);
   });
 
   it('builds a postable review after applying Archetype suppression', () => {
@@ -186,7 +198,7 @@ describe('synthesizeReview', () => {
     expect(result.findings).toEqual([
       { id: 'finding-2', archetypeId: 'archetype-finding-2', finding: postableFinding },
     ]);
-    expect(result.summary).toContain('Confidence score: 1/5');
+    expect(result.summary).toContain('Confidence score: 4/5');
     expect(result.summary).toContain('Synthesized 2 raw findings into 1 posted finding.');
     expect(result.summary).toContain('Two issues found.');
     expect(result.summary).toContain(postableFinding.summary);

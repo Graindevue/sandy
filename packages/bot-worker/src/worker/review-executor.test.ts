@@ -1,76 +1,28 @@
-import type { AgentDefinition, Finding, ReviewJobStatus, SiblingShas } from '@sandy/shared-types';
+import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { ReviewCancellationCoordinator } from './cancellation.js';
+import { ReviewSupersededError } from './review-errors.js';
+import { ReviewExecutor } from './review-executor.js';
 import {
-  type RecordAgentRunInput,
-  type RecordSynthesizedReviewInput,
-  type ReviewAgentRunner,
-  type ReviewArchetypeAssigner,
-  type ReviewDiffInspector,
-  type ReviewExecutionStore,
-  ReviewExecutor,
-  type ReviewJobContext,
-  type ReviewPoster,
-} from './review-executor.js';
-import type { ArchetypeAssignedFinding, PersistedFinding } from './review-findings.js';
-
-interface RecordedFinding {
-  reviewJobId: string;
-  pullRequestId: string;
-  finding: Finding;
-}
-
-const logicAgent: AgentDefinition = {
-  key: 'logic',
-  name: 'logic',
-  description: 'Reviews logic bugs.',
-  category: 'logic',
-  vendor: 'claude',
-  model: 'opus',
-  tools: [],
-  maxIterations: 1,
-  completionSignal: '</findings>',
-  defaultEnabled: true,
-  systemPrompt: 'Review logic.',
-};
-
-const securityAgent: AgentDefinition = {
-  ...logicAgent,
-  key: 'security',
-  name: 'security',
-  description: 'Reviews security issues.',
-  category: 'security',
-  systemPrompt: 'Review security.',
-};
-
-const finding: Finding = {
-  severity: 'P1',
-  confidence: 4,
-  agentKey: 'logic',
-  anchor: {
-    repo: 'acme/widget',
-    path: 'src/cache.ts',
-    lineStart: 12,
-    lineEnd: 12,
-  },
-  summary: 'The cache key ignores the tenant id.',
-  evidence: 'The lookup only uses userId.',
-  suggestedFix: 'Include tenantId.',
-  category: 'logic',
-};
-
-const securityFinding: Finding = {
-  ...finding,
-  agentKey: 'security',
-  summary: 'The endpoint accepts an untrusted redirect target.',
-  category: 'security',
-};
-
-const skippedCrossRepoSearch = {
-  status: 'skipped' as const,
-  trigger: 'none' as const,
-  rationale: 'No cross-repo contract risk was detected.',
-};
+  agentRunUsage,
+  deferred,
+  FakeArchetypeAssigner,
+  FakeCloneManager,
+  FakeDiffInspector,
+  FakeExecutionStore,
+  FakePoster,
+  FakeRunner,
+  finding,
+  findingsOutput,
+  logicAgent,
+  makeContext,
+  nextNow,
+  runnerOutput,
+  securityAgent,
+  securityFinding,
+  skippedCrossRepoSearch,
+  withTimeout,
+} from './review-executor.test-support.js';
+import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
   it('runs the Agent, persists findings, posts comments, and completes the job', async () => {
@@ -78,7 +30,7 @@ describe('ReviewExecutor', () => {
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
     const diffInspector = new FakeDiffInspector(42);
-    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'));
+    const runner = new FakeRunner(findingsOutput([finding], 'One issue.'), agentRunUsage);
     const botConfig = {
       repoRules: '- Keep cache keys tenant-scoped.',
       productRules: '- API errors expose stable codes.',
@@ -116,11 +68,11 @@ describe('ReviewExecutor', () => {
       { id: 'finding-1', archetypeId: 'archetype-1', finding },
     ]);
     expect(poster.results[0]?.siblingShas).toEqual({});
-    expect(poster.results[0]?.summary).toContain('Confidence score: 2/5');
+    expect(poster.results[0]?.summary).toContain('Confidence score: 3/5');
     expect(poster.results[0]?.summary).toContain(
       'Cross-repo search:\n- logic: skipped (none) - No cross-repo contract risk was detected.',
     );
-    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 2 }]);
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 3 }]);
     expect(store.postedFindings).toEqual([{ findingId: 'finding-1', githubCommentId: 900 }]);
     expect(store.agentRuns).toEqual([
       {
@@ -130,6 +82,7 @@ describe('ReviewExecutor', () => {
         startedAt: 100,
         finishedAt: 200,
         findingCount: 1,
+        usage: agentRunUsage,
         crossRepoSearch: skippedCrossRepoSearch,
       },
     ]);
@@ -138,11 +91,143 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 
-  it('runs selected Agents concurrently and records each Agent result', async () => {
+  it('installs dependencies once per Review and threads the result into every Agent run', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const installResult = {
+      status: 'installed' as const,
+      packageManager: 'pnpm' as const,
+      command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
+      durationMs: 12_000,
+      testStatus: 'passed' as const,
+      testResult: 'pnpm test exited 0.',
+    };
+    const installCalls: { worktreePath: string; cacheKey?: string }[] = [];
+    const agentInstalls: unknown[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async ({ dependencyInstall }) => {
+          agentInstalls.push(dependencyInstall);
+          return runnerOutput(findingsOutput([]));
+        },
+        installDependencies: async ({ worktreePath, cacheKey }) => {
+          installCalls.push({ worktreePath, cacheKey });
+          return installResult;
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(installCalls).toEqual([
+      { worktreePath: '/tmp/worktree/acme/widget/job-1', cacheKey: 'acme/widget' },
+    ]);
+    expect(agentInstalls).toEqual([installResult, installResult]);
+    expect(store.completed).toHaveLength(1);
+  });
+
+  it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
+    const statusLines: string[] = [];
+    const poster = new FakePoster();
+    const diagnostics = `pnpm test exited 1.\nFIRST ERROR\n${'untrusted output\n'.repeat(1000)}LAST ERROR`;
+    const executor = new ReviewExecutor({
+      store: new FakeExecutionStore(makeContext()),
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async () => runnerOutput(findingsOutput([])),
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install --frozen-lockfile',
+          durationMs: 100,
+          testStatus: 'failed',
+          testResult: diagnostics,
+        }),
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+      logger: { warn: () => {}, info: (message) => statusLines.push(message) },
+    });
+    await executor.executeClaimedJob('job-1');
+    expect(statusLines[0]).toBe('Tests failed: the project test suite did not pass.');
+    expect(statusLines[1]).toContain('FIRST ERROR');
+    expect(statusLines[1]).toContain('LAST ERROR');
+    expect(statusLines[1]?.length).toBeLessThan(4100);
+    expect(poster.results[0]?.summary).not.toContain('FIRST ERROR');
+    expect(poster.results[0]?.summary).not.toContain('LAST ERROR');
+  });
+
+  it('qualifies a clean static review and uses a neutral check when dependency installation fails', async () => {
+    const store = new FakeExecutionStore(makeContext());
+    const poster = new FakePoster();
+    const warnings: string[] = [];
+    const statusLines: string[] = [];
+    const completedChecks: Array<Parameters<ReviewStatusCheckReporter['complete']>[0]> = [];
+    const agentInstalls: unknown[] = [];
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      statusChecks: {
+        createInProgress: async () => ({ id: 1200 }),
+        complete: async (input) => {
+          completedChecks.push(input);
+        },
+      },
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async ({ dependencyInstall }) => {
+          agentInstalls.push(dependencyInstall);
+          return runnerOutput(findingsOutput([]));
+        },
+        installDependencies: async () => {
+          throw new Error('container failed to start');
+        },
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+      logger: {
+        warn: (message) => warnings.push(message),
+        info: (message) => statusLines.push(message),
+      },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(agentInstalls).toEqual([{ status: 'failed', error: 'container failed to start' }]);
+    expect(store.completed).toHaveLength(1);
+    expect(store.failed).toEqual([]);
+    expect(warnings.join('\n')).toContain('container failed to start');
+    const testSummary =
+      'Tests unavailable: dependency installation failed. Review used static analysis.';
+    expect(poster.results[0]?.summary).toMatch(
+      /^Tests unavailable: dependency installation failed\. Review used static analysis\.\n\nConfidence score: 5\/5/,
+    );
+    expect(poster.results[0]?.summary).not.toContain('container failed to start');
+    expect(statusLines).toEqual([testSummary]);
+    expect(completedChecks[0]).toMatchObject({
+      conclusion: 'neutral',
+      verdict: `Sandy completed review. ${testSummary.slice(0, -1)}`,
+    });
+  });
+
+  it('runs selected Agents serially and records each Agent result', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const securityStarted = deferred<void>();
+    let activeAgents = 0;
+    let peakAgents = 0;
     const runnerCalls: string[] = [];
     const executor = new ReviewExecutor({
       store,
@@ -153,12 +238,11 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           runnerCalls.push(agent.key);
-          if (agent.key === 'logic') {
-            await securityStarted.promise;
-            return findingsOutput([finding]);
-          }
-          securityStarted.resolve();
-          return findingsOutput([securityFinding]);
+          activeAgents += 1;
+          peakAgents = Math.max(peakAgents, activeAgents);
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          activeAgents -= 1;
+          return runnerOutput(findingsOutput([agent.key === 'logic' ? finding : securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -166,9 +250,12 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 0,
+    });
 
-    expect(runnerCalls.sort()).toEqual(['logic', 'security']);
+    expect(runnerCalls).toEqual(['logic', 'security']);
+    expect(peakAgents).toBe(1);
     expect(store.recordedFindings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -220,9 +307,11 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           if (agent.key === 'logic') {
-            return findingsOutput([finding], 'Logic saw the cache issue.');
+            return runnerOutput(findingsOutput([finding], 'Logic saw the cache issue.'));
           }
-          return findingsOutput([duplicateSecurityFinding], 'Security saw the cache issue.');
+          return runnerOutput(
+            findingsOutput([duplicateSecurityFinding], 'Security saw the cache issue.'),
+          );
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -239,7 +328,7 @@ describe('ReviewExecutor', () => {
         finding: duplicateSecurityFinding,
       }),
     ]);
-    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 5 }]);
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 0 }]);
     expect(poster.results).toHaveLength(1);
     expect(poster.results[0]?.findings).toEqual([
       { id: 'finding-1', archetypeId: 'archetype-1', finding: duplicateSecurityFinding },
@@ -265,7 +354,7 @@ describe('ReviewExecutor', () => {
       archetypeAssigner: new FakeArchetypeAssigner([0.7, 0.69]),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding, unsuppressedFinding]),
+        runAgent: async () => runnerOutput(findingsOutput([finding, unsuppressedFinding])),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -300,7 +389,7 @@ describe('ReviewExecutor', () => {
           if (agent.key === 'logic') {
             throw new Error('container exited with status 1');
           }
-          return findingsOutput([securityFinding]);
+          return runnerOutput(findingsOutput([securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -341,9 +430,9 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           if (agent.key === 'logic') {
-            return await new Promise<string>(() => {});
+            return await new Promise<never>(() => {});
           }
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -352,7 +441,9 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 1,
+    });
 
     expect(store.agentRuns).toEqual(
       expect.arrayContaining([
@@ -402,7 +493,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async (input) => {
           runnerInput = input;
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       manifestBuilder: {
@@ -474,7 +565,6 @@ describe('ReviewExecutor', () => {
           repo: 'acme/desktop',
           sha: 'def456',
           hostPath: '/tmp/worktree/acme/desktop/job-1',
-          sandboxPath: '/workspace/acme/desktop',
         },
       ],
     });
@@ -494,7 +584,9 @@ describe('ReviewExecutor', () => {
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
-      runner: { runAgent: async () => '<findings>[]</findings>' },
+      runner: {
+        runAgent: async () => runnerOutput('<findings>[]</findings>', agentRunUsage),
+      },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
     });
@@ -512,6 +604,7 @@ describe('ReviewExecutor', () => {
     });
     expect(store.agentRuns[0]).toMatchObject({
       error: expect.stringContaining('FindingsPayload must be an object'),
+      usage: agentRunUsage,
     });
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
@@ -532,7 +625,7 @@ describe('ReviewExecutor', () => {
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding], 'One issue.'),
+        runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -592,18 +685,18 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const runnerStarted = deferred<void>();
     const executor = new ReviewExecutor({
       store,
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ signal }) =>
-          new Promise<string>((_resolve, reject) => {
+          new Promise<never>((_resolve, reject) => {
             runnerStarted.resolve();
             signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
           }),
@@ -614,7 +707,7 @@ describe('ReviewExecutor', () => {
 
     const execution = executor.executeClaimedJob('job-1');
     await runnerStarted.promise;
-    cancellations.cancelReviewJobs(['job-1']);
+    cancellations.abort(new ReviewSupersededError('job-1'));
     await execution;
 
     expect(poster.results).toEqual([]);
@@ -639,7 +732,7 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async () => {
           store.status = 'superseded';
-          return findingsOutput([finding], 'One issue.');
+          return runnerOutput(findingsOutput([finding], 'One issue.'));
         },
       },
       resolveAgent: () => logicAgent,
@@ -659,12 +752,12 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     let statusChecks = 0;
     store.getReviewJobStatus = async () => {
       statusChecks += 1;
       if (statusChecks === 4) {
-        cancellations.cancelReviewJobs(['job-1']);
+        cancellations.abort(new ReviewSupersededError('job-1'));
       }
       return store.status;
     };
@@ -673,10 +766,10 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
-        runAgent: async () => findingsOutput([finding], 'One issue.'),
+        runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
@@ -695,11 +788,11 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const originalCreateWorktree = cloneManager.createWorktree.bind(cloneManager);
     cloneManager.createWorktree = async (repo, request) => {
       const worktree = await originalCreateWorktree(repo, request);
-      cancellations.cancelReviewJobs(['job-1']);
+      cancellations.abort(new ReviewSupersededError('job-1'));
       return worktree;
     };
     let runnerCalls = 0;
@@ -708,12 +801,12 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => {
           runnerCalls += 1;
-          return findingsOutput([]);
+          return runnerOutput(findingsOutput([]));
         },
       },
       resolveAgent: () => logicAgent,
@@ -730,267 +823,3 @@ describe('ReviewExecutor', () => {
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);
   });
 });
-
-function makeContext(
-  options: { productRepos?: ReviewJobContext['product']['repos']; agentKeys?: string[] } = {},
-): ReviewJobContext {
-  return {
-    job: {
-      id: 'job-1',
-      pullRequestId: 'pr-1',
-      repoId: 'repo-1',
-      headSha: 'abc123',
-      agentKeys: options.agentKeys ?? ['logic'],
-      confidenceScore: 0,
-      agentRuns: [],
-    },
-    repo: {
-      id: 'repo-1',
-      owner: 'acme',
-      name: 'widget',
-      defaultBranch: 'main',
-    },
-    product: {
-      id: 'product-1',
-      slug: 'acme',
-      name: 'Acme',
-      repos: options.productRepos ?? [
-        {
-          id: 'repo-1',
-          owner: 'acme',
-          name: 'widget',
-          fullName: 'acme/widget',
-          defaultBranch: 'main',
-        },
-      ],
-    },
-    pullRequest: {
-      id: 'pr-1',
-      number: 12,
-      headSha: 'abc123',
-      baseRef: 'main',
-      title: 'Fix cache key',
-      url: 'https://github.com/acme/widget/pull/12',
-    },
-  };
-}
-
-function nextNow(values: number[]): () => number {
-  const copy = [...values];
-  return () => copy.shift() ?? values.at(-1) ?? 0;
-}
-
-function findingsOutput(findings: Finding[], summary?: string): string {
-  const payload: {
-    findings: Finding[];
-    crossRepoSearch: typeof skippedCrossRepoSearch;
-    summary?: string;
-  } = {
-    findings,
-    crossRepoSearch: skippedCrossRepoSearch,
-  };
-  if (summary !== undefined) {
-    payload.summary = summary;
-  }
-  return `<findings>${JSON.stringify(payload)}</findings>`;
-}
-
-class FakeExecutionStore implements ReviewExecutionStore {
-  recordedManifests: Array<{
-    productId: string;
-    repoShas: { repo: string; sha: string }[];
-    markdown: string;
-    builtAt: number;
-  }> = [];
-  recordedSiblingShas: { jobId: string; siblingShas: SiblingShas }[] = [];
-  confidenceScores: { jobId: string; confidenceScore: Finding['confidence'] }[] = [];
-  recordedFindings: RecordedFinding[] = [];
-  postedFindings: { findingId: string; githubCommentId: number }[] = [];
-  agentRuns: RecordAgentRunInput[] = [];
-  completed: { jobId: string; finishedAt: number }[] = [];
-  failed: { jobId: string; finishedAt: number; error: string }[] = [];
-  status: ReviewJobStatus | null = 'running';
-
-  constructor(private readonly context: ReviewJobContext | null) {}
-
-  async getReviewJobContext(_jobId: string): Promise<ReviewJobContext | null> {
-    return this.context;
-  }
-
-  async getReviewJobStatus(_jobId: string): Promise<typeof this.status> {
-    return this.status;
-  }
-
-  async recordApiSurfaceManifest(input: {
-    productId: string;
-    repoShas: { repo: string; sha: string }[];
-    markdown: string;
-    builtAt: number;
-  }): Promise<void> {
-    this.recordedManifests.push(input);
-  }
-
-  async recordSiblingShas(jobId: string, siblingShas: SiblingShas): Promise<void> {
-    this.recordedSiblingShas.push({ jobId, siblingShas });
-  }
-
-  async recordSynthesizedReview(input: RecordSynthesizedReviewInput): Promise<PersistedFinding[]> {
-    this.confidenceScores.push({
-      jobId: input.reviewJobId,
-      confidenceScore: input.confidenceScore,
-    });
-    return input.findings.map((finding) => {
-      this.recordedFindings.push({
-        reviewJobId: input.reviewJobId,
-        pullRequestId: input.pullRequestId,
-        finding,
-      });
-      return { id: `finding-${this.recordedFindings.length}`, finding };
-    });
-  }
-
-  async markFindingPosted(findingId: string, githubCommentId: number): Promise<void> {
-    this.postedFindings.push({ findingId, githubCommentId });
-  }
-
-  async recordAgentRun(input: RecordAgentRunInput): Promise<void> {
-    this.agentRuns.push(input);
-  }
-
-  async markCompleted(jobId: string, finishedAt: number): Promise<void> {
-    this.completed.push({ jobId, finishedAt });
-  }
-
-  async markFailed(jobId: string, finishedAt: number, error: string): Promise<void> {
-    this.failed.push({ jobId, finishedAt, error });
-  }
-}
-
-class FakeArchetypeAssigner implements ReviewArchetypeAssigner {
-  constructor(private readonly suppressionWeights: readonly number[] = []) {}
-
-  async assignArchetypes(
-    findings: readonly PersistedFinding[],
-  ): Promise<ArchetypeAssignedFinding[]> {
-    return findings.map((finding, index) => ({
-      ...finding,
-      archetypeId: `archetype-${index + 1}`,
-      archetypeSuppressionWeight: this.suppressionWeights[index] ?? 0,
-    }));
-  }
-}
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve(value: T): void;
-  reject(error: unknown): void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-class FakeCloneManager {
-  ensured: unknown[] = [];
-  created: unknown[] = [];
-  defaultBranchResolutions: unknown[] = [];
-  defaultBranchShas = new Map<string, string>();
-  removed: string[] = [];
-
-  async ensureCloned(repo: { owner: string; name: string; defaultBranch: string }): Promise<void> {
-    this.ensured.push(repo);
-  }
-
-  async resolveDefaultBranchSha(repo: { owner: string; name: string }): Promise<string> {
-    this.defaultBranchResolutions.push(repo);
-    return this.defaultBranchShas.get(`${repo.owner}/${repo.name}`) ?? 'default-sha';
-  }
-
-  async createWorktree(
-    repo: { owner: string; name: string; defaultBranch: string },
-    request: { reviewJobId: string; sha: string },
-  ): Promise<{
-    repo: { owner: string; name: string; defaultBranch: string };
-    reviewJobId: string;
-    path: string;
-    sha: string;
-  }> {
-    this.created.push({ repo, request });
-    return {
-      repo,
-      reviewJobId: request.reviewJobId,
-      sha: request.sha,
-      path: `/tmp/worktree/${repo.owner}/${repo.name}/${request.reviewJobId}`,
-    };
-  }
-
-  async removeWorktree(worktree: {
-    repo: { owner: string; name: string };
-    reviewJobId: string;
-  }): Promise<void> {
-    this.removed.push(`${worktree.repo.owner}/${worktree.repo.name}@${worktree.reviewJobId}`);
-  }
-}
-
-class FakePoster implements ReviewPoster {
-  results: Array<Parameters<ReviewPoster['postReviewResult']>[0]> = [];
-  scopeDeclines: { changedLines: number; maxChangedLines: number }[] = [];
-
-  async postReviewResult(
-    input: Parameters<ReviewPoster['postReviewResult']>[0],
-  ): Promise<{ findingId: string; commentId: number }[]> {
-    this.results.push(input);
-    return input.findings.map((finding, index) => ({
-      findingId: finding.id,
-      commentId: 900 + index,
-    }));
-  }
-
-  async postScopeDeclined(input: { changedLines: number; maxChangedLines: number }): Promise<void> {
-    this.scopeDeclines.push({
-      changedLines: input.changedLines,
-      maxChangedLines: input.maxChangedLines,
-    });
-  }
-}
-
-class FakeDiffInspector implements ReviewDiffInspector {
-  calls: {
-    target: Parameters<ReviewDiffInspector['changedLineCount']>[0];
-    ignorePatterns: Parameters<ReviewDiffInspector['changedLineCount']>[1];
-  }[] = [];
-
-  constructor(private readonly changedLines: number) {}
-
-  async changedLineCount(
-    target: Parameters<ReviewDiffInspector['changedLineCount']>[0],
-    ignorePatterns?: Parameters<ReviewDiffInspector['changedLineCount']>[1],
-  ): Promise<number> {
-    this.calls.push({ target, ignorePatterns });
-    return this.changedLines;
-  }
-}
-
-class FakeRunner implements ReviewAgentRunner {
-  calls: Array<Parameters<ReviewAgentRunner['runAgent']>[0]> = [];
-
-  constructor(private readonly stdout: string) {}
-
-  async runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]): Promise<string> {
-    this.calls.push(input);
-    return this.stdout;
-  }
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
-    }),
-  ]);
-}

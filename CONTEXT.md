@@ -1,133 +1,136 @@
 # Sandy Domain Glossary
 
-This document captures the vocabulary that shows up across the Sandy codebase. Stay precise about these terms; sloppy use leads to architectural drift.
+The vocabulary used by Sandy's review model. Deployment and execution choices
+are recorded in [ADR 0018](./docs/adr/0018-github-actions-codex-runtime.md).
 
 ## Product
 
-A group of GitHub repositories that together form one logical software product. A Product is the unit at which Sandy reasons about cross-repo context. Configuration in `.config/bot.yaml` declares Products and the Repos they contain.
-
-Example: a company with one backend monorepo and one desktop app repo registers both as a single Product. A Sandy Review of a desktop PR can read from the backend Repo, and vice versa.
-
-Cross-repo access is physical, not summary-only: every other Repo in the Product is bind-mounted read-only into each Agent's sandbox alongside the PR worktree, so an Agent can `rg`/`read_file` the actual sibling code. The ApiSurfaceManifest is layered on top as a cheap index ("what exists, what version"), not as the sole source of cross-repo knowledge — see "ApiSurfaceManifest".
+A named group of Repos that together form one software product. A Product scopes
+cross-repo context, shared Rules, and historical learning data; each Repo belongs
+to exactly one Product.
 
 ## Repo
 
-A single GitHub repository. Belongs to exactly one Product. Sandy clones each Repo to local disk on the host machine and keeps it up to date via webhooks.
+A GitHub repository registered in a Product. Its default branch is the reference
+against which sibling contracts are judged.
 
 ## Review
 
-The act of running one or more Agents over a Pull Request. A Review produces a set of Findings. Reviews are triggered by webhook events: PR opened (only when configured), push to a PR with `reviewActive = true`, `@bot review` mention, or `gh pr ready` (draft → ready transition).
+One requested assessment of a Pull Request by a set of Agents. It produces
+Findings, a Confidence Score, and a Review Status Check for a specific PR head
+commit. Its summary names that reviewed commit.
 
 ## ReviewJob
 
-A queued unit of work in Convex. Status flows: `pending` → `running` → (`completed` | `failed` | `superseded`). One ReviewJob per Review attempt. Multiple ReviewJobs may exist for the same PR over time as iteration happens.
+The durable record of one Review attempt. Its lifecycle is `pending` → `running`
+→ `completed`, `failed`, or `superseded`; multiple attempts may exist for a PR.
+
+## Review Status Check
+
+The advisory GitHub Check Run named **Sandy**, showing a Review's progress and
+outcome. Findings are advisory; an execution failure is reported as a failure,
+and a partial review must not appear as a clean all-clear.
+_Avoid_: CI check, commit status.
 
 ## Agent
 
-A single reviewer persona — a system prompt + a vendor/model selection + a tool allowlist + a completion signal. Agents are markdown files in `agents/` (defaults shipped with Sandy) or `.config/agents/` (per-instance customizations). Multiple Agents run in parallel within a Review, each in its own Apple Container.
-
-Agents are NOT software components — they are configuration data. Adding a new Agent does not require code changes to Sandy.
+A reviewer persona comprising a prompt, runtime selection, tool guidance, and
+completion signal. It is configuration data; a Review can use several personas
+without changing Sandy's implementation.
 
 ## Agent Runtime Override
 
-A configuration choice that changes an existing Agent's vendor/model selection without changing its reviewer persona. Use this when the same Agent should run on a different LLM runtime.
-_Avoid_: Agent override, custom Agent
+An operator's replacement of an Agent's vendor, model, and optional reasoning
+effort while keeping its persona. The replacement is complete: omitted effort
+uses the runtime default rather than inheriting the persona's effort.
+_Avoid_: custom Agent (which changes the persona).
+
+## Agent Run
+
+One Agent's execution within a Review, consuming quota and producing that
+persona's Findings. Its Usage records input, cached input, and output tokens to
+help manage subscription headroom.
+_Avoid_: session, job (the ReviewJob is the durable attempt).
 
 ## Finding
 
-A single issue raised by an Agent during a Review. Carries:
+One evidenced issue raised by an Agent. It has severity P0/P1/P2, confidence
+0–5, a summary, evidence, and an anchor in the reviewed PR's diff; optional
+cross-repo references identify affected consumers.
 
-- `severity`: P0 (critical) / P1 (high) / P2 (medium)
-- `confidence`: 0-5
-- `agentKey`: stable key of the Agent that produced the Finding
-- `anchor`: `{ repo, path, lineStart, lineEnd }` — where the inline comment attaches. Must be in the reviewed PR's diff (GitHub only accepts review comments on the PR's own changed lines). For a cross-repo Finding this is the **producer-side** line in the PR Repo that caused the break, not the consumer line.
-- `crossRepoReferences`: optional `{ repo, path, line }[]` — affected consumers in sibling Repos (at the recorded sibling `main` SHA). Rendered in the comment body as GitHub permalinks, never as separate inline comments. When a Finding has no postable anchor (e.g. a deleted file), it folds into the summary comment with these references as text.
-- `summary`: one sentence describing the issue
-- `evidence`: supporting code excerpts or `rg` results
-- `suggestedFix`: optional
-- `category`: logic, security, convex, nextjs, i18n, style, test-coverage, etc.
+A cross-repo contract change produces one Finding with its confirmed consumer
+references, rather than one Finding per consumer. Unpostable anchors fall back
+to the PR summary; sibling references are evidence, not separate comments.
 
-Stored in Convex; persists across PRs for learning purposes.
+## Confidence Score
 
-## Archetype
-
-A cluster of Findings that are semantically similar. Identified via embedding
-similarity (cosine >= 0.8) within one Product and Agent on 768-dimensional
-Finding **evidence** embeddings supplied by the bot worker through local Ollama
-`nomic-embed-text` (evidence describes the underlying mechanism and clusters more
-reliably than the surface-variable summary). Carries a `suppressionWeight` that the Synthesizer applies at
-posting time. Mutable state in Convex — not version-controlled.
+The Review's 0–5 assessment of the whole change: **5 means clean**, while severe
+or numerous Findings lower the score. A Finding's confidence has the opposite
+direction: a higher value means the Agent is more certain the issue is real.
+_Avoid_: risk score.
 
 ## Rule
 
-A human-authored guideline for what Agents should check or how they should behave. Lives in `.bot/rules.md` (Repo-local) or `.bot/product-rules.md` (Product-shared) inside each Product Repo. Version-controlled with the code the Rule applies to.
-
-## SuggestedRule
-
-A candidate Rule inferred by the learning loop from repeated 👎 reactions + replies, or from merge-without-fix patterns. Status flows: `suggested` → (`promoteToPositive` | `promoteToSuppression` | `rejected`) → `promoted`. Promotion is always manual — Sandy never auto-promotes a SuggestedRule into an active Rule (see ADR 0005 for rationale).
+A human-authored guideline for review behavior, either Repo-local or shared by
+the Product. Rules travel with the code and take precedence over a persona's
+non-exhaustive seed examples.
 
 ## ApiSurfaceManifest
 
-A markdown document, built fresh per Review, describing the public API surfaces of every Repo in the Product. Includes: Convex queries/mutations/actions, Convex schema tables, npm-exported types, HTTP routes, i18n keys, framework versions resolved from `package.json` + lockfile. Built with the PR Repo at the PR head SHA and every sibling Repo at its default-branch HEAD. Used as cached system context for every Agent in a Review.
-
-The Manifest is the **primary trigger** for cross-repo search, not the source of cross-repo knowledge: it never enumerates callers (see ADR 0001). When the PR diff changes/removes/adds a public-surface item the Manifest lists, the Agent is directed to `rg` the mounted sibling Repos for consumers of that symbol/contract. The Manifest answers "did this PR touch a contract, and what is the current surface/version"; the mounted siblings + `rg` answer "who actually depends on it."
-
-See "Cross-Repo Search" for the full trigger contract, including the secondary diff-judgment trigger for behavioral changes the Extractors do not model.
+A per-Review description of the Product's public contracts and framework
+versions at the reviewed and sibling revisions. It identifies what to search;
+the actual source establishes who depends on a contract.
 
 ## Cross-Repo Search
 
-The act of an Agent grepping/reading the mounted sibling Repos (each at its default-branch HEAD — see "Product") to find consumers affected by a change in the PR Repo. Triggered two ways:
+An Agent's targeted search of sibling Repos for consumers affected by the PR.
+It is warranted by a changed public contract or a plausible behavioral contract
+risk, and its rationale is recorded even when the Agent decides to skip it.
 
-- **Primary (Manifest-driven):** the PR diff changes/removes/adds a public-surface item the ApiSurfaceManifest lists → search siblings for usages of that symbol/contract.
-- **Secondary (diff-judgment):** the change is *likely* to affect another Repo's behavior or assumptions even when it is not in the Manifest — e.g. changes to external behavior, data shape/semantics, routes, events, config, auth, permissions, storage paths, generated artifacts, or shared conventions → targeted search anyway.
-
-Cross-Repo Search does **not** run by default on every PR. CSS-only, test-only, or otherwise local-only changes skip it unless the diff suggests a cross-repo contract risk.
-
-Auditability is load-bearing: whenever an Agent performs Cross-Repo Search it briefly states *why*; when it skips, it states that no cross-repo contract risk was detected. This keeps the headline feature debuggable and gives the learning loop a signal.
-
-A cross-repo break is judged against sibling `main` only — Sandy does not reconcile in-flight sibling PRs (see ADR 0011). Such Findings carry contract-drift framing, and the rule is symmetric: it applies whether the PR is the producer (removed a symbol siblings use) or the consumer (used a symbol absent from a sibling's `main`).
-
-Granularity and false-positive control: a changed contract item produces **one** Finding carrying its affected consumers as `crossRepoReferences`, never one Finding per reference. The Agent must confirm each reference is a real usage (resolved import / actual call site / actual key lookup — structural confirmation via tree-sitter for symbols too generic to grep safely), and must not report coincidental string matches; if it cannot confirm, it says so rather than emitting low-confidence noise. The rendered reference list is capped (~10, with "+ N more in `<repo>`"), but the true count drives severity — a large blast radius escalates one prominent Finding rather than flooding the PR. See ADR 0012.
+Breaks are judged against sibling default branches, without reconciling their
+in-flight PRs. References must be confirmed usages; coincidental text matches
+are insufficient evidence. See ADRs [0010](./docs/adr/0010-cross-repo-access-via-mounted-sibling-worktrees.md),
+[0011](./docs/adr/0011-cross-repo-breaks-judged-against-sibling-main.md), and
+[0012](./docs/adr/0012-cross-repo-findings-post-on-the-producer-pr.md).
 
 ## Extractor
 
-Code that produces a section of the ApiSurfaceManifest from one Repo. Default Extractors ship with Sandy in `packages/manifest-builder/src/extractors/` (documented in `extractors/`); custom Extractors live in `.config/extractors/` and are loaded via dynamic import.
+A component that derives one section of the ApiSurfaceManifest from a Repo.
+Default and instance-specific Extractors contribute to the same manifest.
 
 ## Synthesizer
 
-The non-LLM post-processing step that runs after every Agent in a Review finishes. Responsibilities:
+The deterministic consolidation of Agent Findings into a deduplicated, scored,
+ordered Review result. It preserves cross-repo evidence and formats the comment
+set and summary.
 
-- Dedupe Findings (within and across Agents) by cosine similarity + location overlap
-- Apply Archetype `suppressionWeight` to drop noise
-- Sort by `severity × confidence`
-- Format the final inline-comment set + summary comment
-- Post via the GitHub App
-- Persist Findings to Convex with their assigned Archetype IDs
+## Review trigger
+
+A newly created PR comment containing standalone `@sandy`, authored by an
+authorized human collaborator with repository write access. This is the sole
+request path. After new commits, the author posts a new `@sandy` comment to
+request a Review of the current head; earlier summaries still describe their
+named reviewed commits.
+
+## Archetype
+
+A historical cluster of semantically similar Findings within a Product and
+Agent, carrying a suppression weight. New Archetype assignment is disabled in
+the Actions runtime.
 
 ## Reaction
 
-A 👍 or 👎 emoji reaction (or a reply, or an inferred merge-state signal) attached to a Finding via the Comment Trailer. Captured by the GitHub webhook, recorded in Convex, fed into Archetype weighting and SuggestedRule inference.
+A human's positive or negative feedback, reply, or inferred merge-state signal
+associated with a Finding. Collection is reserved for a future feedback job.
+
+## SuggestedRule
+
+A candidate Rule inferred from recurring feedback, awaiting a human decision
+before promotion. Historical SuggestedRules remain stored; automatic promotion
+is inactive in the Actions runtime.
 
 ## Comment Trailer
 
-The HTML comment Sandy appends to every posted Finding. The full learning
-trailer is `<!-- bot:finding=<id> archetype=<id> -->`; if learning assignment is
-temporarily unavailable, Sandy still emits `<!-- bot:finding=<id> -->` so the
-reaction webhook can map feedback back to the Finding. Load-bearing — do not
-remove.
-
-## Sticky Opt-In
-
-The Review trigger model. PRs do not auto-review on open. The first `@bot review` mention or `gh pr ready` transition flips a `reviewActive` flag in Convex for that PR. Subsequent pushes to a `reviewActive` PR retrigger Reviews automatically. PR close clears the flag.
-
-## Cancel-on-Supersede
-
-When a new push lands during an in-flight Review, the running ReviewJob is marked `superseded`, its Apple Containers torn down, and a fresh ReviewJob queued for the new HEAD. Avoids reviewing stale SHAs.
-
-## Sandcastle
-
-The agent runtime layer, supplied by [`@ai-hero/sandcastle`](https://www.npmjs.com/package/@ai-hero/sandcastle) as an upstream dependency. Sandy uses Sandcastle to spawn Agents in Apple Containers and to dispatch across multiple LLM vendors (Claude, Codex, Cursor, Copilot). Sandy does not fork Sandcastle; see ADR 0003 for the trade-offs.
-
-## opensrc
-
-A CLI tool ([opensrc.run](https://opensrc.run)) that fetches actual source code for npm/PyPI/crates/GitHub dependencies. Installed inside every Apple Container so Agents can verify framework behavior against the real source for the installed version, bypassing LLM training-cutoff blind spots. See ADR 0008.
+The hidden identifier that associates a posted comment with its Finding. The
+current trailer is `<!-- bot:finding=<id> -->`; historical learning-enabled
+comments may also carry `archetype=<id>`.

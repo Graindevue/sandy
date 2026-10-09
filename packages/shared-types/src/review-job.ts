@@ -10,7 +10,7 @@ export type ReviewJobId = string;
 export type ReviewJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'superseded';
 
 /** What caused a Review to be triggered. */
-export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened';
+export type ReviewTrigger = 'mention' | 'ready' | 'push' | 'opened' | 'rerun';
 
 /** Sibling Repo full names mapped to their pinned default-branch SHA. */
 export type SiblingShas = Record<string, string>;
@@ -36,6 +36,8 @@ export interface ReviewJob {
   agentRuns: AgentRunId[];
   /** Sibling Repo full names mapped to their pinned default-branch SHA. */
   siblingShas: SiblingShas;
+  /** GitHub Check Run id for the advisory Sandy Review Status Check. */
+  checkRunId?: number;
   /** Epoch milliseconds when the job was enqueued. */
   createdAt: number;
   /** Epoch milliseconds when a worker claimed the job, if claimed. */

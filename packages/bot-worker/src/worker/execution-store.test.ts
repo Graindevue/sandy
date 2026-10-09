@@ -1,4 +1,4 @@
-import type { Finding } from '@sandy/shared-types';
+import type { AgentRunUsage, Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
 import { type ConvexExecutionClient, ConvexExecutionStore } from './execution-store.js';
 
@@ -23,6 +23,13 @@ const finding: Finding = {
   evidence: 'The lookup only uses userId, so two tenants can collide.',
   suggestedFix: 'Include tenantId in the key.',
   category: 'logic',
+};
+
+const agentRunUsage: AgentRunUsage = {
+  inputTokens: 11,
+  cacheCreationInputTokens: 22,
+  cacheReadInputTokens: 33,
+  outputTokens: 44,
 };
 
 describe('ConvexExecutionStore', () => {
@@ -132,6 +139,7 @@ describe('ConvexExecutionStore', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 0,
+      usage: agentRunUsage,
       crossRepoSearch: {
         status: 'skipped',
         trigger: 'none',
@@ -146,12 +154,39 @@ describe('ConvexExecutionStore', () => {
       startedAt: 100,
       finishedAt: 200,
       findingCount: 0,
+      usage: agentRunUsage,
       crossRepoSearch: {
         status: 'skipped',
         trigger: 'none',
         rationale: 'Only CSS changed; no cross-repo contract risk was detected.',
       },
     });
+  });
+
+  it('omits Agent run usage when no usage was supplied', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordAgentRun({
+      reviewJobId: 'job-1',
+      agentKey: 'security',
+      status: 'failed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      error: 'Agent crashed',
+    });
+
+    expect(client.mutations[0]?.args).toEqual({
+      reviewJobId: 'job-1',
+      agentKey: 'security',
+      status: 'failed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 0,
+      error: 'Agent crashed',
+    });
+    expect(client.mutations[0]?.args).not.toHaveProperty('usage');
   });
 });
 

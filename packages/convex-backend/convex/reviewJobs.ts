@@ -27,10 +27,10 @@ export const enqueue = mutation({
 });
 
 /**
- * Push-triggered enqueue with Cancel-on-Supersede semantics. In one transaction:
- * mark pending/running jobs for older heads as `superseded`, then enqueue the
- * new head unless a pending/running job for that same head already exists
- * (covers GitHub delivering both `push` and `pull_request.synchronize`).
+ * Enqueue with Cancel-on-Supersede semantics. In one transaction: mark
+ * pending/running jobs for older heads as `superseded`, then enqueue the new
+ * head unless a pending/running job for that same head already exists (covers
+ * GitHub delivering both `push` and `pull_request.synchronize`).
  */
 export const enqueueSuperseding = mutation({
   args: {
@@ -87,6 +87,16 @@ export const setSiblingShas = mutation({
   },
 });
 
+/** Persist the GitHub Check Run id created for this ReviewJob. */
+export const setCheckRunId = mutation({
+  args: { jobId: v.id('reviewJobs'), checkRunId: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { jobId, checkRunId }) => {
+    await ctx.db.patch(jobId, { checkRunId });
+    return null;
+  },
+});
+
 /** Store the synthesized PR-level confidence score for this ReviewJob. */
 export const setConfidenceScore = mutation({
   args: { jobId: v.id('reviewJobs'), confidenceScore: confidence },
@@ -108,6 +118,49 @@ export const subscribePending = query({
       .query('reviewJobs')
       .withIndex('by_status', (q) => q.eq('status', 'pending'))
       .collect();
+  },
+});
+
+/**
+ * All `running` ReviewJobs, hydrated with the Repo and PullRequest data needed to
+ * terminate a dangling Sandy Check Run. On a single-worker host every `running`
+ * job at startup is an orphan from a prior worker exit (crash / restart) — the
+ * process that owned its inline Check Run updates is gone, so the Check Run is
+ * stuck `in_progress`. The worker reads this once on boot to reconcile them.
+ */
+export const listRunningForReconcile = query({
+  args: {},
+  handler: async (ctx) => {
+    const jobs = await ctx.db
+      .query('reviewJobs')
+      .withIndex('by_status', (q) => q.eq('status', 'running'))
+      .collect();
+    const out: Array<{
+      jobId: string;
+      checkRunId: number | null;
+      headSha: string;
+      owner: string;
+      name: string;
+      pullRequestUrl: string;
+    }> = [];
+    for (const job of jobs) {
+      const [repo, pullRequest] = await Promise.all([
+        ctx.db.get(job.repoId),
+        ctx.db.get(job.pullRequestId),
+      ]);
+      if (repo === null || pullRequest === null) {
+        continue;
+      }
+      out.push({
+        jobId: job._id,
+        checkRunId: job.checkRunId ?? null,
+        headSha: job.headSha,
+        owner: repo.owner,
+        name: repo.name,
+        pullRequestUrl: pullRequest.url,
+      });
+    }
+    return out;
   },
 });
 
@@ -144,6 +197,7 @@ export const getForWorker = query({
         confidenceScore: job.confidenceScore,
         agentRuns: job.agentRuns,
         siblingShas: job.siblingShas,
+        checkRunId: job.checkRunId,
       },
       repo: {
         id: repo._id,

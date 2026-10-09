@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,6 +12,7 @@ const repoA: RepoConfig = {
   name: 'api',
   fullName: 'acme/api',
   defaultBranch: 'main',
+  excludeBranches: [],
 };
 
 const repoB: RepoConfig = {
@@ -19,6 +20,7 @@ const repoB: RepoConfig = {
   name: 'desktop',
   fullName: 'acme/desktop',
   defaultBranch: 'main',
+  excludeBranches: [],
 };
 
 beforeEach(async () => {
@@ -127,6 +129,60 @@ describe('BotConfigReader', () => {
     });
 
     expect(config.repoRules).toBe('- PR-head rule.');
+  });
+
+  it.each([
+    'rules.md',
+    'product-rules.md',
+    'agents.yaml',
+    'ignore.gitignore',
+  ])('rejects %s symlinks that would read outside the repository', async (filename) => {
+    const apiRoot = join(root, 'api');
+    await mkdir(join(apiRoot, '.bot'), { recursive: true });
+    const outsideFile = join(root, 'credential.txt');
+    await writeFile(outsideFile, 'DUMMY_PRIVATE_CONTENT');
+    await symlink(outsideFile, join(apiRoot, '.bot', filename));
+    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+
+    await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
+      'outside the repository',
+    );
+  });
+
+  it('rejects a .bot directory symlink escaping the repository', async () => {
+    const apiRoot = join(root, 'api');
+    const outsideDir = join(root, 'private');
+    await mkdir(apiRoot);
+    await mkdir(outsideDir);
+    await writeFile(join(outsideDir, 'rules.md'), 'DUMMY_PRIVATE_CONTENT');
+    await symlink(outsideDir, join(apiRoot, '.bot'));
+    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+
+    await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
+      'outside the repository',
+    );
+  });
+
+  it('reads regular-file symlinks whose targets stay within the repository', async () => {
+    const apiRoot = join(root, 'api');
+    await mkdir(join(apiRoot, '.bot'), { recursive: true });
+    await writeFile(join(apiRoot, 'shared-rules.md'), '- Verify the actual call site.');
+    await symlink('../shared-rules.md', join(apiRoot, '.bot', 'rules.md'));
+    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+
+    const config = await reader.readReviewBotConfig(product([repoA]), repoA);
+
+    expect(config.repoRules).toBe('- Verify the actual call site.');
+  });
+
+  it('rejects non-file .bot entries before attempting to read their contents', async () => {
+    const apiRoot = join(root, 'api');
+    await mkdir(join(apiRoot, '.bot', 'rules.md'), { recursive: true });
+    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+
+    await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
+      'must be a regular file',
+    );
   });
 });
 

@@ -1,154 +1,68 @@
-# Registering the Sandy GitHub App
+# Configuring the Sandy GitHub App
 
-Sandy talks to GitHub as a **GitHub App** — not a personal access token. The App
-gives Sandy a stable identity ("Sandy" appears as the comment author), scoped
-per-installation permissions, and webhook delivery for the events that trigger a
-Review.
+The App supplies Sandy's review identity, reads Product Repos, posts Findings
+and the advisory **Sandy** Check Run, and persists the rotating CI login.
+Actions receives its own repository events, so Sandy needs no public webhook
+endpoint or webhook secret.
 
-This walkthrough registers the App, sets its permissions and webhook events,
-installs it on the repositories you want reviewed, and captures its credentials
-into `.config/.env`.
+## Register or update the App
 
-> You set the webhook **URL** here too. If you haven't configured ingress yet,
-> register the App with a placeholder URL now and come back to fill in the real
-> Funnel URL after [`tailscale.md`](./tailscale.md). The webhook **secret** you
-> generate below is needed regardless.
+Use [personal App settings](https://github.com/settings/apps) or the owning
+organization's Developer settings. Set the homepage to the Sandy repository
+and disable **Webhook → Active** for the retired local service.
 
-## 1. Create the App
+The existing deployment uses `agent-sandy` (App ID `3909356`), installed on
+Graindevue. If you change permissions, accept the update on the installation
+before running a review.
 
-Register the App against the account (or organization) that owns the
-repositories you want reviewed:
+| Repository permission | Access | Purpose |
+|-----------------------|--------|---------|
+| Pull requests | Read & write | Resolve the PR and post review comments. |
+| Checks | Read & write | Create/update the advisory Sandy Check Run. |
+| Contents | Read | Fetch the reviewed Repo and registered siblings. |
+| Issues | Read | Read the PR conversation's review request. |
+| Environments | Read & write | Read environment-secret metadata and persist refreshed `CODEX_AUTH_JSON`. |
+| Metadata | Read | Required baseline repository information. |
 
-- **Personal account:** <https://github.com/settings/apps/new>
-- **Organization:** `https://github.com/organizations/<org>/settings/apps/new`
+An existing App may retain **Contents: write** from the historical Rule-promotion
+workflow; current review execution requires read access. Repository
+**Secrets: write** alone does not grant environment-secret write-back.
+`GITHUB_TOKEN` does not supply this App permission.
 
-Fill in:
+App settings and permission acceptance are human steps; the
+[setup helper](../../scripts/setup-actions.sh) provides their links. Other setup
+and secret operations use `gh`.
 
-| Field | Value |
-|-------|-------|
-| **GitHub App name** | `Sandy` (must be globally unique; if taken, use e.g. `Sandy-<your-handle>`) |
-| **Homepage URL** | Your Sandy repo URL, or anything — not load-bearing |
-| **Webhook → Active** | ✅ checked |
-| **Webhook URL** | Your Tailscale Funnel URL (see [`tailscale.md`](./tailscale.md)). Placeholder OK for now. |
-| **Webhook secret** | A long random string — generate with `openssl rand -hex 32` and **save it** |
+## Private key and repository secrets
 
-The webhook path Sandy listens on is the root of the worker's HTTP server. Set
-the **Webhook URL** to your Funnel URL with no extra path (e.g.
-`https://your-host.tailXXXX.ts.net/`) unless you have changed the route in the
-worker config.
-
-## 2. Set permissions
-
-Under **Permissions → Repository permissions**, set exactly these four. Leave
-everything else at **No access** — Sandy needs nothing more in Phase 1.
-
-| Permission | Access | Why |
-|------------|--------|-----|
-| **Pull requests** | **Read & write** | Read PR metadata and diffs; post inline comments + the summary comment. |
-| **Contents** | **Read & write** | Read clones and fetches registered Repos to local disk. Write lets the learning loop open the `.bot/product-rules.md` PR when an operator promotes a SuggestedRule to a positive Rule (Phase 3). Without write, positive promotion fails with `403 Resource not accessible by integration` on branch creation. |
-| **Issues** | **Read-only** | Required to subscribe to the **Issue comment** event in step 3 — GitHub gates that event on the Issues permission, even though `@bot review` arrives as a comment on a PR. Without it, "Issue comment" won't appear in the events list. Read-only suffices; Sandy never writes to Issues. |
-| **Metadata** | **Read-only** | Mandatory baseline; GitHub auto-selects it. |
-
-## 3. Subscribe to webhook events
-
-Under **Subscribe to events**, check exactly these four:
-
-| Event | Drives |
-|-------|--------|
-| **Pull request** | PR opened / closed / `draft → ready` transitions. Close clears `reviewActive`; ready-for-review is a Review trigger (Sticky Opt-In). |
-| **Issue comment** | `@bot review` mention on a PR conversation (the opt-in trigger). Gated on the **Issues** permission from step 2 — if you don't see this event in the list, you haven't granted Issues (Read-only) yet. |
-| **Pull request review comment** | Reactions/replies on Sandy's inline Findings (the trailer-driven reaction loop). Subscribe now so deliveries arrive from day one, but Phase 1 has no Reactions table — persisting reactions and feeding the learning loop is Phase 3. |
-| **Push** | New commits on an opted-in PR retrigger a Review automatically (Cancel-on-Supersede if one is already in flight). |
-
-These four events and the three permissions above are exactly what the worker's
-webhook dispatcher expects. Adding more events is harmless but unused; removing
-any of these will silently break a trigger.
-
-## 4. Choose installation scope
-
-Under **Where can this GitHub App be installed?**, pick **Only on this account**
-for a personal self-hosted setup. Then click **Create GitHub App**.
-
-## 5. Capture the App ID, private key, and webhook secret
-
-On the App's settings page after creation:
-
-1. Note the **App ID** (shown near the top, e.g. `App ID: 1234567`).
-2. Scroll to **Private keys → Generate a private key**. A `.pem` file downloads.
-   GitHub names it after the App's slug and the date —
-   `sandy.<date>.private-key.pem` for the name `Sandy`, or
-   `sandy-<your-handle>.<date>.private-key.pem` if you used that alternate name.
-   GitHub never shows the key again — store it safely. Move it under `.config/`
-   (the `sandy*` glob below matches either name; if you renamed the file or have
-   more than one match, substitute the actual downloaded filename):
-
-   ```bash
-   mkdir -p .config
-   mv ~/Downloads/sandy*.*.private-key.pem .config/sandy-app.private-key.pem
-   ```
-
-3. You already saved the **webhook secret** from step 1.
-
-This doc is the single place that **creates** `.config/.env` (gitignored — see
-the repo `.gitignore`). Create it with the full set of keys Sandy reads, so no
-later step has to recreate the file and clobber another's value — the other docs
-only fill in their own line:
+Generate a private key from the App settings. Keep the downloaded PEM outside
+version control, for example at `.config/sandy-app.private-key.pem`. The App
+key and ID are repository secrets on the caller:
 
 ```bash
-# .config/.env — Sandy instance secrets
-# GitHub App (this doc)
-GITHUB_APP_ID=1234567
-GITHUB_APP_PRIVATE_KEY_PATH=.config/sandy-app.private-key.pem
-GITHUB_WEBHOOK_SECRET=the-openssl-rand-hex-32-value-from-step-1
-
-# Convex deployment URL — see convex.md ("Where the URL goes")
-CONVEX_URL=https://your-deployment.convex.cloud
-
-# Optional: learning-loop Finding embeddings default to local Ollama.
-# OLLAMA_HOST=http://127.0.0.1:11434
-
-# Optional alternate Agent vendor auth. The default Codex setup can still use
-# your host `codex login` (see sandcastle-image.md); set Anthropic only if you
-# switch an Agent to vendor: claude. Set OpenAI only if you switch an Agent to
-# OpenAI API-key auth instead of Codex subscription auth.
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   OPENAI_API_KEY=sk-...
+gh secret set SANDY_APP_ID --repo Graindevue/graindevue --body 3909356
+gh secret set SANDY_APP_PRIVATE_KEY --repo Graindevue/graindevue < .config/sandy-app.private-key.pem
 ```
 
-> **One file, set in pieces.** If you followed the [setup order](./README.md),
-> [`convex.md`](./convex.md) ran before this doc; whichever doc you reach first,
-> create `.config/.env` and the later docs just set their own line above. Set
-> `CONVEX_URL` to the value Convex printed. Finding embeddings use local Ollama
-> at `http://127.0.0.1:11434` by default; set `OLLAMA_HOST` only if the worker
-> should call a different Ollama host. Add `ANTHROPIC_API_KEY` or
-> `OPENAI_API_KEY` only if you switch an Agent to that provider's API-key auth.
+The rotating Codex login goes into a separate environment secret, as described
+in [github-actions.md](./github-actions.md).
 
-> **Private key format.** Sandy reads the key from the path above. If you prefer
-> to inline the key instead of pointing at a file, that's an instance choice the
-> worker's config supports in a later issue; the path form is the documented
-> default. Keep `.config/` out of version control, or give it its own private
-> nested git repo (see the root [`README.md`](../../README.md) "Configuration").
+## Installation scope
 
-## 6. Install the App on your repositories
+Install the App on every Repo declared in the Product config. For repositories
+owned by another account, select that account's installation separately.
 
-From the App settings page, open **Install App** (left sidebar) → **Install** on
-your account → choose **Only select repositories** and pick every Repo you plan
-to register in `bot.yaml`. Sandy reviews a Repo only if the App is installed on
-it **and** the Repo is declared in [`.config/bot.yaml`](./bot-yaml.md).
+Checking out the canonical private `Graindevue/sandy` source from a Graindevue
+workflow needs explicit access too. Add Sandy to the existing App installation's
+selected repositories; the caller mints a separate Contents-read source token.
+An optional `SANDY_SOURCE_TOKEN` fine-grained PAT can supply the same read access
+instead. `SANDY_SOURCE_SSH_KEY` also supports a read-only source deploy key where
+organization policy permits it. Installation tokens only grant access to
+selected Repos; the caller's automatic token is limited to its own Repo.
 
-To add a Repo later, return here and update the installation's repository
-selection — no need to recreate the App.
+## Verification
 
-## 7. Verify
-
-Once the worker is running and the Funnel is live ([`launchd.md`](./launchd.md),
-[`tailscale.md`](./tailscale.md)), GitHub's **App settings → Advanced → Recent
-Deliveries** shows each webhook POST and its response. A `2xx` from your Funnel
-URL means delivery and signature verification succeeded. The worker rejects any
-request whose `X-Hub-Signature-256` is missing or doesn't match
-`GITHUB_WEBHOOK_SECRET`, so a `401` there points at a secret mismatch.
-
-## Next
-
-Continue to [`tailscale.md`](./tailscale.md) to expose port **3007**, then author
-[`bot-yaml.md`](./bot-yaml.md).
+Run a manual review and verify the `sandy-codex` auth persistence step succeeds.
+A permissions error before Codex runs usually means the Environments permission
+update is absent or has not been accepted. Comments and the **Sandy** Check Run
+should appear under the App's identity.

@@ -1,7 +1,5 @@
 import type { ApiSurfaceRepoInput, SiblingShas } from '@sandy/shared-types';
-import type { RunnerSiblingWorktree } from './sandcastle-runner.js';
-
-const SIBLING_WORKSPACE_ROOT = '/workspace';
+import type { RunnerSiblingWorktree } from './codex-exec-runner.js';
 
 export interface ProductRepoForReview {
   id: string;
@@ -90,7 +88,6 @@ export async function materializeReviewWorkspace(
         repo: productRepo.fullName,
         sha,
         hostPath: worktree.path,
-        sandboxPath: siblingSandboxPath(productRepo),
       });
       siblingShas[productRepo.fullName] = sha;
     }
@@ -146,8 +143,4 @@ function sameRepo(left: RepoForWorktree, right: RepoForWorktree): boolean {
     left.owner.toLowerCase() === right.owner.toLowerCase() &&
     left.name.toLowerCase() === right.name.toLowerCase()
   );
-}
-
-function siblingSandboxPath(repo: ProductRepoForReview): string {
-  return `${SIBLING_WORKSPACE_ROOT}/${repo.owner}/${repo.name}`;
 }

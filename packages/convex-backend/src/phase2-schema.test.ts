@@ -7,7 +7,19 @@ import {
   markMergeStateSignalsRolledUp,
 } from '../convex/pullRequests.js';
 import { recordMergeStateReaction } from '../convex/reactions.js';
-import { enqueue, setConfidenceScore, setSiblingShas } from '../convex/reviewJobs.js';
+import {
+  enqueue,
+  setCheckRunId,
+  setConfidenceScore,
+  setSiblingShas,
+} from '../convex/reviewJobs.js';
+
+const agentRunUsage = {
+  inputTokens: 11,
+  cacheCreationInputTokens: 22,
+  cacheReadInputTokens: 33,
+  outputTokens: 44,
+};
 
 describe('Phase 2 Convex schema handlers', () => {
   it('round-trips anchor-only and cross-repo Findings', async () => {
@@ -126,6 +138,7 @@ describe('Phase 2 Convex schema handlers', () => {
       jobId: reviewJobId,
       siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
     });
+    await invoke(setCheckRunId, ctx, { jobId: reviewJobId, checkRunId: 1200 });
     const agentRunId = await invoke(recordAgentRun, ctx, {
       reviewJobId,
       agentKey: 'logic',
@@ -146,6 +159,7 @@ describe('Phase 2 Convex schema handlers', () => {
         confidenceScore: 4,
         agentRuns: [agentRunId],
         siblingShas: { 'acme/consumer': 'consumer-main-sha-2' },
+        checkRunId: 1200,
       }),
     );
     expect(ctx.db.getDoc(agentRunId)).toEqual(
@@ -158,6 +172,53 @@ describe('Phase 2 Convex schema handlers', () => {
         },
       }),
     );
+  });
+
+  it('persists optional Agent Run usage only when supplied', async () => {
+    const ctx = fakeCtx();
+
+    const reviewJobId = await invoke(enqueue, ctx, {
+      pullRequestId: 'pullRequests:1',
+      repoId: 'repos:1',
+      headSha: 'head-sha',
+      trigger: 'mention',
+      agentKeys: ['logic', 'security'],
+    });
+
+    const withUsageId = await invoke(recordAgentRun, ctx, {
+      reviewJobId,
+      agentKey: 'logic',
+      status: 'completed',
+      startedAt: 100,
+      finishedAt: 200,
+      findingCount: 1,
+      usage: agentRunUsage,
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only local implementation changed; no cross-repo contract risk was detected.',
+      },
+    });
+    const withoutUsageId = await invoke(recordAgentRun, ctx, {
+      reviewJobId,
+      agentKey: 'security',
+      status: 'completed',
+      startedAt: 300,
+      finishedAt: 400,
+      findingCount: 0,
+      crossRepoSearch: {
+        status: 'skipped',
+        trigger: 'none',
+        rationale: 'Only local implementation changed; no cross-repo contract risk was detected.',
+      },
+    });
+
+    expect(ctx.db.getDoc(withUsageId)).toEqual(
+      expect.objectContaining({
+        usage: agentRunUsage,
+      }),
+    );
+    expect(ctx.db.getDoc(withoutUsageId)).not.toHaveProperty('usage');
   });
 
   it('clears reviewActive without clobbering a merged PR state', async () => {

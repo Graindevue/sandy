@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 import { parseIgnoreGitignore } from './ignore.js';
 import type { ReviewBotContext } from './review-bot-context.js';
@@ -59,10 +59,10 @@ export class BotConfigReader {
 async function readRepoBotConfig(repo: RepoConfig, root: string): Promise<RepoBotConfig> {
   const botDir = join(root, '.bot');
   const [rules, productRules, agentsYaml, ignoreGitignore] = await Promise.all([
-    readOptionalBotFile(join(botDir, 'rules.md')),
-    readOptionalBotFile(join(botDir, 'product-rules.md')),
-    readOptionalBotFile(join(botDir, 'agents.yaml')),
-    readOptionalBotFile(join(botDir, 'ignore.gitignore')),
+    readOptionalBotFile(root, join(botDir, 'rules.md')),
+    readOptionalBotFile(root, join(botDir, 'product-rules.md')),
+    readOptionalBotFile(root, join(botDir, 'agents.yaml')),
+    readOptionalBotFile(root, join(botDir, 'ignore.gitignore')),
   ]);
 
   return {
@@ -74,10 +74,20 @@ async function readRepoBotConfig(repo: RepoConfig, root: string): Promise<RepoBo
   };
 }
 
-async function readOptionalBotFile(path: string): Promise<string | null> {
+async function readOptionalBotFile(root: string, path: string): Promise<string | null> {
   let contents: string;
   try {
-    contents = await readFile(path, 'utf8');
+    // PR-owned symlinks must not turn host-side context reads into credential
+    // reads outside the checkout, before the Agent sandbox can protect them.
+    const [repoRoot, resolvedPath] = await Promise.all([realpath(root), realpath(path)]);
+    const fromRoot = relative(repoRoot, resolvedPath);
+    if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+      throw new Error('.bot files must not resolve outside the repository');
+    }
+    if (!(await stat(resolvedPath)).isFile()) {
+      throw new Error('.bot entries must be a regular file');
+    }
+    contents = await readFile(resolvedPath, 'utf8');
   } catch (error) {
     if (isNotFound(error)) {
       return null;

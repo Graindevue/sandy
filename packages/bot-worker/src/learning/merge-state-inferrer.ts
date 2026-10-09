@@ -1,5 +1,5 @@
 import type { FindingAnchor, ReactionKind } from '@sandy/shared-types';
-import type { RepoRef } from '../webhook/events.js';
+import type { RepoRef } from '../github/types.js';
 import { findingIdsFromCommentTrailer } from './comment-trailer.js';
 import type { ReactionCaptureComment, ReactionCaptureGitHub } from './reaction-capture.js';
 

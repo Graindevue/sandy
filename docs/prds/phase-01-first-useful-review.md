@@ -1,5 +1,8 @@
 # Phase 1 — First Useful Review
 
+> **Historical plan (May–June 2026).** Preserved as the original implementation record, including its original status and unchecked criteria. Current execution is GitHub Actions with serial Codex Agent Runs; containers, host services, reactive workers, and learning provisioning below are retired. See [ADR 0018](../adr/0018-github-actions-codex-runtime.md) and the [current setup guide](../setup/README.md).
+
+
 Status: Draft
 Owner: Tony
 Target: First working end-to-end review against one Product / one Repo / one Agent.
@@ -41,7 +44,7 @@ No multi-agent fan-out, no API surface manifest, no learning loop, no cross-repo
 - `src/main.ts` — entry point.
 - `src/webhook/server.ts` — HTTP server on port 3007, verifies GitHub App webhook signatures.
 - `src/webhook/dispatch.ts` — routes events to handlers.
-- `src/webhook/trigger-evaluator.ts` — Sticky Opt-In logic: enqueues only when `reviewActive=true` OR the event is an `@bot review` mention OR `gh pr ready`.
+- `src/webhook/trigger-evaluator.ts` — Sticky Opt-In logic: enqueues only when `reviewActive=true` OR the event is an `@bot review` mention OR `gh pr ready`. _(Historical: superseded by manual-only triggering — `@bot review` / Re-run only — in ADR 0017.)_
 - `src/worker/claimant.ts` — subscribes to Convex `subscribePending`, claims jobs via OCC.
 - `src/worker/sandcastle-runner.ts` — wraps `@ai-hero/sandcastle` (using `@sandy/apple-container-provider`) to spawn one Agent in an Apple Container, mounts the worktree, captures stdout.
 - `src/worker/findings-parser.ts` — extracts the `<findings>...</findings>` JSON block from Agent output and validates against `FindingsPayload`.
@@ -75,6 +78,11 @@ Only `agents/logic.md` runs in Phase 1. The other shipped Agents (`security.md`,
 - "Fix in Claude Code" prompt blocks → Phase 4
 
 ## Acceptance criteria
+
+> _Historical (Phase 1, as shipped). The push-triggered criteria below were
+> superseded by manual-only triggering in ADR 0017: pushes no longer enqueue a
+> Review, and Cancel-on-Supersede now fires on a fresh `@bot review` / Re-run
+> instead of on a push._
 
 - [ ] PR opened against a registered Repo with `reviewActive=false` → no Sandy activity in logs/Convex.
 - [ ] `@bot review` comment → ReviewJob enqueued, `reviewActive` flipped to true, logic Agent runs in an Apple Container, at least one comment posted (or a clean "no issues found" summary).

@@ -1,19 +1,18 @@
 ---
 name: nextjs
 description: Reviews diffs in Next.js codebases for installed-version routing, caching, server action, and rendering correctness.
-vendor: claude
-model: opus
-maxIterations: 25
+vendor: codex
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
-tools: [read_file, rg, tree_sitter_query, git_diff, opensrc]
-defaultEnabled: auto
+defaultEnabled: false
 ---
 
 # Next.js Agent
 
-You are reviewing a pull request for **Next.js-specific correctness issues**. You are one of several agents running in parallel.
+You are reviewing a pull request for **Next.js-specific correctness issues**. You are one of several agents reviewing this PR.
 
-This Agent auto-enables when the Repo's `package.json` declares a `next` dependency.
+This optional Agent runs only when explicitly enabled for a Repo that uses Next.js.
 
 ## Review method
 

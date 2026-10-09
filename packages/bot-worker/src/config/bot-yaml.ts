@@ -1,5 +1,6 @@
-import type { AgentVendor } from '@sandy/shared-types';
+import type { AgentEffort, AgentVendor } from '@sandy/shared-types';
 import { parse as parseYaml } from 'yaml';
+import { parseEffort } from './effort.js';
 
 /**
  * Parses and validates `.config/bot.yaml` — the declaration of which Products
@@ -20,6 +21,11 @@ export interface RepoConfig {
   /** Derived `"owner/name"`; not authored in the file. */
   fullName: string;
   defaultBranch: string;
+  /**
+   * Inert since ADR 0017 (manual-only triggering): there is no automatic arming
+   * left to gate. Still parsed for config compatibility; nothing reads it.
+   */
+  excludeBranches: string[];
 }
 
 export type AgentSelectionMode = 'default' | 'explicit';
@@ -27,6 +33,8 @@ export type AgentSelectionMode = 'default' | 'explicit';
 export interface AgentRuntimeOverride {
   vendor: AgentVendor;
   model: string;
+  /** Optional reasoning effort; absent means the vendor CLI default. */
+  effort?: AgentEffort;
 }
 
 /** A Product as declared in `bot.yaml`. */
@@ -53,6 +61,7 @@ interface RawRepo {
   owner?: unknown;
   name?: unknown;
   defaultBranch?: unknown;
+  excludeBranches?: unknown;
 }
 
 interface RawProduct {
@@ -157,6 +166,7 @@ function parseRepo(
   const owner = requireString(repo.owner, `${where}.owner`);
   const name = requireString(repo.name, `${where}.name`);
   const defaultBranch = requireString(repo.defaultBranch, `${where}.defaultBranch`);
+  const excludeBranches = parseOptionalStringList(repo.excludeBranches, `${where}.excludeBranches`);
   const fullName = `${owner}/${name}`;
 
   // Dedup on a case-insensitive key to match the loader's index, which lowercases
@@ -172,7 +182,7 @@ function parseRepo(
   }
   seenRepos.set(dedupKey, productSlug);
 
-  return { owner, name, fullName, defaultBranch };
+  return { owner, name, fullName, defaultBranch, excludeBranches };
 }
 
 function parseAgents(
@@ -216,6 +226,16 @@ function parseAgentKeyList(value: unknown, where: string): string[] {
   return value as string[];
 }
 
+function parseOptionalStringList(value: unknown, where: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`bot.yaml: ${where} must be a list of non-empty strings`);
+  }
+  return value.map((item, index) => requireString(item, `${where}[${index}]`));
+}
+
 function parseAgentRuntimeOverrides(
   value: unknown,
   where: string,
@@ -242,10 +262,14 @@ function parseAgentRuntimeOverride(value: unknown, where: string): AgentRuntimeO
     throw new Error(`bot.yaml: ${where} must be a mapping with vendor and model`);
   }
   const object = value as Record<string, unknown>;
-  assertKnownKeys(object, ['vendor', 'model'], where);
+  assertKnownKeys(object, ['vendor', 'model', 'effort'], where);
+  const vendor = requireVendor(object.vendor, `${where}.vendor`);
+  // `effort` is vendor-scoped, so it validates against the override's vendor.
+  const effort = parseEffort(object.effort, vendor, `bot.yaml: ${where}.effort`);
   return {
-    vendor: requireVendor(object.vendor, `${where}.vendor`),
+    vendor,
     model: requireString(object.model, `${where}.model`),
+    ...(effort !== undefined ? { effort } : {}),
   };
 }
 

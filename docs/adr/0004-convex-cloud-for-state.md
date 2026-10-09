@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: Accepted
+Status: Accepted; execution amended by [0018](./0018-github-actions-codex-runtime.md)
+
+> **Current amendment (2026-10-09).** Convex Cloud remains the durable state layer. Actions jobs now create, claim, and complete Reviews through `ConvexHttpClient`; the reactive host subscriber described below is historical.
 
 ## Context
 

@@ -2,10 +2,9 @@
 name: style
 description: Reviews diffs for maintainability concerns Biome cannot catch. Only enabled at verbose strictness.
 vendor: codex
-model: gpt-5.5
-maxIterations: 15
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
-tools: [read_file, rg, git_diff]
 defaultEnabled: false
 ---
 
