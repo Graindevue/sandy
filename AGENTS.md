@@ -6,22 +6,26 @@ is) and `CONTEXT.md` (domain glossary).
 ## Branching & PRs
 
 `main` (default / production) ← `staging` (integration, cut from `main`) ←
-feature branches (`phase-N/<slug>`, or `sandcastle/issue-<id>-<slug>` for AFK
-agent work).
+feature branches (`phase-N/<slug>`).
 
 - Branch feature work from **`staging`**.
-- Human PRs target **`staging`** — never directly against `main`.
-- The `.sandcastle` AFK harness merges agent branches **directly into `staging`**
-  (no per-issue PR) once they pass local review and a type-check/test gate.
+- Feature PRs target **`staging`** — never directly against `main`.
 - `staging` is promoted to `main` via a separate release PR — the one place a
   human reviews the integrated work.
 
 ## Code review
 
-There is no automated PR reviewer. Agent work is gated by the harness's local
-review pass plus a `pnpm type-check` / `pnpm test` gate at merge time; the
-integrated `staging` branch is reviewed by a human on the `staging`→`main`
-release PR.
+Review feature work locally and pass lint, type-check, and tests before opening
+a PR. GitHub Actions CI checks feature PRs and integration-branch pushes; a
+human reviews the integrated `staging`→`main` release PR.
+
+## Runtime
+
+For runtime, auth, or trigger changes, read
+`docs/adr/0018-github-actions-codex-runtime.md` and `docs/setup/README.md`.
+Reviews and Codex Agent Runs are serialized around one dedicated CI auth stream.
+`CODEX_AUTH_JSON` belongs to the `sandy-codex` environment, whose latest secret
+is loaded after the review job's concurrency lock. Embeddings remain disabled.
 
 ## Commits
 
@@ -39,5 +43,6 @@ pnpm test          # vitest
 ```
 
 Stack: Node 24, TypeScript 6, pnpm 10, Biome, Vitest, Convex Cloud.
-`packages/convex-backend` needs `npx convex dev` to generate types (see its
-README).
+Committed Convex generated types support CI checks without a deployment.
+For backend edits, regenerate them using the procedure in
+`packages/convex-backend/README.md` before running checks.

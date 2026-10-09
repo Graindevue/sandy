@@ -4,6 +4,8 @@ Date: 2026-05-30
 
 Status: Accepted
 
+> **Runtime amendment (2026-10-09).** The anchor/reference and noise-control model remains. ADR 0018 retires the custom `tree_sitter_query` executable; Agents confirm structural usages using available source and runtime tools instead. Container mount paths below describe the original implementation.
+
 ## Context
 
 A cross-repo break spans two Repos: the change is in the PR Repo (e.g. backend PR #42's rename), but the affected code is in a sibling at `main` (e.g. `desktop/src/orders.ts:42`). The sibling has no open PR in this Review.

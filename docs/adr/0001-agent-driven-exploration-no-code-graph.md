@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: Accepted
 
+> **Runtime amendment (2026-10-09).** Agent-driven navigation and the Manifest remain the model. ADR 0018 retires the custom `tree_sitter_query` tool; current Extractors use source-text and package-metadata scans. Tool provisioning references below describe the original implementation.
+
 ## Context
 
 Multi-tenant code-review SaaS products typically maintain a persistent, embedded graph of every codebase they review — files, symbols, callers, imports — stored in Postgres + pgvector and refreshed incrementally on push. This is substantial infrastructure: it must be built, kept warm, made fault-tolerant against missed webhooks, schema-migrated as the graph evolves, and tuned for retrieval quality.

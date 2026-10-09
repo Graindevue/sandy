@@ -1,259 +1,106 @@
-# `.config/bot.yaml` schema reference
+# Product and Agent configuration
 
-`bot.yaml` is where you declare what Sandy reviews: your **Products**, the
-**Repos** each Product contains, and which **Agents** run. It lives at
-`.config/bot.yaml` (gitignored — instance-specific, per the repo `.gitignore`).
-A Repo is reviewed only if it is declared here **and** the
-[GitHub App](./github-app.md) is installed on it.
+`bot.yaml` declares Products, their Repos, and reviewer selection. Local instance
+configuration lives in gitignored `.config/bot.yaml`. Actions can use generated
+single-Repo configuration or a non-secret file from the caller's trusted default
+branch; [github-actions.md](./github-actions.md) describes its `config-path`.
 
-> **Status — schema reference only.** This documents the **intended** schema. The
-> config *loader* that reads and validates `bot.yaml`
-> (`packages/bot-worker/src/config/loader.ts`) ships in a separate Phase 1 issue.
-> Field names below match Sandy's shared types (`Product`, `Repo`,
-> `AgentDefinition`) so the file you author now lines up with the loader when it
-> lands. If a field here and the merged loader ever disagree, the loader wins —
-> open an issue to reconcile this doc.
+A Repo is reviewed only when it is configured and the GitHub App is installed
+on it. Each Repo belongs to exactly one Product.
 
-## Concepts
-
-- A **[Product](../../CONTEXT.md#product)** is the unit at which Sandy reasons
-  about cross-repo context. It groups one or more Repos that form one logical
-  software product. (Cross-repo reasoning itself activates in a later phase;
-  declaring the Product correctly now is still how Sandy knows which Repos belong
-  together.)
-- A **[Repo](../../CONTEXT.md#repo)** is a single GitHub repository belonging to
-  exactly one Product. Sandy clones it to local disk and keeps it current via
-  webhooks.
-- An **[Agent](../../CONTEXT.md#agent)** is a reviewer persona defined by a
-  markdown file in `agents/` (shipped defaults) or `.config/agents/`
-  (per-instance). Agents are configuration data, not code.
-
-## Minimal example
-
-The smallest useful config — one Product, one Repo, the default Agent set:
+## Example
 
 ```yaml
 products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: your-org
         name: acme-backend
         defaultBranch: main
-```
-
-## Full example
-
-> **Phase 1 tests one Product, one Repo, one Agent.** The multi-Product,
-> multi-Repo file below is valid schema and shows every field, but Phase 1 only
-> exercises a single Product with a single Repo (and only the `logic` Agent — see
-> "Agent selection"). Multiple Products/Repos parse, yet cross-repo reasoning and
-> fan-out don't activate until later phases; the single-Product/single-Repo path
-> is the only one Phase 1 has been tested against.
-
-```yaml
-products:
-  # A Product that spans two Repos (one backend, one desktop app).
-  - slug: acme
-    name: Acme
-    repos:
-      - owner: tony-co
-        name: acme-backend
-        defaultBranch: main
-      - owner: tony-co
+      - owner: your-org
         name: acme-desktop
         defaultBranch: main
-        excludeBranches:
-          - release/*
-          - vendor/**
-    # Optional: choose which Agents run for this Product and override their
-    # runtime vendor/model (and, optionally, reasoning effort). See "Agent
-    # selection".
     agents:
-      enable: [logic, security]
+      enable: [logic, security, convex]
       overrides:
         logic:
           vendor: codex
-          model: gpt-5.6
+          model: gpt-6.1-sol
           effort: xhigh
-
-  # A second, unrelated Product.
-  - slug: sandy
-    name: Sandy
-    repos:
-      - owner: tony-co
-        name: sandy
-        defaultBranch: main
+        security:
+          vendor: codex
+          model: gpt-6.1-sol
+          effort: xhigh
+        convex:
+          vendor: codex
+          model: gpt-6.1-sol
+          effort: xhigh
 ```
 
-## Field reference
+Product `slug` is a stable identity used in Convex: keep it lowercase and avoid
+renaming it. Every Repo needs its exact GitHub `owner`, `name`, and
+`defaultBranch`. `fullName` is derived by Sandy. The reviewed Repo uses the PR
+head; siblings use their configured default-branch revisions.
 
-### `products[]`
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `slug` | string | yes | Stable identifier used in config, logs, and Convex. Lowercase, e.g. `acme`. Must be unique across the file. |
-| `name` | string | yes | Human-readable display name. |
-| `repos` | list | yes | One or more Repos (below). Must be non-empty. |
-| `agents` | list of strings or mapping | no | Product-level Agent selection and runtime overrides. Omit to use the default selection with no overrides (see below). |
-
-These map to Sandy's `Product` type (`slug`, `name`).
-
-### `products[].repos[]`
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `owner` | string | yes | GitHub owner or org login, e.g. `tony-co`. |
-| `name` | string | yes | Repository name, e.g. `acme-backend`. |
-| `defaultBranch` | string | yes | The Repo's default branch, e.g. `main`. |
-| `excludeBranches` | list of strings | no | **Inert.** Formerly gated automatic `draft → ready` arming; reviews are now manual-only (ADR 0017), so this key does nothing. Kept for config compatibility, slated for removal. |
-
-These map to Sandy's `Repo` type. The `owner`/`name` pair must match a repository
-the GitHub App is installed on. `fullName` (`owner/name`) is derived by Sandy —
-you don't write it.
-
-### Base-Branch Exclusion (retired)
-
-`excludeBranches` existed to keep `gh pr ready` from auto-arming Reviews on
-release-train, vendored, or sandbox base branches. With manual-only triggering
-(ADR 0017) there is no automatic arming to gate, so the key is now **inert** —
-parsing still accepts it for compatibility, but it changes no behavior and is
-slated for removal. To avoid reviewing a PR, simply don't run `@bot review` on it.
+`excludeBranches` is accepted for historical config compatibility and is inert
+because reviews start only from authorized, newly created PR comments containing
+standalone `@sandy`. It does not restrict those requests.
 
 ## Agent selection
 
-Agent keys are the file names (without `.md`) in `agents/` and
-`.config/agents/`. The Agents shipped with Sandy:
+Keys are filenames without `.md` in `agents/` and `.config/agents/`.
+The current generated Actions configuration uses `logic`, `security`, and
+conditional `convex`, all on `gpt-6.1-sol` with `xhigh` effort. The Convex persona
+runs only when the reviewed diff touches a `convex/` directory. When dependencies
+install and a project test script is available, Sandy runs the suite once and
+includes its result in reviewer context; a separate coverage persona is not part
+of the generated selection. Next.js, style, and other optional shipped personas
+use the same model and effort when explicitly selected.
 
-| Key | Focus | Vendor / model |
-|-----|-------|----------------|
-| `logic` | Logic bugs, broken invariants, cross-file correctness | codex / gpt-5.5 |
-| `security` | Auth, input validation, secrets, injection, data exposure | claude / opus |
-| `convex` | Convex query/mutation/schema correctness | claude / opus |
-| `nextjs` | Next.js Cache Components, async params, routing, server actions | claude / opus |
-| `i18n` | i18n key consistency, hard-coded strings | codex / gpt-5.5 |
-| `test-coverage` | Missing or over-mocked tests | claude / haiku |
-| `style` | Maintainability Biome can't catch (verbose strictness only) | codex / gpt-5.5 |
-
-### Selection forms
-
-Omit `agents` to use default/auto Agent selection:
-
-```yaml
-products:
-  - slug: acme
-    name: Acme
-    repos:
-      - owner: tony-co
-        name: acme-backend
-        defaultBranch: main
-```
-
-Use list form for an exact Product Agent set. This preserves the original
-schema:
+List form chooses an exact set:
 
 ```yaml
 agents: [logic, security]
 ```
 
-Use object form when you need runtime overrides:
+Object form adds runtime overrides:
 
 ```yaml
 agents:
   enable: [logic, security]
   overrides:
-    logic:
-      vendor: codex
-      model: gpt-5.6
+    logic: { vendor: codex, model: gpt-6.1-sol, effort: xhigh }
+    security: { vendor: codex, model: gpt-6.1-sol, effort: xhigh }
 ```
 
-`agents.enable` is an exact Product Agent set, equivalent to the list form. When
-`agents.enable` is omitted, default/auto selection still applies:
+Without an exact set, Sandy considers each persona's `defaultEnabled` value:
+`true` is selected, `false` is off, and `auto` depends on framework detection.
+Repo-local `.bot/agents.yaml` can enable/disable allowed personas. It cannot
+change the operator's runtime selection or expand an exact Product set.
 
-```yaml
-agents:
-  overrides:
-    logic:
-      vendor: codex
-      model: gpt-5.6
-```
+## Runtime overrides
 
-`agents: {}` and `agents.overrides: {}` are valid no-ops.
+The Actions runner supports **`vendor: codex`**. Existing non-Codex config may
+parse for compatibility, but selected non-Codex personas cannot execute.
+Update older instance configuration or persona definitions to use Codex.
 
-When a Product omits `agents` or uses object form without `enable`, Sandy starts
-from each Agent's `defaultEnabled` frontmatter: `true` runs by default, `false`
-stays off, and `auto` runs only when a Product Repo declares the relevant
-framework dependency in `package.json`. The reviewed Repo can then enable or
-disable Agents with `.bot/agents.yaml`:
+An override replaces `vendor`, `model`, and optional `effort` together. Both
+vendor and model are required. Codex effort values are `low`, `medium`, `high`,
+and `xhigh`; omission uses the CLI default even when the persona defines effort.
 
-```yaml
-enable: [style]
-disable: [security]
-```
+Overrides keep the prompt, tools, category, and completion signal. To customize
+those, provide an instance persona with the same filename; to add a new persona,
+provide a new markdown file and select its key. Every selected persona executes
+one Codex invocation with at most one completion resume. The legacy
+`maxIterations` field is compatibility metadata and does not create a repeated
+execution loop.
 
-Repo-local `.bot/agents.yaml` cannot override vendor/model and cannot add Agents
-outside a Product's exact `agents` / `agents.enable` set. Runtime selection is
-operator-owned instance policy in `.config/bot.yaml`, not repo-owned policy.
+## Rules and reloads
 
-### Runtime overrides
+Repo-local Rules live in `.bot/rules.md`; Product Rules come from the union of
+`.bot/product-rules.md` in its Repos. They are reviewed-version context, not
+operator credentials or a choice of runtime provider.
 
-An Agent runtime override changes only an existing Agent's runtime selection —
-`vendor`, `model`, and optionally `effort`. It does not change the Agent's
-prompt, tools, completion signal, category, or default-enabled behavior. To
-change those, replace the Agent definition with a matching file in
-`.config/agents/`.
-
-Each override entry must specify both `vendor` and `model`; `effort` is
-optional:
-
-```yaml
-agents:
-  overrides:
-    security:
-      vendor: claude
-      model: opus
-      effort: high
-```
-
-`effort` sets the vendor CLI's reasoning effort and is validated per vendor at
-config load:
-
-| Vendor | Accepted `effort` values |
-|--------|--------------------------|
-| `claude` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `codex` | `low`, `medium`, `high`, `xhigh` |
-| `copilot` | `low`, `medium`, `high` |
-| `cursor` | none — setting `effort` is a config error |
-
-Omitting `effort` uses the vendor CLI's default. The same field is accepted in
-Agent definition frontmatter (next to `vendor`/`model`), but an override is the
-complete runtime selection: when an override targets an Agent, a frontmatter
-`effort` does not carry over — an override without `effort` runs the Agent at
-the vendor default.
-
-Overrides apply after `.config/agents/<key>.md` is loaded. They may target any
-known Agent key and are inert unless that Agent is selected for a Review. Unknown
-Agent keys fail config load.
-
-To add a custom Agent, drop a markdown file in `.config/agents/` and reference
-its key in a Product's list-form `agents` value or object-form `agents.enable`.
-A file there with the same name as a shipped Agent overrides the default. The
-Agent definition format (frontmatter + system-prompt body) is documented by the
-shipped examples in `agents/`.
-
-## Authoring tips
-
-- Keep `slug` values short and stable — they appear in logs and Convex `products`
-  rows, and renaming one later orphans existing records.
-- One Repo belongs to exactly one Product. Don't list the same `owner/name` under
-  two Products.
-- Reloading: the worker re-reads `bot.yaml` on restart. The recommendation for
-  v1 is that `SIGHUP` triggers a reload with no automatic file-watch (see the
-  Phase 1 PRD open questions); until that's wired, restart the
-  [launchd service](./launchd.md) after editing this file.
-
-## Next
-
-With `bot.yaml` in place, install the [launchd service](./launchd.md) so the
-worker comes up on boot, then post `@bot review` on a PR in one of the Repos
-above.
+Each Actions job loads config once. A default-branch config change applies to
+the next request; there is no persistent process to restart.

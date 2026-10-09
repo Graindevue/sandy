@@ -112,7 +112,10 @@ export class PullRequestPoster {
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body: appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
+      body: summaryForCommit(
+        input.target,
+        appendSummaryOnlyFindings(input.summary, summaryOnly, input.siblingShas),
+      ),
     });
 
     return {
@@ -135,16 +138,26 @@ export class PullRequestPoster {
       owner: input.target.owner,
       repo: input.target.repo,
       issueNumber: input.target.pullNumber,
-      body:
+      body: summaryForCommit(
+        input.target,
         `Sandy review skipped: this PR has ${formatCount(input.changedLines)} changed lines, ` +
-        `which is over the ${formatCount(input.maxChangedLines)} line Phase 1 limit. ` +
-        'Please request a smaller scope for review.',
+          `which is over the ${formatCount(input.maxChangedLines)} line Phase 1 limit. ` +
+          'Please request a smaller scope for review.',
+      ),
     });
     return {
       commentId: comment.id,
       url: comment.url ?? fallbackIssueCommentUrl(input.target, comment.id),
     };
   }
+}
+
+function summaryForCommit(target: PullRequestTarget, summary: string): string {
+  return [
+    `**Commit:** [\`${target.headSha}\`](https://github.com/${target.owner}/${target.repo}/commit/${target.headSha})`,
+    'This result applies only to that commit. To review later commits, add a new `@sandy` comment.',
+    summary,
+  ].join('\n\n');
 }
 
 function fallbackIssueCommentUrl(target: PullRequestTarget, commentId: number): string {

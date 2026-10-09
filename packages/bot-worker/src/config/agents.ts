@@ -129,8 +129,10 @@ export function parseAgentFile(path: string, contents: string): AgentDefinition 
     vendor,
     model: requireString(fm.model, 'model', path),
     ...(effort !== undefined ? { effort } : {}),
-    tools: requireStringArray(fm.tools, 'tools', path),
-    maxIterations: requirePositiveInt(fm.maxIterations, 'maxIterations', path),
+    ...(fm.tools !== undefined ? { tools: requireStringArray(fm.tools, 'tools', path) } : {}),
+    ...(fm.maxIterations !== undefined
+      ? { maxIterations: requirePositiveInt(fm.maxIterations, 'maxIterations', path) }
+      : {}),
     completionSignal: requireString(fm.completionSignal, 'completionSignal', path),
     defaultEnabled: parseDefaultEnabled(fm.defaultEnabled, path),
     systemPrompt: (body ?? '').trim(),

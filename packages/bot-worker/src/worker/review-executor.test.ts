@@ -1,6 +1,6 @@
 import type { Finding } from '@sandy/shared-types';
 import { describe, expect, it } from 'vitest';
-import { ReviewCancellationCoordinator } from './cancellation.js';
+import { ReviewSupersededError } from './review-errors.js';
 import { ReviewExecutor } from './review-executor.js';
 import {
   agentRunUsage,
@@ -22,6 +22,7 @@ import {
   skippedCrossRepoSearch,
   withTimeout,
 } from './review-executor.test-support.js';
+import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
   it('runs the Agent, persists findings, posts comments, and completes the job', async () => {
@@ -97,6 +98,8 @@ describe('ReviewExecutor', () => {
       packageManager: 'pnpm' as const,
       command: 'CI=true LEFTHOOK=0 HUSKY=0 pnpm install --frozen-lockfile --prefer-offline',
       durationMs: 12_000,
+      testStatus: 'passed' as const,
+      testResult: 'pnpm test exited 0.',
     };
     const installCalls: { worktreePath: string; cacheKey?: string }[] = [];
     const agentInstalls: unknown[] = [];
@@ -130,20 +133,63 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
   });
 
-  it('degrades to a failed install result and still completes when the install step throws', async () => {
+  it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
+    const statusLines: string[] = [];
+    const poster = new FakePoster();
+    const diagnostics = `pnpm test exited 1.\nFIRST ERROR\n${'untrusted output\n'.repeat(1000)}LAST ERROR`;
+    const executor = new ReviewExecutor({
+      store: new FakeExecutionStore(makeContext()),
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        runAgent: async () => runnerOutput(findingsOutput([])),
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install --frozen-lockfile',
+          durationMs: 100,
+          testStatus: 'failed',
+          testResult: diagnostics,
+        }),
+      },
+      resolveAgent: () => logicAgent,
+      now: nextNow([100, 200, 300]),
+      logger: { warn: () => {}, info: (message) => statusLines.push(message) },
+    });
+    await executor.executeClaimedJob('job-1');
+    expect(statusLines[0]).toBe('Tests failed: the project test suite did not pass.');
+    expect(statusLines[1]).toContain('FIRST ERROR');
+    expect(statusLines[1]).toContain('LAST ERROR');
+    expect(statusLines[1]?.length).toBeLessThan(4100);
+    expect(poster.results[0]?.summary).not.toContain('FIRST ERROR');
+    expect(poster.results[0]?.summary).not.toContain('LAST ERROR');
+  });
+
+  it('qualifies a clean static review and uses a neutral check when dependency installation fails', async () => {
     const store = new FakeExecutionStore(makeContext());
+    const poster = new FakePoster();
     const warnings: string[] = [];
+    const statusLines: string[] = [];
+    const completedChecks: Array<Parameters<ReviewStatusCheckReporter['complete']>[0]> = [];
     const agentInstalls: unknown[] = [];
     const executor = new ReviewExecutor({
       store,
       cloneManager: new FakeCloneManager(),
-      poster: new FakePoster(),
+      poster,
+      statusChecks: {
+        createInProgress: async () => ({ id: 1200 }),
+        complete: async (input) => {
+          completedChecks.push(input);
+        },
+      },
       archetypeAssigner: new FakeArchetypeAssigner(),
       diffInspector: new FakeDiffInspector(42),
       runner: {
         runAgent: async ({ dependencyInstall }) => {
           agentInstalls.push(dependencyInstall);
-          return runnerOutput(findingsOutput([finding]));
+          return runnerOutput(findingsOutput([]));
         },
         installDependencies: async () => {
           throw new Error('container failed to start');
@@ -151,7 +197,10 @@ describe('ReviewExecutor', () => {
       },
       resolveAgent: () => logicAgent,
       now: nextNow([100, 200, 300]),
-      logger: { warn: (message) => warnings.push(message) },
+      logger: {
+        warn: (message) => warnings.push(message),
+        info: (message) => statusLines.push(message),
+      },
     });
 
     await executor.executeClaimedJob('job-1');
@@ -160,13 +209,25 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
     expect(store.failed).toEqual([]);
     expect(warnings.join('\n')).toContain('container failed to start');
+    const testSummary =
+      'Tests unavailable: dependency installation failed. Review used static analysis.';
+    expect(poster.results[0]?.summary).toMatch(
+      /^Tests unavailable: dependency installation failed\. Review used static analysis\.\n\nConfidence score: 5\/5/,
+    );
+    expect(poster.results[0]?.summary).not.toContain('container failed to start');
+    expect(statusLines).toEqual([testSummary]);
+    expect(completedChecks[0]).toMatchObject({
+      conclusion: 'neutral',
+      verdict: `Sandy completed review. ${testSummary.slice(0, -1)}`,
+    });
   });
 
-  it('runs selected Agents concurrently and records each Agent result', async () => {
+  it('runs selected Agents serially and records each Agent result', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const securityStarted = deferred<void>();
+    let activeAgents = 0;
+    let peakAgents = 0;
     const runnerCalls: string[] = [];
     const executor = new ReviewExecutor({
       store,
@@ -177,12 +238,11 @@ describe('ReviewExecutor', () => {
       runner: {
         runAgent: async ({ agent }) => {
           runnerCalls.push(agent.key);
-          if (agent.key === 'logic') {
-            await securityStarted.promise;
-            return runnerOutput(findingsOutput([finding]));
-          }
-          securityStarted.resolve();
-          return runnerOutput(findingsOutput([securityFinding]));
+          activeAgents += 1;
+          peakAgents = Math.max(peakAgents, activeAgents);
+          await new Promise((resolve) => setTimeout(resolve, 2));
+          activeAgents -= 1;
+          return runnerOutput(findingsOutput([agent.key === 'logic' ? finding : securityFinding]));
         },
       },
       resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
@@ -190,9 +250,12 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 0,
+    });
 
-    expect(runnerCalls.sort()).toEqual(['logic', 'security']);
+    expect(runnerCalls).toEqual(['logic', 'security']);
+    expect(peakAgents).toBe(1);
     expect(store.recordedFindings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -378,7 +441,9 @@ describe('ReviewExecutor', () => {
       now: nextNow([100, 110, 200, 210, 300]),
     });
 
-    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toBeUndefined();
+    await expect(withTimeout(executor.executeClaimedJob('job-1'), 250)).resolves.toEqual({
+      failedAgentCount: 1,
+    });
 
     expect(store.agentRuns).toEqual(
       expect.arrayContaining([
@@ -500,7 +565,6 @@ describe('ReviewExecutor', () => {
           repo: 'acme/desktop',
           sha: 'def456',
           hostPath: '/tmp/worktree/acme/desktop/job-1',
-          sandboxPath: '/workspace/acme/desktop',
         },
       ],
     });
@@ -621,14 +685,14 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const runnerStarted = deferred<void>();
     const executor = new ReviewExecutor({
       store,
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async ({ signal }) =>
@@ -643,7 +707,7 @@ describe('ReviewExecutor', () => {
 
     const execution = executor.executeClaimedJob('job-1');
     await runnerStarted.promise;
-    cancellations.cancelReviewJobs(['job-1']);
+    cancellations.abort(new ReviewSupersededError('job-1'));
     await execution;
 
     expect(poster.results).toEqual([]);
@@ -688,12 +752,12 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     let statusChecks = 0;
     store.getReviewJobStatus = async () => {
       statusChecks += 1;
       if (statusChecks === 4) {
-        cancellations.cancelReviewJobs(['job-1']);
+        cancellations.abort(new ReviewSupersededError('job-1'));
       }
       return store.status;
     };
@@ -702,7 +766,7 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => runnerOutput(findingsOutput([finding], 'One issue.')),
@@ -724,11 +788,11 @@ describe('ReviewExecutor', () => {
     const store = new FakeExecutionStore(makeContext());
     const cloneManager = new FakeCloneManager();
     const poster = new FakePoster();
-    const cancellations = new ReviewCancellationCoordinator();
+    const cancellations = new AbortController();
     const originalCreateWorktree = cloneManager.createWorktree.bind(cloneManager);
     cloneManager.createWorktree = async (repo, request) => {
       const worktree = await originalCreateWorktree(repo, request);
-      cancellations.cancelReviewJobs(['job-1']);
+      cancellations.abort(new ReviewSupersededError('job-1'));
       return worktree;
     };
     let runnerCalls = 0;
@@ -737,7 +801,7 @@ describe('ReviewExecutor', () => {
       cloneManager,
       poster,
       archetypeAssigner: new FakeArchetypeAssigner(),
-      cancellationRegistry: cancellations,
+      signal: cancellations.signal,
       diffInspector: { changedLineCount: async () => 42 },
       runner: {
         runAgent: async () => {

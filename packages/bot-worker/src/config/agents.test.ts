@@ -214,7 +214,7 @@ describe('loadAgentDefinitions', () => {
     await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(/vendor codex/);
   });
 
-  it('rejects `effort` on a cursor Agent (no Sandcastle effort support)', async () => {
+  it('rejects `effort` on a cursor Agent (no configured effort support)', async () => {
     const cursorEffort = LOGIC_MD.replace('vendor: claude', 'vendor: cursor').replace(
       'model: opus',
       'model: composer\neffort: high',

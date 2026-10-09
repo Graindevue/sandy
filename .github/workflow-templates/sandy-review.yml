@@ -1,0 +1,145 @@
+# Copy this workflow to .github/workflows/sandy-review.yml in the reviewed repo.
+# Set SANDY_REF to an audited Sandy commit SHA. Private source access
+# uses a read-only deploy key, an App installation token, or SANDY_SOURCE_TOKEN.
+name: Sandy review
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  review:
+    if: >-
+      github.event.repository.private == true &&
+      github.event.repository.fork == false &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.run_attempt == 1 &&
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.user.type == 'User' &&
+      contains(github.event.comment.body, '@sandy')
+    # Skip unrelated events before reserving this repository's auth stream.
+    # Environment secrets are read AFTER this job lock is acquired. Repository
+    # secrets are snapshotted at queue time and cannot safely store rotating auth.
+    concurrency:
+      group: sandy-codex-session
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: sandy-codex
+    steps:
+      # No source checkout, App key, or Codex auth is consumed before this gate.
+      # A read-only GITHUB_TOKEN can check repository metadata and actor access.
+      - name: Authorize a human collaborator and resolve the PR
+        id: request
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const payload = context.payload;
+            if (process.env.GITHUB_RUN_ATTEMPT !== '1') {
+              throw new Error('Post a new @sandy comment instead of rerunning an earlier workflow');
+            }
+            if (context.eventName !== 'issue_comment' || payload.action !== 'created' ||
+                !payload.issue?.pull_request || payload.comment?.user?.type !== 'User' ||
+                !/(?:^|\s)@sandy(?![\w-])/i.test(payload.comment.body)) {
+              throw new Error('Only a new human PR comment mentioning @sandy is accepted');
+            }
+            const actor = payload.comment.user.login;
+            const pr = payload.issue.number;
+            if (!Number.isSafeInteger(pr) || pr <= 0 || payload.sender.type !== 'User') {
+              throw new Error('A human actor and positive PR number are required');
+            }
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              ...context.repo, username: actor,
+            });
+            if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
+              throw new Error('Only collaborators with write permission can request reviews');
+            }
+            const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: pr });
+            if (pull.state !== 'open' ||
+                pull.head.repo?.id !== payload.repository.id ||
+                pull.base.repo.id !== payload.repository.id) {
+              throw new Error('Only open, same-repository pull requests are accepted');
+            }
+            core.setOutput('pr-number', String(pr));
+
+      - name: Verify the trusted Sandy source pin
+        id: source
+        shell: bash
+        env:
+          SANDY_REF: ${{ vars.SANDY_REF }}
+          SANDY_SOURCE_TOKEN: ${{ secrets.SANDY_SOURCE_TOKEN }}
+          SANDY_SOURCE_SSH_KEY: ${{ secrets.SANDY_SOURCE_SSH_KEY }}
+          SANDY_SOURCE_REPOSITORY: ${{ vars.SANDY_SOURCE_REPOSITORY || 'Graindevue/sandy' }}
+        run: |
+          [[ "$SANDY_REF" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo 'SANDY_REF must be the full SHA of an audited Sandy commit.' >&2
+            exit 1
+          }
+          [[ "$SANDY_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+            echo 'SANDY_SOURCE_REPOSITORY must be an owner/repository name.' >&2
+            exit 1
+          }
+          printf 'owner=%s\nrepository=%s\n' \
+            "${SANDY_SOURCE_REPOSITORY%%/*}" "${SANDY_SOURCE_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$SANDY_SOURCE_SSH_KEY" || -n "$SANDY_SOURCE_TOKEN" ]]; then
+            echo 'use-app=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'use-app=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create a read-only token for the private Sandy source
+        if: ${{ steps.source.outputs.use-app == 'true' }}
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.SANDY_APP_ID }}
+          private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
+          owner: ${{ steps.source.outputs.owner }}
+          repositories: ${{ steps.source.outputs.repository }}
+          permission-contents: read
+
+      - name: Checkout trusted repository configuration
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: repository
+          persist-credentials: false
+
+      - name: Checkout pinned private Sandy source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ vars.SANDY_SOURCE_REPOSITORY || 'Graindevue/sandy' }}
+          ref: ${{ vars.SANDY_REF }}
+          # checkout requires a token input even when SSH handles all git
+          # transport. GITHUB_TOKEN is used here only for that required input.
+          token: ${{ secrets.SANDY_SOURCE_TOKEN || steps.source-token.outputs.token || github.token }}
+          ssh-key: ${{ secrets.SANDY_SOURCE_SSH_KEY }}
+          path: sandy
+          persist-credentials: false
+
+      - name: Verify checkout credentials were removed before reviewing code
+        shell: bash
+        run: node "$GITHUB_WORKSPACE/sandy/.github/actions/review/verify-checkout.mjs"
+
+      - name: Review with Sandy
+        uses: ./sandy/.github/actions/review
+        with:
+          pr-number: ${{ steps.request.outputs.pr-number }}
+          app-id: ${{ secrets.SANDY_APP_ID }}
+          app-private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
+          convex-url: ${{ secrets.CONVEX_URL }}
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
+          auth-environment: sandy-codex
+          # Optional: e.g. repository/.github/sandy/bot.yaml, always from the
+          # trusted default branch. Blank generates config from this repo.
+          config-path: ${{ vars.SANDY_CONFIG_PATH }}
+          product-slug: ${{ vars.SANDY_PRODUCT_SLUG }}
+          product-name: ${{ vars.SANDY_PRODUCT_NAME }}
+          model: ${{ vars.SANDY_MODEL || 'gpt-6.1-sol' }}

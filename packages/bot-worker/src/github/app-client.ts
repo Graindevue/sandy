@@ -1,5 +1,6 @@
 import { createSign } from 'node:crypto';
 import { isIgnoredPath } from '../config/ignore.js';
+import type { PullRequestFacts, RepoRef } from '../github/types.js';
 import type {
   MergeStateCommit,
   MergeStateCommitFile,
@@ -11,8 +12,6 @@ import type {
   ReactionCaptureCommentKind,
   ReactionCaptureGitHub,
 } from '../learning/reaction-capture.js';
-import type { PullRequestFacts, RepoRef } from '../webhook/events.js';
-import type { PullRequestResolver } from '../webhook/parse.js';
 import type {
   GitHubReviewPoster,
   IssueCommentInput,
@@ -51,7 +50,6 @@ export class GitHubAppClient
     GitHubReviewPoster,
     ReviewDiffInspector,
     ReviewStatusCheckReporter,
-    PullRequestResolver,
     ReactionCaptureGitHub,
     MergeStateGitHub
 {
@@ -99,6 +97,15 @@ export class GitHubAppClient
       }
     }
     return total;
+  }
+
+  async changedPaths(target: PullRequestTarget): Promise<string[]> {
+    const files = await this.#listPaginated<{ filename?: string }>(
+      target.owner,
+      target.repo,
+      `/repos/${target.owner}/${target.repo}/pulls/${target.pullNumber}/files`,
+    );
+    return files.flatMap((file) => (typeof file.filename === 'string' ? [file.filename] : []));
   }
 
   async createPullRequestReviewComment(input: ReviewCommentInput): Promise<{ id: number }> {
@@ -183,6 +190,15 @@ export class GitHubAppClient
       `/repos/${repo.owner}/${repo.name}/pulls/${number}`,
     );
     return parsePullRequestFacts(raw);
+  }
+
+  async repositoryIsPrivate(repo: RepoRef): Promise<boolean> {
+    const raw = await this.#installationRequest<{ private?: boolean }>(
+      repo.owner,
+      repo.name,
+      `/repos/${repo.owner}/${repo.name}`,
+    );
+    return raw.private === true;
   }
 
   async resolvePullRequestForPush(

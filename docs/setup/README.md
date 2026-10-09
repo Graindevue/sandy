@@ -1,65 +1,54 @@
-# Setting up Sandy
+# Setting up Sandy on GitHub Actions
 
-Operator-facing setup for standing Sandy up end-to-end on a fresh host. These
-docs are runnable walkthroughs — they describe behavior and the exact commands
-to run, not Sandy's internals. For what Sandy is and the domain vocabulary, read
-[`README.md`](../../README.md) and [`CONTEXT.md`](../../CONTEXT.md) first.
+Sandy executes finite reviews on GitHub-hosted Linux runners. Durable state lives
+in Convex Cloud, and GitHub Actions serializes requests from new `@sandy` PR
+comments.
+[ADR 0018](../adr/0018-github-actions-codex-runtime.md) records the runtime.
+The canonical Sandy source is the private `Graindevue/sandy` repository.
 
-## Before you start
+## Requirements
 
-Sandy is **macOS on Apple Silicon (M1+) only** — [Apple Container][apple-container]
-is required for Agent sandboxing (ADR [0003](../adr/0003-sandcastle-runtime-no-fork.md)).
-You also need:
-
-- **Node 24+** and **pnpm 10+**
-- A **Convex** account (free tier is fine for solo workloads)
-- A **GitHub** account with admin access to the repositories you want reviewed
-- A **[Codex][codex]** login on the host — the Phase 1 `logic` Agent runs on
-  Codex (`vendor: codex`). Run `codex login` once (uses your ChatGPT
-  subscription); the worker stages that credential into each Agent container
-  (see [`sandcastle-image.md`](./sandcastle-image.md)). OpenAI API-key auth, or
-  running `logic` on **[Anthropic][anthropic]** Claude instead, are both
-  supported as optional Agent runtime choices — see [`github-app.md`](./github-app.md)
-- **[Tailscale][tailscale]** for webhook ingress (recommended)
-- **[`opensrc`][opensrc]** installed globally (ADR [0008](../adr/0008-opensrc-for-framework-source-truth.md))
-
-Clone Sandy onto the host and install workspace dependencies:
-
-```bash
-git clone https://github.com/tony-co/sandy.git
-cd sandy
-pnpm install
-```
-
-Instance-specific configuration lives in `.config/` (gitignored). You will
-create `.config/.env` and `.config/bot.yaml` as you work through these docs.
+- A private caller repository with GitHub Actions and environments available.
+- Admin access to the caller repository and the Sandy repository.
+- A GitHub App installed on every Product Repo, including the caller.
+- A Convex Cloud deployment with Sandy's current schema and functions.
+- A ChatGPT plan including Codex and a separate CI login.
+- Node 24, pnpm 10, Codex CLI, and authenticated `gh` for local setup.
 
 ## Setup order
 
-Follow these in order. Each builds on the previous one.
+| Step | Guide | Result |
+|------|-------|--------|
+| 1 | [Convex](./convex.md) | Deploy the backend and obtain its URL. |
+| 2 | [GitHub App](./github-app.md) | Configure the review identity and auth write-back permissions. |
+| 3 | [Product config](./bot-yaml.md) | Declare trusted Repos and Codex Agent selections. |
+| 4 | [GitHub Actions](./github-actions.md) | Configure secrets, the dedicated login, and the caller workflow. |
 
-| # | Doc | What it covers |
-|---|-----|----------------|
-| 1 | [`sandcastle-image.md`](./sandcastle-image.md) | Install host tooling (`opensrc`, Codex CLI + `codex login`) and build the Apple Container image Agents run in. |
-| 2 | [`convex.md`](./convex.md) | Create a Convex deployment and deploy the Phase 1 schema. |
-| 3 | [`github-app.md`](./github-app.md) | Register the "Sandy" GitHub App, install it on repos, capture credentials into `.config/.env`. |
-| 4 | [`tailscale.md`](./tailscale.md) | Expose the webhook server (host port **3007**) to GitHub via Tailscale Funnel. |
-| 5 | [`bot-yaml.md`](./bot-yaml.md) | Author `.config/bot.yaml` — declare your Products, their Repos, Agent selection, and runtime overrides. |
-| 6 | [`launchd.md`](./launchd.md) | Install a launchd service that supervises the worker and runs it on boot. |
+The helper at [scripts/setup-actions.sh](../../scripts/setup-actions.sh) guides
+the human-only login, permission, and checkout-token steps after the environment
+and ordinary repository secrets exist. See its `--help` output for its options.
 
-After the launchd service is running and the Funnel URL is registered as the
-App's webhook, post `@bot review` on a pull request in a registered Repo to
-trigger the first Review.
+Once the caller workflow is on the default branch, a human collaborator with
+repository write access posts a new comment containing standalone `@sandy` on an
+open same-repository PR. This is the sole review trigger; no command suffix is
+required. The summary prominently names the reviewed commit. After pushing more
+commits, post a new `@sandy` comment to request another review.
 
-## What's deferred
+## Authentication rules
 
-Phase 1 ships a single-Agent, single-Product, single-Repo loop. Multi-Agent
-fan-out, the API surface manifest, per-Repo `.bot/` rules, and the learning loop
-arrive in later phases — see [`docs/prds/`](../prds/). Where one of these docs
-mentions a not-yet-built feature, it says so.
+`CODEX_AUTH_JSON` is stored in the **`sandy-codex` environment**. It is never
+a repository secret: an environment reads the current auth only when a queued
+job starts, after the prior Review has persisted its refreshed file.
 
-[apple-container]: https://github.com/apple/container
-[codex]: https://github.com/openai/codex
-[anthropic]: https://console.anthropic.com/
-[tailscale]: https://tailscale.com/
-[opensrc]: https://opensrc.run
+One auth stream has one Actions concurrency group on the review job and serial
+Agent Runs.
+Give each independently operated caller its own dedicated login. For reseeding,
+pause new review requests and ensure the active job has finished before replacing
+the environment secret.
+
+## Current limitations
+
+Reviews use Codex CLI; configure selected personas with `vendor: codex`.
+Embeddings, new Archetype assignment, reaction collection, and SuggestedRule
+promotion are disabled. Historical learning data remains in Convex. The old
+host-service setup is preserved only in historical ADRs and PRDs.

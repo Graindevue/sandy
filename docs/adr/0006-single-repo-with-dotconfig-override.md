@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: Accepted
 
+> **Runtime amendment (2026-10-09).** The single-repo configuration and override model remains. Actions receives trusted instance configuration from the caller; `.config/launchd/` and host-service references below are historical.
+
 ## Context
 
 Sandy is open-source (MIT) but each instance is configured for a specific user's repositories, rules, secrets, and custom agents. There must be a clean separation between the open-source core and per-instance configuration.

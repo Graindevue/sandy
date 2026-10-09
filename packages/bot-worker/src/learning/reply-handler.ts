@@ -1,4 +1,4 @@
-import type { RepoRef } from '../webhook/events.js';
+import type { RepoRef } from '../github/types.js';
 import {
   findingIdsForStoredCommentId,
   findingIdsFromTrailerMatching,

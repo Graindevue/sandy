@@ -37,6 +37,7 @@ export interface ReviewStatusCheckStore {
 
 export interface ReviewStatusCheckLogger {
   warn(message: string, ...args: unknown[]): void;
+  info?(message: string): void;
 }
 
 export interface ReviewStatusCheckContext {

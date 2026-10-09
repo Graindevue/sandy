@@ -1,6 +1,10 @@
 # Sandy PRDs
 
-Each phase below is an independently-shippable milestone. PRDs describe scope, deliverables, acceptance criteria, and dependencies. They are designed to be fed into the `to-issues` workflow to generate independently-grabbable GitHub issues.
+These are the original May–June 2026 implementation plans, preserved with their
+original statuses and criteria. They explain how Sandy evolved; they are not
+the current deployment checklist. Runtime requirements are governed by
+[ADR 0018](../adr/0018-github-actions-codex-runtime.md), and operational steps
+live in the [current setup guide](../setup/README.md).
 
 ## Phases
 
@@ -21,7 +25,9 @@ Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4
                               (HTML trailer is load-bearing from day 1).
 ```
 
-Phases are strictly sequential. Phase N+1 assumes Phase N is merged and stable on the host.
+The original plan treated phases as sequential. Its local-service, container,
+parallel-reviewer, and learning-loop requirements have since been amended by
+ADR 0018.
 
 ## Feature PRDs
 
@@ -33,7 +39,8 @@ Standalone features that aren't tied to a phase:
 
 ## Working with these PRDs
 
-The intended workflow:
+For new work, reconcile any reused scope with ADR 0018 before deriving issues.
+The original issue-writing workflow was:
 
 1. Read the PRD in full to understand scope and acceptance criteria.
 2. Use `/to-issues` (or the project's issue-breakdown skill) to convert one PRD into a set of independently-grabbable GitHub issues, each implementing one logical unit (a package, a module, a config file, an end-to-end test).

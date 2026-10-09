@@ -20,7 +20,6 @@ describe('materializeReviewWorkspace', () => {
         repo: 'acme/desktop',
         sha: 'desktop-main-sha',
         hostPath: '/tmp/worktree/acme/desktop/job-1',
-        sandboxPath: '/workspace/acme/desktop',
       },
     ]);
     expect(workspace.siblingShas).toEqual({ 'acme/desktop': 'desktop-main-sha' });

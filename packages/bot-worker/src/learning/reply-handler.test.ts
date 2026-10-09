@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RepoRef } from '../webhook/events.js';
+import type { RepoRef } from '../github/types.js';
 import type {
   ReactionCaptureComment,
   ReactionCaptureGitHub,

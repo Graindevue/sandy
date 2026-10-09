@@ -1,5 +1,5 @@
 import type { ReactionKind } from '@sandy/shared-types';
-import type { GitHubCommentKind, RepoRef } from '../webhook/events.js';
+import type { GitHubCommentKind, RepoRef } from '../github/types.js';
 import {
   type FindingCommentTarget,
   findingIdsFromTrailerMatching,

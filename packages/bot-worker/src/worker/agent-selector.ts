@@ -44,6 +44,7 @@ export interface SelectAgentsForReviewInput {
   agents: readonly AgentDefinition[];
   reviewRepoFullName: string;
   productRepos: readonly AgentSelectionRepo[];
+  changedPaths?: readonly string[];
 }
 
 interface AgentOverrides {
@@ -81,7 +82,13 @@ export async function selectAgentsForReview(
     selected.add(key);
   }
 
-  return input.agents.filter((agent) => selected.has(agent.key));
+  return input.agents.filter(
+    (agent) =>
+      selected.has(agent.key) &&
+      (agent.key !== 'convex' ||
+        input.changedPaths === undefined ||
+        input.changedPaths.some((path) => /(^|\/)convex\//.test(path))),
+  );
 }
 
 async function readProductDependencies(repos: readonly AgentSelectionRepo[]): Promise<Set<string>> {

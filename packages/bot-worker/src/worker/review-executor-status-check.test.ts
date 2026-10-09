@@ -20,8 +20,19 @@ import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor Review Status Check', () => {
   it('creates and persists an in-progress check, then resolves a clean Review to success', async () => {
+    const runner = new FakeRunner(findingsOutput([]));
     const { executor, statusChecks, store } = makeExecutor({
-      runner: new FakeRunner(findingsOutput([])),
+      runner: {
+        runAgent: (input) => runner.runAgent(input),
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install --frozen-lockfile',
+          durationMs: 100,
+          testStatus: 'passed',
+          testResult: 'pnpm test exited 0.',
+        }),
+      },
       now: nextNow([100, 200, 300, 400]),
     });
 
@@ -45,7 +56,7 @@ describe('ReviewExecutor Review Status Check', () => {
         conclusion: 'success',
         detailsUrl: 'https://github.com/acme/widget/pull/12#issuecomment-900',
         summaryCommentUrl: 'https://github.com/acme/widget/pull/12#issuecomment-900',
-        verdict: 'Sandy ran cleanly',
+        verdict: 'Sandy ran cleanly. Tests passed: the project test suite ran once',
         completedAt: 400,
       },
     ]);
@@ -61,7 +72,7 @@ describe('ReviewExecutor Review Status Check', () => {
 
     expect(statusChecks.completed[0]).toMatchObject({
       conclusion: 'neutral',
-      verdict: 'Sandy posted 1 finding',
+      verdict: 'Sandy posted 1 finding. Tests unavailable: no test-suite result was recorded',
     });
   });
 
@@ -84,7 +95,8 @@ describe('ReviewExecutor Review Status Check', () => {
 
     expect(statusChecks.completed[0]).toMatchObject({
       conclusion: 'neutral',
-      verdict: 'Sandy completed with partial agent failures',
+      verdict:
+        'Sandy completed with partial agent failures. Tests unavailable: no test-suite result was recorded',
     });
   });
 
@@ -107,7 +119,8 @@ describe('ReviewExecutor Review Status Check', () => {
     expect(statusChecks.completed[0]).toMatchObject({
       conclusion: 'failure',
       detailsUrl: 'https://github.com/acme/widget/pull/12',
-      verdict: 'Sandy failed to produce review results',
+      verdict:
+        'Sandy failed to produce review results. Tests unavailable: no test-suite result was recorded',
     });
   });
 

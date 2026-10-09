@@ -1,9 +1,6 @@
 name: CI
 
-# Runs the merge gate (lint, type-check, test) on every PR — regardless of base
-# branch — and on direct pushes to the integration branches. The .sandcastle AFK
-# harness merges agent branches straight into `staging` without a per-issue PR,
-# so the push trigger is what guards those merges.
+# Runs the merge gate on every PR and on integration/production pushes.
 on:
   pull_request:
   push:
@@ -13,6 +10,9 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -32,9 +32,11 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      # postinstall rebuilds the native tree-sitter bindings via node-gyp.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify Actions authentication and authorization helpers
+        run: node --test .github/actions/review/*.test.mjs
 
       - name: Lint
         run: pnpm lint

@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "main": "./dist/main.js",
-  "types": "./dist/main.d.ts",
+  "main": "./dist/review-action.js",
+  "types": "./dist/review-action.d.ts",
   "files": [
     "dist"
   ],
@@ -12,12 +12,10 @@
     "build": "tsc -p tsconfig.json",
     "type-check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "start": "node ./dist/main.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "review": "node ./dist/review-action.js"
   },
   "dependencies": {
-    "@ai-hero/sandcastle": "^0.6.4",
-    "@sandy/apple-container-provider": "workspace:*",
     "@sandy/convex-backend": "workspace:*",
     "@sandy/manifest-builder": "workspace:*",
     "@sandy/shared-types": "workspace:*",

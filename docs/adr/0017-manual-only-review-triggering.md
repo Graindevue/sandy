@@ -1,8 +1,9 @@
-# 17. Reviews are manual-only — pushes never auto-trigger
+# 17. Reviews start only from new `@sandy` PR comments
 
 Date: 2026-06-11
 
-Status: Accepted
+Status: Accepted; trigger policy updated to standalone `@sandy` comments.
+Actions scheduling is recorded in [0018](./0018-github-actions-codex-runtime.md).
 
 Supersedes [0016](0016-base-branch-exclusion.md)
 
@@ -26,36 +27,39 @@ keystroke of `git push`.
 
 ## Decision
 
-Reviews are **manual-only**. A Review is triggered by exactly two human actions:
+Reviews are **manual-only**, with one request path: a **newly created PR comment
+containing standalone `@sandy`**, from an authorized human collaborator with
+repository write access. `@sandy` alone is sufficient; a `review` suffix is not
+required. `@agent-sandy` is not an alias.
 
-1. An `@bot review` mention on the PR.
-2. The **Re-run** control on Sandy's Review Status Check.
+Only `issue_comment` events of type `created` can start a Review. Edited comments,
+Check Run re-requests, workflow dispatch, pushes, and PR lifecycle events do not
+trigger one. Rerunning an earlier Actions workflow is rejected: the workflow and
+request validator require `run_attempt` to be `1`. To request another Review,
+create a new `@sandy` comment. The PR must be open, private, and from the same
+repository.
 
-Every other webhook event is a no-op for triggering: `push`, `synchronize`,
-`ready_for_review` (draft → ready), and PR open/reopen no longer start a Review.
-PR close still clears the opt-in flag.
+Actions serializes eligible review jobs and Agent Runs around one dedicated
+Codex auth stream. A new request does not cancel a running Review. The review
+resolves the current head when it begins and prominently identifies that commit
+in its summary. After new commits, a human posts a new `@sandy` comment to request
+another Review.
 
-`reviewActive` is retained as **opt-in state only** — a record that a PR has been
-put under Sandy review (set by the two triggers, cleared on close). It no longer
-gates anything; nothing reads it to decide whether to enqueue.
-
-Both manual triggers use the superseding enqueue path, so Cancel-on-Supersede
-keeps working without push events: a fresh `@bot review` (e.g. after a fix push)
-or a Re-run marks any in-flight Review for the PR as superseded and reuses or
-enqueues the current-head job. A double `@bot review` dedupes to one job rather
-than double-posting.
+Earlier accepted versions offered Check Run re-requests and later workflow
+dispatch alongside mentions. Those request paths and the old opt-in/container
+cancellation behavior are retired; the churn rationale above still applies.
 
 ## Consequences
 
-- The author controls review cadence. After pushing a batch of fixes they run
-  `@bot review` once; commits in between cost nothing.
+- The author controls review cadence. After pushing a batch of fixes they post
+  a new `@sandy` comment once; commits in between do not start reviews.
 - Base-Branch Exclusion (ADR 0016) is retired: its only job was to gate the
   automatic `gh pr ready` arming, which no longer exists. The `excludeBranches`
   key in `.config/bot.yaml` is now inert — left in the schema for compatibility,
-  scheduled for removal in a separate cleanup. The matcher module and its dispatch
+  scheduled for removal in a separate cleanup. The matcher module and its event
   wiring are deleted.
-- Stale historical trigger values (`push`, `ready`, `opened`) remain valid on
+- Historical trigger values (`push`, `ready`, `opened`, `rerun`) remain valid on
   ReviewJob rows already in Convex; the `ReviewTrigger` union is left wide rather
-  than migrating stored data. New jobs only ever carry `mention` or `rerun`.
+  than migrating stored data. New jobs carry only `mention`.
 - "Reactive" is dropped from Sandy's pitch. The trade-off is explicit: no
   surprise reviews, at the cost of remembering to ask.
