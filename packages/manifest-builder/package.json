@@ -22,6 +22,6 @@
   },
   "dependencies": {
     "@sandy/shared-types": "workspace:*",
-    "tsx": "^4.20.0"
+    "tsx": "^4.23.15"
   }
 }
