@@ -303,6 +303,19 @@ describe('claimed ReviewJob concurrency', () => {
       fixture.store.agentRuns.find((run) => run.agentKey === 'security')?.usage?.inputTokens,
     ).toBe(500);
   });
+  it('preserves completed Findings but reports runtime shutdown failure as an operational failure', async () => {
+    const fixture = managedReview({
+      runAgent: async ({ agent }) =>
+        runnerOutput(findingsOutput(agent.key === 'logic' ? [finding] : [])),
+      close: async () => {
+        throw new Error('could not finalize runtime state');
+      },
+    });
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(fixture.store.recordedFindings).toHaveLength(1);
+    expect(fixture.store.status).toBe('failed');
+    expect(fixture.store.failed[0]?.error).toContain('runtime shutdown');
+  });
 });
 
 function managedReview(options: {

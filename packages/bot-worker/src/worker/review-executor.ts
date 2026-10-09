@@ -214,6 +214,7 @@ interface SelectedAgentReviewResults {
   outputs: AgentReviewOutput[];
   failedAgentCount: number;
   selectedAgentCount: number;
+  teardownError?: unknown;
 }
 
 function agentRunRecordInput(
@@ -484,14 +485,21 @@ export class ReviewExecutor {
             siblingShas: workspace.siblingShas,
             cancellationSignal,
             testSummary:
-              failedAgentCount === 0
-                ? testSummary
-                : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${testSummary}`,
+              agentResults.teardownError !== undefined
+                ? `Review runtime shutdown failed. Successful findings are retained; this Review did not finish reliably.\n\n${testSummary}`
+                : failedAgentCount === 0
+                  ? testSummary
+                  : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${testSummary}`,
           }),
         );
       }
 
       await this.#throwIfCancelledOrSuperseded(jobId, cancellationSignal);
+      if (agentResults.teardownError !== undefined) {
+        throw new Error(
+          `Review runtime shutdown failed: ${describeError(agentResults.teardownError)}`,
+        );
+      }
       await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
       const outcome = completedReviewStatusCheckOutcome({
         selectedAgentCount: agentResults.selectedAgentCount,
@@ -641,6 +649,7 @@ export class ReviewExecutor {
       runtime === undefined ? 1 : Math.min(this.#maxAgentConcurrency, runtime.maxConcurrency);
     const results: SelectedAgentReviewResult[] = [];
     let next = 0;
+    let teardownError: unknown;
     let checking: Promise<void> | undefined;
     const monitor =
       runtime === undefined
@@ -722,12 +731,17 @@ export class ReviewExecutor {
       if (monitor !== undefined) clearInterval(monitor);
       await checking;
       cancellation.abort();
-      await runtime?.close();
+      try {
+        await runtime?.close();
+      } catch (error) {
+        teardownError = error;
+      }
     }
     return {
       outputs: results.flatMap((result) => (result.status === 'completed' ? [result.output] : [])),
       failedAgentCount: results.filter((result) => result.status === 'failed').length,
       selectedAgentCount: input.agents.length,
+      ...(teardownError === undefined ? {} : { teardownError }),
     };
   }
 
