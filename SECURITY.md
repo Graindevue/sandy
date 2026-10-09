@@ -42,6 +42,10 @@ explicitly named `.env.example`, `.env.*.example`, `*.example.pem`, and
 `*.example.key` patterns are exceptions; samples must contain clearly fake values.
 Git ignore rules do not protect files already committed. Never bypass a scanner
 with an inline allow comment, a broad allowlist, or an unreviewed baseline.
+The four `.gitleaksignore` fingerprints cover two reviewed nonsecret benchmark
+cache identifiers in the original commit and its rebase. Exceptions must identify the exact commit,
+file, rule and line, with a documented nonsecret use; never ignore a whole path
+or rule. A later credential at the same location must still fail scanning.
 
 ## Repository controls
 
