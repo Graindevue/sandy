@@ -1,11 +1,19 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, realpath, stat } from 'node:fs/promises';
+import { mkdir, realpath, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
 import { isIgnoredPath } from '../config/ignore.js';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
+import {
+  type DependencyDownloadCache,
+  type DependencyDownloadCacheMetrics,
+  dependencyDownloadCacheKey,
+  discardMutableStoreState,
+  resetDownloadStore,
+  validateDownloadStore,
+} from './dependency-download-cache.js';
 import {
   type DependencyInstallResult,
   detectDependencyInstall,
@@ -59,6 +67,7 @@ export interface CodexExecRunnerOptions {
   testTimeoutMs?: number;
   /** Full-suite verification is opt-in; targeted mode leaves it to CI. */
   testMode?: ReviewTestMode;
+  dependencyDownloadCache?: DependencyDownloadCache;
   logger?: { info(message: string): void };
 }
 
@@ -131,22 +140,168 @@ export class CodexExecRunner {
       const startedAt = Date.now();
       this.#logger.info('Sandy dependency install started.');
       let installed: { exitCode: number; output: string };
+      let installationDurationMs = 0;
+      let cache: DependencyDownloadCacheMetrics | undefined;
+      const deadline = startedAt + (this.#options.installTimeoutMs ?? 15 * 60 * 1000);
+      const remaining = () => {
+        input.signal?.throwIfAborted();
+        const budget = deadline - Date.now();
+        if (budget <= 0) throw new Error('Dependency preparation exceeded its installation budget');
+        return budget;
+      };
+      const store = resolvePath(
+        this.#options.codexHome,
+        '..',
+        'sandy-dependency-downloads',
+        detected.packageManager,
+      );
+      const downloads = detected.packageManager === 'npm' ? join(store, '_cacache') : store;
+      const service = this.#options.dependencyDownloadCache;
+      let key: string | undefined;
+      let restored = false;
+      let installCommand = detected.command;
       try {
-        installed = await installWithoutHookOnlyPrepare(input.worktreePath, () =>
-          this.#sandboxCommand(
-            input,
-            detected.command,
-            this.#options.installTimeoutMs ?? 15 * 60 * 1000,
-          ),
-        );
+        if (service !== undefined) {
+          cache = {
+            restore: 'unverified',
+            restoreMs: 0,
+            save: 'skipped',
+            saveMs: 0,
+            coldRetry: false,
+          };
+          const candidate = await dependencyDownloadCacheKey({
+            worktreePath: input.worktreePath,
+            ...(input.cacheKey !== undefined ? { repository: input.cacheKey } : {}),
+            detected,
+          });
+          if (candidate !== undefined) {
+            let version = { exitCode: 0, output: candidate.version };
+            if (detected.packageManager === 'npm') {
+              try {
+                version = await this.#sandboxCommand(
+                  input,
+                  'npm --version',
+                  Math.min(remaining(), 10_000),
+                );
+              } catch {
+                input.signal?.throwIfAborted();
+                version = { exitCode: 1, output: '' };
+              }
+            }
+            if (version.exitCode === 0 && version.output.trim() === candidate.version) {
+              key = candidate.key;
+              await resetDownloadStore(store);
+              await mkdir(downloads, { recursive: true });
+              const restoreStartedAt = Date.now();
+              try {
+                const restoredKey = await service.restore({
+                  key,
+                  storePath: downloads,
+                  signal: AbortSignal.any([
+                    ...(input.signal ? [input.signal] : []),
+                    AbortSignal.timeout(remaining()),
+                  ]),
+                });
+                if (restoredKey !== undefined && restoredKey !== key)
+                  throw new Error('Incompatible cache');
+                await validateDownloadStore(downloads, detected.packageManager);
+                restored = restoredKey === key;
+                cache.restore = restored ? 'hit' : 'miss';
+              } catch {
+                input.signal?.throwIfAborted();
+                cache.restore = 'unavailable';
+                await resetDownloadStore(store);
+                await mkdir(downloads, { recursive: true });
+              }
+              cache.restoreMs = Date.now() - restoreStartedAt;
+              installCommand =
+                detected.packageManager === 'npm'
+                  ? `npm_config_cache=${shellQuote(store)} ${detected.command}`
+                  : `${detected.command} --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false`;
+              this.#logger.info(
+                `Sandy dependency download cache ${cache.restore} after ${cache.restoreMs}ms.`,
+              );
+            }
+          }
+          if (key === undefined)
+            this.#logger.info(
+              'Sandy dependency download cache unverified; retaining ordinary installation.',
+            );
+        }
+        const install = () =>
+          installWithoutHookOnlyPrepare(input.worktreePath, () =>
+            this.#sandboxCommand(
+              key !== undefined ? { ...input, downloadStorePath: store } : input,
+              installCommand,
+              service === undefined
+                ? (this.#options.installTimeoutMs ?? 15 * 60 * 1000)
+                : remaining(),
+            ),
+          );
+        const installationStartedAt = Date.now();
+        installed = await install();
+        if (installed.exitCode !== 0 && restored && cache !== undefined) {
+          cache.coldRetry = true;
+          cache.restore = 'discarded';
+          this.#logger.info(
+            'Sandy dependency download cache discarded; retrying a cold installation.',
+          );
+          await resetDownloadStore(store);
+          await rm(join(input.worktreePath, 'node_modules'), { recursive: true, force: true });
+          installed = await install();
+        }
+        installationDurationMs = Date.now() - installationStartedAt;
+        if (
+          installed.exitCode === 0 &&
+          service !== undefined &&
+          key !== undefined &&
+          cache !== undefined &&
+          !restored
+        ) {
+          const saveStartedAt = Date.now();
+          try {
+            const preparedKey = await dependencyDownloadCacheKey({
+              worktreePath: input.worktreePath,
+              ...(input.cacheKey !== undefined ? { repository: input.cacheKey } : {}),
+              detected,
+            });
+            if (preparedKey?.key !== key)
+              throw new Error('Reviewed install configuration changed during preparation');
+            await discardMutableStoreState(downloads, detected.packageManager);
+            await validateDownloadStore(downloads, detected.packageManager);
+            await service.save({
+              key,
+              storePath: downloads,
+              signal: AbortSignal.any([
+                ...(input.signal ? [input.signal] : []),
+                AbortSignal.timeout(remaining()),
+              ]),
+            });
+            cache.save = 'saved';
+          } catch {
+            input.signal?.throwIfAborted();
+            cache.save = 'unavailable';
+          }
+          cache.saveMs = Date.now() - saveStartedAt;
+          this.#logger.info(
+            `Sandy dependency download cache save ${cache.save} after ${cache.saveMs}ms.`,
+          );
+        }
       } catch (error) {
         this.#logger.info(`Sandy dependency install failed after ${Date.now() - startedAt}ms.`);
         throw error;
+      } finally {
+        if (key !== undefined) await rm(store, { recursive: true, force: true });
       }
-      const durationMs = Date.now() - startedAt;
+      const durationMs = installationDurationMs;
+      const preparationDurationMs = Date.now() - startedAt;
       this.#logger.info(
         `Sandy dependency install ${installed.exitCode === 0 ? 'completed' : 'failed'} after ${durationMs}ms.`,
       );
+      if (service !== undefined)
+        this.#logger.info(
+          `Sandy dependency preparation completed after ${preparationDurationMs}ms.`,
+        );
       if (installed.exitCode !== 0)
         return {
           status: 'failed',
@@ -160,6 +315,8 @@ export class CodexExecRunner {
           packageManager: detected.packageManager,
           command,
           durationMs,
+          ...(service !== undefined ? { preparationDurationMs } : {}),
+          ...(cache !== undefined ? { cache } : {}),
           testStatus: 'deferred',
           testResult:
             'Full project test suite deferred to CI. Reviewers may run focused tests to verify concrete findings.',
@@ -196,6 +353,8 @@ export class CodexExecRunner {
         packageManager: detected.packageManager,
         command,
         durationMs,
+        ...(service !== undefined ? { preparationDurationMs } : {}),
+        ...(cache !== undefined ? { cache } : {}),
         testStatus,
         testResult,
       };
@@ -210,7 +369,7 @@ export class CodexExecRunner {
   }
 
   async #sandboxCommand(
-    input: { worktreePath: string; signal?: AbortSignal },
+    input: { worktreePath: string; signal?: AbortSignal; downloadStorePath?: string },
     command: string,
     timeoutMs: number,
   ): Promise<{ exitCode: number; output: string }> {
@@ -224,7 +383,12 @@ export class CodexExecRunner {
       'sandy',
       '--cd',
       input.worktreePath,
-      ...(await this.#permissionConfig(input.worktreePath, [], input.signal)),
+      ...(await this.#permissionConfig(
+        input.worktreePath,
+        [],
+        input.signal,
+        input.downloadStorePath ? [input.downloadStorePath] : [],
+      )),
       '--',
       '/bin/sh',
       '-c',
@@ -538,6 +702,7 @@ export class CodexExecRunner {
     worktreePath: string,
     siblings: readonly RunnerSiblingWorktree[] = [],
     signal?: AbortSignal,
+    writablePaths: readonly string[] = [],
   ): Promise<string[]> {
     const denied = [
       ...new Set([
@@ -553,6 +718,8 @@ export class CodexExecRunner {
     for (const sibling of siblings)
       filesystem.push(`${JSON.stringify(resolvePath(sibling.hostPath))}="read"`);
     filesystem.push(`${JSON.stringify(this.#toolHome)}="write"`);
+    for (const path of writablePaths)
+      filesystem.push(`${JSON.stringify(resolvePath(path))}="write"`);
     const opensrcHome = this.#options.env?.OPENSRC_HOME ?? process.env.OPENSRC_HOME;
     if (opensrcHome !== undefined)
       filesystem.push(`${JSON.stringify(resolvePath(opensrcHome))}="write"`);
@@ -687,6 +854,10 @@ function safeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     pnpm_config_manage_package_manager_versions: 'false',
     npm_config_manage_package_manager_versions: 'false',
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {

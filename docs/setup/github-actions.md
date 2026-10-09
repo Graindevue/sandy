@@ -112,6 +112,31 @@ and temporary cache directories, and read-only shared Git metadata and sibling
 source. Native caches must also satisfy ownership checks on their ancestor
 directories, including those enforced by SWC.
 
+The action optionally restores the reviewed repository's package downloads from
+GitHub Actions cache, separately from the cache used to build Sandy. Every review
+still performs a fresh frozen installation. Supported stores are npm's
+`_cacache` and pnpm's content store, with side-effect and local-project records
+excluded. Installed dependencies, source, test outputs, tool homes, logs,
+credentials, and configuration files are never saved.
+
+Download keys include the repository, operating system and architecture, Node
+major version, exact reviewed package-manager pin, and a digest of the reviewed
+lockfile, manifest, and install configuration. npm requires its installed CLI to
+match the reviewed pin; pnpm retains the existing exact `npx` pin. Missing or
+unverified keys, other stores, credential-bearing configuration, and unavailable
+cache services retain ordinary installation. Restored stores are checked before
+use, and a failed warm installation gets at most one cold retry within the
+preparation budget. Cache workers have a 30-second operation limit and stop
+before cleanup on cancellation. Only successful dependency preparation publishes
+downloads; a genuine install failure retains static-analysis review.
+
+The store uses a stable `sandy-dependency-downloads` directory beside the dedicated
+Codex home, with an install-only sandbox write grant. It is cleared after each
+preparation. Keep that path stable across Actions runs because the cache service
+includes the supplied paths in its cache version. Phase logs distinguish cache
+restore and save, installation, and total preparation time; a hit label alone
+does not prove fewer downloads.
+
 ## 4. Choose Product configuration
 
 Without `SANDY_CONFIG_PATH`, the action creates one Product for the caller Repo
