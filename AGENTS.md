@@ -48,7 +48,7 @@ pnpm lint          # biome check .
 pnpm test          # vitest
 ```
 
-Stack: Node 24, TypeScript 6, pnpm 10, Biome, Vitest, Convex Cloud.
+Stack: Node 24, TypeScript 7, pnpm 10, Biome, Vitest, Convex Cloud.
 Committed Convex generated types support CI checks without a deployment.
 For backend edits, regenerate them using the procedure in
 `packages/convex-backend/README.md` before running checks.
