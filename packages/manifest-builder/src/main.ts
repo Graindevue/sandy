@@ -25,6 +25,7 @@ export async function buildManifest(
 }
 
 export { loadExtractors } from './extractor-registry.js';
+export { createRepoFileSnapshot, type RepoFileSnapshot } from './fs-utils.js';
 
 function normalizeRepoInput(repo: ApiSurfaceRepoInput): ApiSurfaceRepoInput {
   const fullName = repo.fullName || `${repo.owner}/${repo.name}`;

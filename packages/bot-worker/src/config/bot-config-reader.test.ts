@@ -1,11 +1,13 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BotConfigReader } from './bot-config-reader.js';
 import type { ProductConfig, RepoConfig } from './bot-yaml.js';
 
 let root: string;
+const execFileAsync = promisify(execFile);
 
 const repoA: RepoConfig = {
   owner: 'acme',
@@ -59,6 +61,8 @@ describe('BotConfigReader', () => {
       '# generated files\ngenerated/**\n*.snap\n',
     );
 
+    await commitRepo(apiRoot);
+    await commitRepo(desktopRoot);
     const reader = new BotConfigReader({
       repoPath: (repo) => (repo.fullName === repoA.fullName ? apiRoot : desktopRoot),
     });
@@ -88,6 +92,8 @@ describe('BotConfigReader', () => {
     await writeFile(join(desktopRoot, '.bot', 'rules.md'), '- Desktop-only rule.\n');
     await writeFile(join(apiRoot, '.bot', 'product-rules.md'), '- Shared product rule.\n');
 
+    await commitRepo(apiRoot);
+    await commitRepo(desktopRoot);
     const reader = new BotConfigReader({
       repoPath: (repo) => (repo.fullName === repoA.fullName ? apiRoot : desktopRoot),
     });
@@ -104,6 +110,7 @@ describe('BotConfigReader', () => {
   it('returns empty config for a Repo with no .bot directory', async () => {
     const apiRoot = join(root, 'api');
     await mkdir(apiRoot, { recursive: true });
+    await commitRepo(apiRoot);
     const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
     const config = await reader.readReviewBotConfig(product([repoA]), repoA);
@@ -121,6 +128,8 @@ describe('BotConfigReader', () => {
     await mkdir(join(worktreeRoot, '.bot'), { recursive: true });
     await writeFile(join(defaultRoot, '.bot', 'rules.md'), '- Default-branch rule.\n');
     await writeFile(join(worktreeRoot, '.bot', 'rules.md'), '- PR-head rule.\n');
+    await commitRepo(defaultRoot);
+    await commitRepo(worktreeRoot);
 
     const reader = new BotConfigReader({ repoPath: () => defaultRoot });
 
@@ -142,6 +151,7 @@ describe('BotConfigReader', () => {
     const outsideFile = join(root, 'credential.txt');
     await writeFile(outsideFile, 'DUMMY_PRIVATE_CONTENT');
     await symlink(outsideFile, join(apiRoot, '.bot', filename));
+    await commitRepo(apiRoot);
     const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
     await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
@@ -156,6 +166,7 @@ describe('BotConfigReader', () => {
     await mkdir(outsideDir);
     await writeFile(join(outsideDir, 'rules.md'), 'DUMMY_PRIVATE_CONTENT');
     await symlink(outsideDir, join(apiRoot, '.bot'));
+    await commitRepo(apiRoot);
     const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
     await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
@@ -168,6 +179,7 @@ describe('BotConfigReader', () => {
     await mkdir(join(apiRoot, '.bot'), { recursive: true });
     await writeFile(join(apiRoot, 'shared-rules.md'), '- Verify the actual call site.');
     await symlink('../shared-rules.md', join(apiRoot, '.bot', 'rules.md'));
+    await commitRepo(apiRoot);
     const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
     const config = await reader.readReviewBotConfig(product([repoA]), repoA);
@@ -178,13 +190,92 @@ describe('BotConfigReader', () => {
   it('rejects non-file .bot entries before attempting to read their contents', async () => {
     const apiRoot = join(root, 'api');
     await mkdir(join(apiRoot, '.bot', 'rules.md'), { recursive: true });
+    await writeFile(join(apiRoot, '.bot', 'rules.md', 'entry'), 'not a rules file');
+    await commitRepo(apiRoot);
     const reader = new BotConfigReader({ repoPath: () => apiRoot });
 
     await expect(reader.readReviewBotConfig(product([repoA]), repoA)).rejects.toThrow(
       'must be a regular file',
     );
   });
+
+  it('pins rules to the requested PR commit despite HEAD changes and replaced .bot ancestors', async () => {
+    const apiRoot = join(root, 'api');
+    const outside = join(root, 'private');
+    await mkdir(join(apiRoot, '.bot'), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(apiRoot, '.bot', 'rules.md'), '- Pinned PR rule.');
+    const sha = await commitRepo(apiRoot);
+    await writeFile(join(apiRoot, '.bot', 'rules.md'), '- Later commit rule.');
+    await commitRepo(apiRoot);
+    await writeFile(join(outside, 'rules.md'), 'DUMMY_OUTSIDE_HOST_CONTENT');
+    await rename(join(apiRoot, '.bot'), join(apiRoot, 'original-bot'));
+    await symlink(outside, join(apiRoot, '.bot'));
+    const reader = new BotConfigReader({ repoPath: () => apiRoot });
+
+    const config = await reader.readReviewBotConfig(product([repoA]), repoA, {
+      reviewRepoPath: apiRoot,
+      reviewRepoSha: sha,
+    });
+
+    expect(config.repoRules).toBe('- Pinned PR rule.');
+  });
+
+  it('reads every Product Repo rule from its pinned workspace source', async () => {
+    const apiRoot = join(root, 'api');
+    const desktopRoot = join(root, 'desktop');
+    await mkdir(join(apiRoot, '.bot'), { recursive: true });
+    await mkdir(join(desktopRoot, '.bot'), { recursive: true });
+    await writeFile(join(apiRoot, '.bot', 'rules.md'), '- Reviewed PR rule.');
+    await writeFile(join(desktopRoot, '.bot', 'product-rules.md'), '- Pinned sibling rule.');
+    const apiSha = await commitRepo(apiRoot);
+    const desktopSha = await commitRepo(desktopRoot);
+    await writeFile(join(desktopRoot, '.bot', 'product-rules.md'), '- Later sibling rule.');
+    await commitRepo(desktopRoot);
+    const reader = new BotConfigReader({
+      repoPath: () => {
+        throw new Error('Must use pinned workspace sources');
+      },
+    });
+
+    const config = await reader.readReviewBotConfig(product([repoA, repoB]), repoA, {
+      repoSources: [
+        { fullName: repoA.fullName, worktreePath: apiRoot, sha: apiSha },
+        { fullName: repoB.fullName, worktreePath: desktopRoot, sha: desktopSha },
+      ],
+    });
+
+    expect(config.repoRules).toBe('- Reviewed PR rule.');
+    expect(config.productRules).toBe('- Pinned sibling rule.');
+    await expect(
+      reader.readReviewBotConfig(product([repoA, repoB]), repoA, {
+        repoSources: [{ fullName: repoA.fullName, worktreePath: apiRoot, sha: apiSha }],
+      }),
+    ).rejects.toThrow('Pinned source is missing for acme/desktop');
+  });
 });
+
+async function commitRepo(repoRoot: string): Promise<string> {
+  await execFileAsync('git', ['init', '-q', repoRoot]);
+  await execFileAsync('git', ['-C', repoRoot, 'add', '.']);
+  await execFileAsync('git', [
+    '-C',
+    repoRoot,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.test',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'Fixture',
+  ]);
+  const { stdout } = await execFileAsync('git', ['-C', repoRoot, 'rev-parse', 'HEAD']);
+  return stdout.trim();
+}
 
 function product(repos: RepoConfig[]): ProductConfig {
   return {
@@ -196,3 +287,5 @@ function product(repos: RepoConfig[]): ProductConfig {
     agentOverrides: {},
   };
 }
+
+import { execFile } from 'node:child_process';

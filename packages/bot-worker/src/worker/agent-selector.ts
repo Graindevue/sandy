@@ -1,5 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createRepoFileSnapshot } from '@sandy/manifest-builder';
 import type { AgentDefinition } from '@sandy/shared-types';
 import { parse as parseYaml } from 'yaml';
 
@@ -9,15 +8,6 @@ const DEPENDENCY_FIELDS = [
   'peerDependencies',
   'optionalDependencies',
 ] as const;
-
-const SKIPPED_PACKAGE_DIRS = new Set([
-  '.git',
-  '.next',
-  'build',
-  'coverage',
-  'dist',
-  'node_modules',
-]);
 
 const I18N_DEPENDENCIES = new Set([
   '@formatjs/cli',
@@ -37,6 +27,7 @@ const I18N_DEPENDENCIES = new Set([
 export interface AgentSelectionRepo {
   fullName: string;
   worktreePath: string;
+  sha?: string;
   agentsYaml?: string | null;
 }
 
@@ -95,8 +86,10 @@ async function readProductDependencies(repos: readonly AgentSelectionRepo[]): Pr
   const dependencies = new Set<string>();
   await Promise.all(
     repos.map(async (repo) => {
-      for (const path of await listPackageJsonFiles(repo.worktreePath)) {
-        const text = await readFile(path, 'utf8');
+      const snapshot = await createRepoFileSnapshot(repo.worktreePath, repo.sha);
+      for (const path of snapshot.listFiles().filter((path) => /(^|\/)package\.json$/.test(path))) {
+        const text = await snapshot.readText(path);
+        if (text === null) continue;
         let parsed: unknown;
         try {
           parsed = JSON.parse(text);
@@ -121,38 +114,6 @@ async function readProductDependencies(repos: readonly AgentSelectionRepo[]): Pr
   return dependencies;
 }
 
-async function listPackageJsonFiles(root: string): Promise<string[]> {
-  const files: string[] = [];
-  await collectPackageJsonFiles(root, files);
-  return files;
-}
-
-async function collectPackageJsonFiles(dir: string, files: string[]): Promise<void> {
-  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (isNotFound(error)) {
-      return;
-    }
-    throw new Error(`could not read ${dir}: ${describeError(error)}`);
-  }
-
-  await Promise.all(
-    entries.map(async (entry) => {
-      if (entry.isDirectory()) {
-        if (!SKIPPED_PACKAGE_DIRS.has(entry.name)) {
-          await collectPackageJsonFiles(join(dir, entry.name), files);
-        }
-        return;
-      }
-      if (entry.isFile() && entry.name === 'package.json') {
-        files.push(join(dir, entry.name));
-      }
-    }),
-  );
-}
-
 async function readReviewedRepoOverrides(
   input: SelectAgentsForReviewInput,
 ): Promise<AgentOverrides> {
@@ -165,7 +126,9 @@ async function readReviewedRepoOverrides(
 
   const agentsYaml =
     reviewRepo.agentsYaml === undefined
-      ? await readOptionalText(join(reviewRepo.worktreePath, '.bot', 'agents.yaml'))
+      ? await (await createRepoFileSnapshot(reviewRepo.worktreePath, reviewRepo.sha)).readText(
+          '.bot/agents.yaml',
+        )
       : reviewRepo.agentsYaml;
   return parseAgentOverrides(agentsYaml, `${reviewRepo.fullName}/.bot/agents.yaml`);
 }
@@ -240,19 +203,6 @@ function isAutoEnabled(agentKey: string, dependencies: ReadonlySet<string>): boo
   }
 }
 
-async function readOptionalText(path: string): Promise<string | null> {
-  try {
-    const text = await readFile(path, 'utf8');
-    const trimmed = text.replace(/\r\n/g, '\n').trim();
-    return trimmed.length === 0 ? null : trimmed;
-  } catch (error) {
-    if (isNotFound(error)) {
-      return null;
-    }
-    throw new Error(`could not read ${path}: ${describeError(error)}`);
-  }
-}
-
 function assertKnownAgent(
   key: string,
   knownAgentKeys: ReadonlySet<string>,
@@ -272,15 +222,6 @@ function normalizeFullName(fullName: string): string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
-}
-
-function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'ENOENT'
-  );
 }
 
 function describeError(error: unknown): string {

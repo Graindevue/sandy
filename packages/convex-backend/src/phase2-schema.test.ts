@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { record as recordAgentRun } from '../convex/agentRuns.js';
 import { listForPr, recordFinding, recordSynthesizedReview } from '../convex/findings.js';
 import {
@@ -13,6 +13,10 @@ import {
   setConfidenceScore,
   setSiblingShas,
 } from '../convex/reviewJobs.js';
+import { serviceAuth, stubReviewServiceConfig } from './serviceAuthTestUtils.js';
+
+beforeEach(stubReviewServiceConfig);
+afterEach(() => vi.unstubAllEnvs());
 
 const agentRunUsage = {
   inputTokens: 11,
@@ -356,8 +360,8 @@ function invoke<T>(
   return fn._handler(ctx, args) as Promise<T>;
 }
 
-function fakeCtx(): { db: FakeDb } {
-  return { db: new FakeDb() };
+function fakeCtx(): { db: FakeDb; auth: typeof serviceAuth } {
+  return { db: new FakeDb(), auth: serviceAuth };
 }
 
 class FakeDb {

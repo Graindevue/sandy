@@ -194,6 +194,7 @@ describe('resolveReviewBotConfig', () => {
       },
       { owner: 'acme', name: 'widget', defaultBranch: 'main' },
       '/tmp/worktree',
+      '1234567890123456789012345678901234567890',
     );
 
     expect(config).toEqual({
@@ -201,7 +202,16 @@ describe('resolveReviewBotConfig', () => {
       productRules: '- Product rule.',
       ignorePatterns: ['generated/**'],
     });
-    expect(calls).toEqual([{ product, repo, options: { reviewRepoPath: '/tmp/worktree' } }]);
+    expect(calls).toEqual([
+      {
+        product,
+        repo,
+        options: {
+          reviewRepoPath: '/tmp/worktree',
+          reviewRepoSha: '1234567890123456789012345678901234567890',
+        },
+      },
+    ]);
   });
 
   it('returns empty .bot context for an unregistered Repo', async () => {

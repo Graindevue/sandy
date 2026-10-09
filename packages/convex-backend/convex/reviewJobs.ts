@@ -1,8 +1,10 @@
 import type { ReviewJobStatus } from '@sandy/shared-types';
 import { v } from 'convex/values';
+import { doc } from 'convex-helpers/validators';
 import type { Id } from './_generated/dataModel.js';
-import { mutation, query } from './_generated/server.js';
 import { insertPendingReviewJob } from './reviewJobWrites.js';
+import schema from './schema.js';
+import { mutation, query } from './serviceFunctions.js';
 import { confidence, reviewJobStatus, reviewTrigger, siblingShas } from './validators.js';
 
 const ACTIVE_REVIEW_JOB_STATUSES = [
@@ -113,6 +115,7 @@ export const setConfidenceScore = mutation({
  */
 export const subscribePending = query({
   args: {},
+  returns: v.array(doc(schema, 'reviewJobs')),
   handler: async (ctx) => {
     return await ctx.db
       .query('reviewJobs')
@@ -130,13 +133,23 @@ export const subscribePending = query({
  */
 export const listRunningForReconcile = query({
   args: {},
+  returns: v.array(
+    v.object({
+      jobId: v.id('reviewJobs'),
+      checkRunId: v.union(v.number(), v.null()),
+      headSha: v.string(),
+      owner: v.string(),
+      name: v.string(),
+      pullRequestUrl: v.string(),
+    }),
+  ),
   handler: async (ctx) => {
     const jobs = await ctx.db
       .query('reviewJobs')
       .withIndex('by_status', (q) => q.eq('status', 'running'))
       .collect();
     const out: Array<{
-      jobId: string;
+      jobId: Id<'reviewJobs'>;
       checkRunId: number | null;
       headSha: string;
       owner: string;
@@ -167,6 +180,50 @@ export const listRunningForReconcile = query({
 /** Hydrate one claimed ReviewJob with the Repo and PullRequest data the worker needs. */
 export const getForWorker = query({
   args: { jobId: v.id('reviewJobs') },
+  returns: v.union(
+    v.null(),
+    v.object({
+      job: v.object({
+        id: v.id('reviewJobs'),
+        pullRequestId: v.id('pullRequests'),
+        repoId: v.id('repos'),
+        headSha: v.string(),
+        agentKeys: v.array(v.string()),
+        confidenceScore: confidence,
+        agentRuns: v.array(v.id('agentRuns')),
+        siblingShas,
+        checkRunId: v.optional(v.number()),
+      }),
+      repo: v.object({
+        id: v.id('repos'),
+        owner: v.string(),
+        name: v.string(),
+        defaultBranch: v.string(),
+      }),
+      product: v.object({
+        id: v.id('products'),
+        slug: v.string(),
+        name: v.string(),
+        repos: v.array(
+          v.object({
+            id: v.id('repos'),
+            owner: v.string(),
+            name: v.string(),
+            fullName: v.string(),
+            defaultBranch: v.string(),
+          }),
+        ),
+      }),
+      pullRequest: v.object({
+        id: v.id('pullRequests'),
+        number: v.number(),
+        headSha: v.string(),
+        baseRef: v.string(),
+        title: v.string(),
+        url: v.string(),
+      }),
+    }),
+  ),
   handler: async (ctx, { jobId }) => {
     const job = await ctx.db.get(jobId);
     if (job === null) {
@@ -197,7 +254,7 @@ export const getForWorker = query({
         confidenceScore: job.confidenceScore,
         agentRuns: job.agentRuns,
         siblingShas: job.siblingShas,
-        checkRunId: job.checkRunId,
+        ...(job.checkRunId === undefined ? {} : { checkRunId: job.checkRunId }),
       },
       repo: {
         id: repo._id,

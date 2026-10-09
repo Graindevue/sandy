@@ -6,7 +6,7 @@ import type {
   ApiSurfaceRepoInput,
   ApiSurfaceRepoManifest,
 } from '@sandy/shared-types';
-import { listRepoFiles, readRepoText } from './fs-utils.js';
+import { createRepoFileSnapshot } from './fs-utils.js';
 import { code } from './markdown.js';
 
 export async function aggregateManifest(input: {
@@ -17,12 +17,12 @@ export async function aggregateManifest(input: {
 }): Promise<ApiSurfaceManifestBuildResult> {
   const repos = await Promise.all(
     input.repos.map(async (repo): Promise<ApiSurfaceRepoManifest> => {
-      const filesPromise = listRepoFiles(repo.worktreePath);
+      const snapshot = await createRepoFileSnapshot(repo.worktreePath, repo.sha);
       const context = {
         productId: input.productId,
         repo,
-        readFile: (relativePath: string) => readRepoText(repo.worktreePath, relativePath),
-        listFiles: async () => await filesPromise,
+        readFile: (relativePath: string) => snapshot.readText(relativePath),
+        listFiles: async () => snapshot.listFiles(),
       };
       const sections = await Promise.all(
         input.extractors.map(async (extractor): Promise<ApiSurfaceManifestSection> => {
