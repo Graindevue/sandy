@@ -80,12 +80,16 @@ describe('PullRequestPoster', () => {
     expect(github.issueComments[0]?.body).toContain('Sandy review posted 1 finding.');
   });
 
-  it('posts a clean no-issues summary when there are no findings', async () => {
+  it('pins a clean summary to its commit and explains how to review later commits', async () => {
     const github = new FakeGitHubReviewPoster();
     const poster = new PullRequestPoster(github);
+    const reviewedTarget = {
+      ...target,
+      headSha: '9bfd378be19e4fc798b357f5b842eebcf3be4278',
+    };
 
     const result = await poster.postReviewResult({
-      target,
+      target: reviewedTarget,
       siblingShas: {},
       summary: noFindingsSummary,
       findings: [],
@@ -102,7 +106,10 @@ describe('PullRequestPoster', () => {
         owner: 'acme',
         repo: 'widget',
         issueNumber: 12,
-        body: noFindingsSummary,
+        body:
+          '**Commit:** [`9bfd378be19e4fc798b357f5b842eebcf3be4278`](https://github.com/acme/widget/commit/9bfd378be19e4fc798b357f5b842eebcf3be4278)\n\n' +
+          'This result applies only to that commit. To review later commits, add a new `@sandy` comment.\n\n' +
+          noFindingsSummary,
       },
     ]);
   });
@@ -283,6 +290,12 @@ describe('PullRequestPoster', () => {
     });
 
     expect(github.reviewComments).toEqual([]);
+    expect(github.issueComments[0]?.body).toMatch(
+      /^\*\*Commit:\*\* \[`abc123`\]\(https:\/\/github\.com\/acme\/widget\/commit\/abc123\)/,
+    );
+    expect(github.issueComments[0]?.body).toContain(
+      'This result applies only to that commit. To review later commits, add a new `@sandy` comment.',
+    );
     expect(github.issueComments[0]?.body).toContain('request a smaller scope');
     expect(github.issueComments[0]?.body).toContain('5,001 changed lines');
   });

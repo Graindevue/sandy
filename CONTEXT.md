@@ -17,7 +17,8 @@ against which sibling contracts are judged.
 ## Review
 
 One requested assessment of a Pull Request by a set of Agents. It produces
-Findings, a Confidence Score, and a Review Status Check.
+Findings, a Confidence Score, and a Review Status Check for a specific PR head
+commit. Its summary names that reviewed commit.
 
 ## ReviewJob
 
@@ -103,11 +104,13 @@ The deterministic consolidation of Agent Findings into a deduplicated, scored,
 ordered Review result. It preserves cross-repo evidence and formats the comment
 set and summary.
 
-## Review triggers
+## Review trigger
 
-The explicit human requests that start a Review: a review mention on a PR,
-the Review Status Check's Re-run control, or a manual workflow dispatch.
-Pushes, opening a PR, and making a draft ready do not start Reviews.
+A newly created PR comment containing standalone `@sandy`, authored by an
+authorized human collaborator with repository write access. This is the sole
+request path. After new commits, the author posts a new `@sandy` comment to
+request a Review of the current head; earlier summaries still describe their
+named reviewed commits.
 
 ## Archetype
 

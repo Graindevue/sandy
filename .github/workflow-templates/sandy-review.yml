@@ -6,16 +6,6 @@ name: Sandy review
 on:
   issue_comment:
     types: [created]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Pull request number
-        required: true
-        type: number
-  # Best effort: GitHub suppresses check_run workflows for some SHAs already
-  # associated with Actions. A mention or workflow dispatch always works.
-  check_run:
-    types: [rerequested]
 
 permissions:
   contents: read
@@ -28,11 +18,11 @@ jobs:
       github.event.repository.private == true &&
       github.event.repository.fork == false &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'check_run' && github.event.check_run.app.slug == 'agent-sandy') ||
-       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-        (contains(github.event.comment.body, '@sandy review') ||
-         contains(github.event.comment.body, '@agent-sandy review'))))
+      github.run_attempt == 1 &&
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.user.type == 'User' &&
+      contains(github.event.comment.body, '@sandy')
     # Skip unrelated events before reserving this repository's auth stream.
     # Environment secrets are read AFTER this job lock is acquired. Repository
     # secrets are snapshotted at queue time and cannot safely store rotating auth.
@@ -52,25 +42,16 @@ jobs:
         with:
           script: |
             const payload = context.payload;
-            let pr;
-            let actor;
-            if (context.eventName === 'issue_comment') {
-              if (payload.comment.user.type !== 'User' ||
-                  !/(?:^|\s)@(?:agent-sandy|sandy)\s+review\b/i.test(payload.comment.body)) {
-                throw new Error('Only a human @sandy review mention is accepted');
-              }
-              actor = payload.comment.user.login;
-              pr = payload.issue.number;
-            } else if (context.eventName === 'check_run') {
-              if (payload.check_run.name !== 'Sandy' || payload.check_run.pull_requests.length !== 1) {
-                throw new Error('Use a PR mention when the Sandy check does not identify one PR');
-              }
-              actor = payload.sender.login;
-              pr = payload.check_run.pull_requests[0].number;
-            } else {
-              actor = payload.sender.login;
-              pr = Number(payload.inputs.pr);
+            if (process.env.GITHUB_RUN_ATTEMPT !== '1') {
+              throw new Error('Post a new @sandy comment instead of rerunning an earlier workflow');
             }
+            if (context.eventName !== 'issue_comment' || payload.action !== 'created' ||
+                !payload.issue?.pull_request || payload.comment?.user?.type !== 'User' ||
+                !/(?:^|\s)@sandy(?![\w-])/i.test(payload.comment.body)) {
+              throw new Error('Only a new human PR comment mentioning @sandy is accepted');
+            }
+            const actor = payload.comment.user.login;
+            const pr = payload.issue.number;
             if (!Number.isSafeInteger(pr) || pr <= 0 || payload.sender.type !== 'User') {
               throw new Error('A human actor and positive PR number are required');
             }
@@ -79,14 +60,6 @@ jobs:
             });
             if (!['write', 'maintain', 'admin'].includes(permission.permission)) {
               throw new Error('Only collaborators with write permission can request reviews');
-            }
-            if (process.env.GITHUB_TRIGGERING_ACTOR !== actor) {
-              const { data: rerunner } = await github.rest.repos.getCollaboratorPermissionLevel({
-                ...context.repo, username: process.env.GITHUB_TRIGGERING_ACTOR,
-              });
-              if (!['write', 'maintain', 'admin'].includes(rerunner.permission)) {
-                throw new Error('The workflow rerunner must also have write permission');
-              }
             }
             const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: pr });
             if (pull.state !== 'open' ||

@@ -2,7 +2,7 @@
 
 Date: 2026-10-09
 
-Status: Accepted
+Status: Accepted; trigger policy updated to standalone `@sandy` comments.
 
 Supersedes [0003](./0003-sandcastle-runtime-no-fork.md) and
 [0009](./0009-apple-container-provider-copied-from-graindevue.md).
@@ -72,12 +72,20 @@ this auth stream must use the same environment and serialization policy.
 
 ## Retained and retired behavior
 
-Reviews stay manual-only: a PR review mention, Check Run re-request, or
-`workflow_dispatch` with a PR number. Pushes and PR lifecycle transitions do not
-start Reviews. Check Run re-request remains subject to GitHub's Actions event
-delivery restrictions; mentions and dispatch are the dependable fallback.
+Reviews start only from a newly created PR comment containing standalone
+`@sandy`, authored by an authorized human collaborator with repository write
+access. The event is `issue_comment: created`; edited comments, Check Run
+re-requests, workflow dispatch, pushes, and PR lifecycle changes do not start
+Reviews. No `review` suffix is required, and `@agent-sandy` is not an alias.
+The workflow gate and request validator accept only Actions run attempt `1`;
+rerunning a previous workflow cannot replay its mention. Another Review needs
+a new `@sandy` comment.
+The earlier multi-trigger Actions policy is superseded by this single request
+path, as recorded in the updated ADR 0017.
 The superseding container-cancellation mechanism is retired: Actions serializes
 requests, and each Review resolves the PR head when it begins.
+Each summary prominently names the reviewed commit and directs the author to
+post a new `@sandy` comment after new commits to request another Review.
 
 Product sibling source remains available at pinned default-branch revisions in
 the runner filesystem. `opensrc` remains available for finding-gated framework

@@ -12,12 +12,7 @@ import { assertTrustedRequest, positiveInteger, reviewRequest } from './request.
 
 const env = process.env;
 const event = JSON.parse(await readFile(required('GITHUB_EVENT_PATH'), 'utf8'));
-const request = reviewRequest(
-  required('GITHUB_EVENT_NAME'),
-  event,
-  required('SANDY_INPUT_APP_ID'),
-  env.SANDY_INPUT_PR_NUMBER,
-);
+const request = reviewRequest(required('GITHUB_EVENT_NAME'), event, required('GITHUB_RUN_ATTEMPT'));
 if (request.prNumber !== positiveInteger(required('SANDY_INPUT_PR_NUMBER'))) {
   throw new Error('The requested PR does not match the authorized event');
 }
@@ -36,11 +31,6 @@ assertTrustedRequest(
   permissions.permission,
   env.GITHUB_REF,
   request.actor,
-  {
-    eventName: env.GITHUB_EVENT_NAME,
-    sha: env.GITHUB_SHA,
-    trustedSha: env.SANDY_INPUT_TRUSTED_WORKFLOW_SHA,
-  },
 );
 
 const authEnvironment = required('SANDY_AUTH_ENVIRONMENT');

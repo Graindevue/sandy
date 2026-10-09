@@ -44,8 +44,8 @@ renaming it. Every Repo needs its exact GitHub `owner`, `name`, and
 head; siblings use their configured default-branch revisions.
 
 `excludeBranches` is accepted for historical config compatibility and is inert
-because review requests are manual-only. It does not restrict mentions or
-workflow dispatch.
+because reviews start only from authorized, newly created PR comments containing
+standalone `@sandy`. It does not restrict those requests.
 
 ## Agent selection
 

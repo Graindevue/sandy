@@ -139,25 +139,30 @@ See [bot-yaml.md](./bot-yaml.md) for the schema.
 
 ## 5. Verify a review
 
-Dispatch with an open PR number after the workflow is merged:
+After the workflow is on the default branch, a human collaborator with repository
+write access requests a review on an open same-repository PR by creating a
+comment containing standalone `@sandy`. The comment can consist of just the tag:
 
 ```bash
-gh workflow run sandy-review.yml --repo Graindevue/graindevue --field pr=123
+gh pr comment 123 --repo Graindevue/graindevue --body '@sandy'
 gh run list --repo Graindevue/graindevue --workflow sandy-review.yml --limit 5
 ```
 
 Verify Findings/the summary and the advisory **Sandy** Check Run on the PR, a
 completed ReviewJob and Agent Runs in Convex, and successful auth persistence.
+The summary prominently identifies the reviewed commit; verify it is the head
+you intended to review. After new commits, create a new `@sandy` comment to
+request another review.
 Inspect the summary's test status: a confidence score of 5/5 or successful
 Actions run does not prove tests ran. An otherwise successful review receives
 a neutral Sandy Check Run when tests are unavailable, failed, or skipped.
 The review can still complete with static analysis.
-You can subsequently request reviews with `@sandy review` or
-`@agent-sandy review`. The Check Run's Re-run event is best-effort because GitHub
-can suppress Actions-origin check events; use a mention or dispatch if no run
-starts.
 
-Pushes, PR open, and draft-to-ready transitions do not review automatically.
+Only newly created comments trigger reviews. Editing a comment, clicking the
+Check Run's Re-run control, rerunning an earlier Actions workflow, workflow
+dispatch, pushes, and PR lifecycle changes do not start one. Only the initial
+Actions attempt is accepted; request another review with a new `@sandy` comment.
+The accepted mention is `@sandy`; `@agent-sandy` is not an alias.
 Monitor your ChatGPT plan quota and Actions minutes separately.
 
 ## Recovery
@@ -165,4 +170,5 @@ Monitor your ChatGPT plan quota and Actions minutes separately.
 If auth refresh fails, wait for the active review to end, then create a fresh
 dedicated login and replace the **environment** secret. If auth persistence
 failed, repair the permission or secret-store problem before requesting another
-Review. Do not restore an earlier repository-secret or artifact copy of auth.
+Review with a new `@sandy` comment. Rerunning the failed Actions workflow is
+rejected. Do not restore an earlier repository-secret or artifact copy of auth.

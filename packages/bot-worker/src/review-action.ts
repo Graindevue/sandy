@@ -127,7 +127,7 @@ export async function runReviewAction(
     pullRequestId,
     repoId,
     headSha: pr.headSha,
-    trigger: process.env.GITHUB_EVENT_NAME === 'issue_comment' ? 'mention' : 'rerun',
+    trigger: 'mention',
     agentKeys: resolveConfiguredAgents(loader, configured.repo).map((agent) => agent.key),
   });
   if (

@@ -1,7 +1,8 @@
 # Setting up Sandy on GitHub Actions
 
 Sandy executes finite reviews on GitHub-hosted Linux runners. Durable state lives
-in Convex Cloud, and GitHub Actions supplies manual triggering and serialization.
+in Convex Cloud, and GitHub Actions serializes requests from new `@sandy` PR
+comments.
 [ADR 0018](../adr/0018-github-actions-codex-runtime.md) records the runtime.
 The canonical Sandy source is the private `Graindevue/sandy` repository.
 
@@ -27,10 +28,11 @@ The helper at [scripts/setup-actions.sh](../../scripts/setup-actions.sh) guides
 the human-only login, permission, and checkout-token steps after the environment
 and ordinary repository secrets exist. See its `--help` output for its options.
 
-Once the caller workflow is on the default branch, post `@sandy review` on an
-open same-repository PR or dispatch the workflow with its PR number. The workflow
-accepts review requests from users with repository write access. PR pushes and
-opening or readying a draft do not start reviews.
+Once the caller workflow is on the default branch, a human collaborator with
+repository write access posts a new comment containing standalone `@sandy` on an
+open same-repository PR. This is the sole review trigger; no command suffix is
+required. The summary prominently names the reviewed commit. After pushing more
+commits, post a new `@sandy` comment to request another review.
 
 ## Authentication rules
 

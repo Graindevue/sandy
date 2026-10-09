@@ -1,34 +1,20 @@
-export function reviewRequest(eventName, payload, appId, dispatchedPr) {
-  if (eventName === 'issue_comment') {
-    if (!payload.issue?.pull_request || payload.action !== 'created') {
-      throw new Error('A newly created pull request comment is required');
-    }
-    if (!/(?:^|\s)@(?:agent-sandy|sandy)\s+review\b/i.test(payload.comment?.body ?? '')) {
-      throw new Error('The comment must mention @sandy review or @agent-sandy review');
-    }
-    if (payload.comment.user?.type !== 'User') {
-      throw new Error('Only human collaborators can request reviews');
-    }
-    return { prNumber: positiveInteger(payload.issue.number), actor: payload.comment.user.login };
+export function reviewRequest(eventName, payload, runAttempt = '1') {
+  if (eventName !== 'issue_comment') {
+    throw new Error(`Unsupported review event: ${eventName}`);
   }
-  if (eventName === 'workflow_dispatch') {
-    return { prNumber: positiveInteger(dispatchedPr), actor: payload.sender?.login };
+  if (String(runAttempt) !== '1') {
+    throw new Error('Post a new @sandy comment instead of rerunning an earlier workflow');
   }
-  if (eventName === 'check_run') {
-    if (
-      payload.action !== 'rerequested' ||
-      String(payload.check_run?.app?.id) !== String(appId) ||
-      payload.check_run?.name !== 'Sandy'
-    ) {
-      throw new Error('Only a Sandy Check Run re-request is accepted');
-    }
-    const prs = payload.check_run.pull_requests ?? [];
-    if (prs.length !== 1) {
-      throw new Error('The Sandy Check Run must identify exactly one pull request; use a mention');
-    }
-    return { prNumber: positiveInteger(prs[0].number), actor: payload.sender?.login };
+  if (!payload.issue?.pull_request || payload.action !== 'created') {
+    throw new Error('A newly created pull request comment is required');
   }
-  throw new Error(`Unsupported review event: ${eventName}`);
+  if (!/(?:^|\s)@sandy(?![\w-])/i.test(payload.comment?.body ?? '')) {
+    throw new Error('The comment must mention @sandy');
+  }
+  if (payload.comment.user?.type !== 'User') {
+    throw new Error('Only human collaborators can request reviews');
+  }
+  return { prNumber: positiveInteger(payload.issue.number), actor: payload.comment.user.login };
 }
 
 export function positiveInteger(value) {
@@ -39,27 +25,12 @@ export function positiveInteger(value) {
   return Number(text);
 }
 
-export function assertTrustedRequest(
-  repository,
-  pullRequest,
-  permission,
-  ref,
-  actor,
-  workflow = {},
-) {
+export function assertTrustedRequest(repository, pullRequest, permission, ref, actor) {
   if (!repository.private || repository.fork) {
     throw new Error('Subscription authentication is restricted to private, non-fork repositories');
   }
   if (ref !== `refs/heads/${repository.default_branch}`) {
-    const auditedSmoke =
-      workflow.eventName === 'workflow_dispatch' &&
-      /^[a-f0-9]{40}$/i.test(workflow.trustedSha ?? '') &&
-      workflow.sha?.toLowerCase() === workflow.trustedSha?.toLowerCase();
-    if (!auditedSmoke) {
-      throw new Error(
-        'The workflow must run from the default branch or an exactly pinned manual smoke commit',
-      );
-    }
+    throw new Error('The workflow must run from the default branch');
   }
   if (!actor || !['write', 'maintain', 'admin'].includes(permission)) {
     throw new Error('The requesting actor must have repository write permission');

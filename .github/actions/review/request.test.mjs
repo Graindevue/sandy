@@ -5,8 +5,8 @@ import { assertTrustedRequest, reviewRequest } from './request.mjs';
 const repo = { private: true, fork: false, default_branch: 'main', id: 12 };
 const pr = { state: 'open', head: { repo: { id: 12 } }, base: { repo: { id: 12 } } };
 
-test('accepts either manual mention and does not evaluate comment text as code', () => {
-  for (const mention of ['@sandy review', '@agent-sandy review']) {
+test('accepts a standalone @sandy mention and does not evaluate comment text as code', () => {
+  for (const mention of ['@sandy', 'Please @sandy check this.', '@SANDY!', '@sandy review']) {
     assert.deepEqual(
       reviewRequest('issue_comment', {
         action: 'created',
@@ -22,37 +22,41 @@ test('rejects comments from bots, plain issues, edited comments and look-alike h
   const event = {
     action: 'created',
     issue: { number: 3, pull_request: {} },
-    comment: { body: '@sandy review', user: { type: 'User', login: 'tony' } },
+    comment: { body: '@sandy', user: { type: 'User', login: 'tony' } },
   };
   for (const changed of [
     { ...event, action: 'edited' },
     { ...event, issue: { number: 3 } },
     { ...event, comment: { ...event.comment, user: { type: 'Bot' } } },
-    { ...event, comment: { ...event.comment, body: '@sandy reviews' } },
-    { ...event, comment: { ...event.comment, body: 'prefix@sandy review' } },
+    ...['@agent-sandy review', '@sandybot', '@sandy-review', '@sandy_review', 'prefix@sandy'].map(
+      (body) => ({ ...event, comment: { ...event.comment, body } }),
+    ),
   ]) {
     assert.throws(() => reviewRequest('issue_comment', changed));
   }
 });
 
-test('check reruns must belong to the configured app and identify exactly one PR', () => {
-  const event = {
+test('rejects every trigger other than a newly created PR comment', () => {
+  const payload = {
     action: 'rerequested',
-    sender: { login: 'tony' },
+    sender: { type: 'User', login: 'tony' },
+    inputs: { pr: '5' },
     check_run: { name: 'Sandy', app: { id: 3909356 }, pull_requests: [{ number: 5 }] },
   };
-  assert.deepEqual(reviewRequest('check_run', event, '3909356'), { prNumber: 5, actor: 'tony' });
-  assert.throws(() => reviewRequest('check_run', event, '42'));
-  assert.throws(() =>
-    reviewRequest(
-      'check_run',
-      {
-        ...event,
-        check_run: { ...event.check_run, pull_requests: [] },
-      },
-      '3909356',
-    ),
-  );
+  for (const eventName of ['check_run', 'workflow_dispatch', 'push', 'pull_request']) {
+    assert.throws(() => reviewRequest(eventName, payload));
+  }
+});
+
+test('rerunning an old comment workflow requires a new @sandy comment instead', () => {
+  const payload = {
+    action: 'created',
+    issue: { number: 3, pull_request: {} },
+    comment: { body: '@sandy', user: { type: 'User', login: 'tony' } },
+  };
+  for (const attempt of ['2', '3', '0', 'invalid']) {
+    assert.throws(() => reviewRequest('issue_comment', payload, attempt));
+  }
 });
 
 test('subscription review rejects public repos, forks, closed PRs, reader actors and PR workflow refs', () => {
@@ -70,18 +74,22 @@ test('subscription review rejects public repos, forks, closed PRs, reader actors
   }
 });
 
-test('dispatch rejects invalid PR number values', () => {
+test('comment requests reject invalid PR number values', () => {
   for (const value of ['0', '-1', '1; echo x', '1.5', 'NaN', '9007199254740992']) {
     assert.throws(() =>
-      reviewRequest('workflow_dispatch', { sender: { login: 'tony' } }, '', value),
+      reviewRequest('issue_comment', {
+        action: 'created',
+        issue: { number: value, pull_request: {} },
+        comment: { body: '@sandy', user: { type: 'User', login: 'tony' } },
+      }),
     );
   }
 });
 
-test('pre-release smoke allows only an exactly pinned workflow_dispatch commit', () => {
+test('an audited smoke commit cannot bypass the default-branch requirement', () => {
   const sha = 'a'.repeat(40);
   const workflow = { eventName: 'workflow_dispatch', sha, trustedSha: sha };
-  assert.doesNotThrow(() =>
+  assert.throws(() =>
     assertTrustedRequest(repo, pr, 'write', 'refs/heads/audited-smoke', 'tony', workflow),
   );
   for (const changed of [

@@ -3,16 +3,18 @@
 Self-managed code review for private GitHub pull requests, with specialized
 Codex reviewers and context from the repositories that form one Product.
 
-Sandy runs on **GitHub Actions** (`ubuntu-latest`). Ask for a review with a PR
-comment, the advisory **Sandy** Check Run's Re-run control, or a manual workflow
-dispatch. Pushes and PR lifecycle events do not start reviews. Each run posts
-inline Findings and a summary with a confidence score, and records its state and
-token usage in Convex Cloud.
+Sandy runs on **GitHub Actions** (`ubuntu-latest`). A human collaborator with
+repository write access requests a review by posting a new PR comment containing
+standalone **`@sandy`**. This is the sole review trigger. Each run posts inline
+Findings and a summary naming the reviewed commit, with a confidence score, and
+records its state and token usage in Convex Cloud. After new commits, post a new
+`@sandy` comment to request another review. Rerunning an earlier Actions workflow
+is rejected; create a new `@sandy` comment instead.
 
 ## How it works
 
 ```text
-Manual GitHub Actions trigger
+New authorized PR comment containing @sandy
   → Check out Sandy and load trusted Product configuration
   → Create and claim a ReviewJob through the Convex HTTP client
   → Materialize the PR head and sibling default-branch worktrees
