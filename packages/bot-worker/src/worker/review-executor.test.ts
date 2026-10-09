@@ -268,47 +268,47 @@ describe('ReviewExecutor', () => {
     expect(store.failed).toEqual([]);
   });
 
-  it.each([
-    'manifest',
-    'rules',
-  ])('does not start reviewed scripts when %s capture fails', async (phase) => {
-    let installCalls = 0;
-    const store = new FakeExecutionStore(makeContext());
-    const executor = new ReviewExecutor({
-      ...fixtureExecutorOptions,
-      store,
-      cloneManager: new FakeCloneManager(),
-      poster: new FakePoster(),
-      archetypeAssigner: new FakeArchetypeAssigner(),
-      diffInspector: new FakeDiffInspector(42),
-      resolveAgent: () => logicAgent,
-      resolveReviewBotConfig: async ({ worktreePath }) => {
-        if (phase === 'rules' && worktreePath !== undefined) throw new Error('Invalid rules');
-        return fixtureBotConfig;
-      },
-      manifestBuilder: {
-        buildManifest: async () => {
-          if (phase === 'manifest') throw new Error('Invalid manifest');
-          return {
-            markdown: 'Manifest',
-            structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
-          };
+  it.each(['manifest', 'rules'])(
+    'does not start reviewed scripts when %s capture fails',
+    async (phase) => {
+      let installCalls = 0;
+      const store = new FakeExecutionStore(makeContext());
+      const executor = new ReviewExecutor({
+        ...fixtureExecutorOptions,
+        store,
+        cloneManager: new FakeCloneManager(),
+        poster: new FakePoster(),
+        archetypeAssigner: new FakeArchetypeAssigner(),
+        diffInspector: new FakeDiffInspector(42),
+        resolveAgent: () => logicAgent,
+        resolveReviewBotConfig: async ({ worktreePath }) => {
+          if (phase === 'rules' && worktreePath !== undefined) throw new Error('Invalid rules');
+          return fixtureBotConfig;
         },
-      },
-      runner: {
-        installDependencies: async () => {
-          installCalls += 1;
-          return { status: 'skipped', reason: 'No dependencies' };
+        manifestBuilder: {
+          buildManifest: async () => {
+            if (phase === 'manifest') throw new Error('Invalid manifest');
+            return {
+              markdown: 'Manifest',
+              structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+            };
+          },
         },
-        runAgent: async () => runnerOutput(findingsOutput([])),
-      },
-    });
+        runner: {
+          installDependencies: async () => {
+            installCalls += 1;
+            return { status: 'skipped', reason: 'No dependencies' };
+          },
+          runAgent: async () => runnerOutput(findingsOutput([])),
+        },
+      });
 
-    await executor.executeClaimedJob('job-1');
+      await executor.executeClaimedJob('job-1');
 
-    expect(installCalls).toBe(0);
-    expect(store.failed).toHaveLength(1);
-  });
+      expect(installCalls).toBe(0);
+      expect(store.failed).toHaveLength(1);
+    },
+  );
 
   it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
     const statusLines: string[] = [];
@@ -419,6 +419,7 @@ describe('ReviewExecutor', () => {
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
       'Full project test suite deferred to CI; reviewers may run focused verification.',
       'Sandy ReviewJob job-1: Selected Agent order: "logic" -> "security".',
+      'Sandy ReviewJob job-1: Execution mode: serial (maximum 1 Agents).',
       'Sandy ReviewJob job-1: Agent "logic" started.',
       'Sandy ReviewJob job-1: Agent "logic" completed in 100ms (1 finding).',
       'Sandy ReviewJob job-1: Agent "security" started.',

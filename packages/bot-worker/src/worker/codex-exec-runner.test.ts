@@ -228,35 +228,34 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       expected:
         'Sandy did not run the project test suite because no project test script is defined.',
     },
-  ])('describes the structured $testStatus test outcome accurately in the review prompt', async ({
-    testStatus,
-    expected,
-  }) => {
-    const f = await fixture(`
+  ])(
+    'describes the structured $testStatus test outcome accurately in the review prompt',
+    async ({ testStatus, expected }) => {
+      const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       if (!prompt.includes(${JSON.stringify(expected)})) throw new Error('Incorrect test-suite status in review context');
       if (prompt.includes('Sandy already ran the test suite once.')) throw new Error('Test result text was used as proof of execution');
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
     `);
-    f.input.dependencyInstall = {
-      status: 'installed',
-      packageManager: 'npm',
-      command: 'npm ci',
-      durationMs: 1000,
-      testStatus,
-      ...(testStatus === 'skipped'
-        ? { testResult: 'No test script is defined in package.json; test suite skipped.' }
-        : {}),
-    };
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
-    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
-  });
+      f.input.dependencyInstall = {
+        status: 'installed',
+        packageManager: 'npm',
+        command: 'npm ci',
+        durationMs: 1000,
+        testStatus,
+        ...(testStatus === 'skipped'
+          ? { testResult: 'No test script is defined in package.json; test suite skipped.' }
+          : {}),
+      };
+      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+    },
+  );
 
-  it.each([
-    'xhigh',
-    'max',
-  ] as const)('reviews the actual PR diff at %s effort and records final-message usage without double-counting cached input', async (effort) => {
-    const f = await fixture(`
+  it.each(['xhigh', 'max'] as const)(
+    'reviews the actual PR diff at %s effort and records final-message usage without double-counting cached input',
+    async (effort) => {
+      const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes(${JSON.stringify(`model_reasoning_effort="${effort}"`)})) throw new Error('Wrong model options');
@@ -277,29 +276,29 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       process.stdout.write(line.slice(0,23)); process.stdout.write(line.slice(23));
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:{input_tokens:1000,cached_input_tokens:800,output_tokens:70,reasoning_output_tokens:20}}));
     `);
-    f.input.agent = { ...agent, effort };
+      f.input.agent = { ...agent, effort };
 
-    const runner = new CodexExecRunner({
-      codexHome: f.codexHome,
-      executable: f.executable,
-      env: { TURBO_CACHE_DIR: join(f.root, 'outside-cache') },
-    });
-    await expect(runner.runAgent(f.input)).resolves.toEqual({
-      stdout: findings,
-      usage: {
-        inputTokens: 200,
-        cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 800,
-        outputTokens: 70,
-      },
-    });
-  });
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        executable: f.executable,
+        env: { TURBO_CACHE_DIR: join(f.root, 'outside-cache') },
+      });
+      await expect(runner.runAgent(f.input)).resolves.toEqual({
+        stdout: findings,
+        usage: {
+          inputTokens: 200,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 800,
+          outputTokens: 70,
+        },
+      });
+    },
+  );
 
-  it.each([
-    'xhigh',
-    'max',
-  ] as const)('preserves %s effort when resuming only the explicit review thread and adds both turns of usage', async (effort) => {
-    const f = await fixture(`
+  it.each(['xhigh', 'max'] as const)(
+    'preserves %s effort when resuming only the explicit review thread and adds both turns of usage',
+    async (effort) => {
+      const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       const resumed = args.includes('resume');
@@ -309,18 +308,19 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:resumed ? ${JSON.stringify(findings)} : 'I inspected the change.'}}) + '\\n');
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:resumed ? {input_tokens:600,cached_input_tokens:500,output_tokens:10} : {input_tokens:1000,cached_input_tokens:800,output_tokens:70}}) + '\\n');
     `);
-    f.input.agent = { ...agent, effort };
-    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
-    await expect(runner.runAgent(f.input)).resolves.toEqual({
-      stdout: findings,
-      usage: {
-        inputTokens: 300,
-        cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 1300,
-        outputTokens: 80,
-      },
-    });
-  });
+      f.input.agent = { ...agent, effort };
+      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      await expect(runner.runAgent(f.input)).resolves.toEqual({
+        stdout: findings,
+        usage: {
+          inputTokens: 300,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 1300,
+          outputTokens: 80,
+        },
+      });
+    },
+  );
 
   it('serializes agents across runner instances sharing a rotating Codex login', async () => {
     const f = await fixture(`
@@ -493,49 +493,125 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
   });
+
+  it('includes literal unusual filenames and changed files beyond the first diff chunk', async () => {
+    const f = await fixture(`
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt.includes('LITERAL_FILENAME_CONTENT')||!prompt.includes('FINAL_CHUNK_CONTENT'))throw new Error('Changed file omitted');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    await writeFile(
+      join(f.input.worktreePath, ':(exclude)review.ts'),
+      'LITERAL_FILENAME_CONTENT\n',
+    );
+    for (let index = 0; index < 101; index++)
+      await writeFile(
+        join(f.input.worktreePath, `changed-${String(index).padStart(3, '0')}.ts`),
+        index === 100 ? 'FINAL_CHUNK_CONTENT\n' : 'changed\n',
+      );
+    await exec('git', ['add', '.'], { cwd: f.input.worktreePath });
+    await exec('git', ['commit', '-m', 'many changed files'], { cwd: f.input.worktreePath });
+    f.input.pullRequest.headSha = (
+      await exec('git', ['rev-parse', 'HEAD'], { cwd: f.input.worktreePath })
+    ).stdout.trim();
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
-  it.each([
-    undefined,
-    'turbo run test && pnpm test:sandcastle',
-  ])('installs dependencies without running the full suite by default (test script: %s)', async (test) => {
-    const f = await fixture(`
+  it.each([false, true])(
+    'starts preparation with a protected directory while retaining child protection after a workspace grant (symlink: %s)',
+    async (aliased) => {
+      const f = await fixture(`
+      const path = await import('node:path');
+      const profile = process.argv.find(value => value.startsWith('permissions.sandy='));
+      const cwd = process.argv[process.argv.indexOf('--cd') + 1];
+      const root = path.resolve(cwd, '..', '..');
+      const commandFiles = path.join(root, 'command-files');
+      const child = path.join(commandFiles, 'environment');
+      const deny = value => profile?.includes(JSON.stringify(value)+'="deny"');
+      if (!deny(commandFiles)) throw new Error('Command directory protection lost');
+      if (deny(child)) throw new Error('bwrap cannot create a child mask beneath a frozen denied directory');
+      if (!deny(path.join(root, 'workspaces', 'repo', 'private.key'))) throw new Error('Workspace grant reopened a protected child');
+    `);
+      const privateParent = join(f.root, 'workspaces');
+      f.input.worktreePath = join(privateParent, 'repo');
+      await exec(
+        'git',
+        ['worktree', 'add', '--detach', f.input.worktreePath, f.input.pullRequest.headSha],
+        { cwd: join(f.root, 'repo') },
+      );
+      const commandFiles = join(f.root, 'command-files');
+      await mkdir(commandFiles);
+      await writeFile(join(commandFiles, 'environment'), 'DISPOSABLE_COMMAND_CANARY');
+      await writeFile(join(f.input.worktreePath, 'private.key'), 'DISPOSABLE_PRIVATE_CANARY');
+      await writeFile(
+        join(f.input.worktreePath, 'package.json'),
+        JSON.stringify({ packageManager: 'npm@11.19.0' }),
+      );
+      await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+      if (aliased) {
+        const alias = join(f.root, 'workspaces-alias');
+        await symlink(privateParent, alias);
+        f.input.worktreePath = join(alias, 'repo');
+      }
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        executable: f.executable,
+        protectedPaths: [
+          privateParent,
+          commandFiles,
+          join(commandFiles, 'environment'),
+          join(privateParent, 'repo', 'private.key'),
+        ],
+      });
+      const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+      if (result.status === 'failed') throw new Error(result.error.slice(0, 2000));
+      expect(result).toMatchObject({ status: 'installed' });
+    },
+  );
+
+  it.each([undefined, 'turbo run test && pnpm test:sandcastle'])(
+    'installs dependencies without running the full suite by default (test script: %s)',
+    async (test) => {
+      const f = await fixture(`
         if (!process.argv.at(-1).includes(' install ')) throw new Error('Full suite must stay in CI');
         const fs = await import('node:fs/promises');
         await fs.appendFile('commands.jsonl', JSON.stringify(process.argv.at(-1)) + '\\n');
         await fs.mkdir('node_modules');
       `);
-    await writeFile(
-      join(f.input.worktreePath, 'package.json'),
-      JSON.stringify({ packageManager: 'pnpm@12.10.1', scripts: { test } }),
-    );
-    await writeFile(join(f.input.worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
-    const messages: string[] = [];
-    const runner = new CodexExecRunner({
-      codexHome: f.codexHome,
-      executable: f.executable,
-      logger: { info: (message) => messages.push(message) },
-    });
-    await expect(
-      runner.installDependencies({ worktreePath: f.input.worktreePath }),
-    ).resolves.toMatchObject({
-      status: 'installed',
-      testStatus: 'deferred',
-      testResult: expect.stringContaining('deferred to CI'),
-    });
-    expect((await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8')).trim()).toBe(
-      JSON.stringify(
-        'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@12.10.1 install --frozen-lockfile --prefer-offline',
-      ),
-    );
-    expect((await stat(join(f.input.worktreePath, 'node_modules'))).isDirectory()).toBe(true);
-    expect(messages).toEqual([
-      'Sandy dependency install started.',
-      expect.stringMatching(/^Sandy dependency install completed after \d+ms\.$/),
-      'Sandy project tests deferred to CI; reviewers can run focused tests.',
-    ]);
-  });
+      await writeFile(
+        join(f.input.worktreePath, 'package.json'),
+        JSON.stringify({ packageManager: 'pnpm@12.10.1', scripts: { test } }),
+      );
+      await writeFile(join(f.input.worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
+      const messages: string[] = [];
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        executable: f.executable,
+        logger: { info: (message) => messages.push(message) },
+      });
+      await expect(
+        runner.installDependencies({ worktreePath: f.input.worktreePath }),
+      ).resolves.toMatchObject({
+        status: 'installed',
+        testStatus: 'deferred',
+        testResult: expect.stringContaining('deferred to CI'),
+      });
+      expect((await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8')).trim()).toBe(
+        JSON.stringify(
+          'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@12.10.1 install --frozen-lockfile --prefer-offline',
+        ),
+      );
+      expect((await stat(join(f.input.worktreePath, 'node_modules'))).isDirectory()).toBe(true);
+      expect(messages).toEqual([
+        'Sandy dependency install started.',
+        expect.stringMatching(/^Sandy dependency install completed after \d+ms\.$/),
+        'Sandy project tests deferred to CI; reviewers can run focused tests.',
+      ]);
+    },
+  );
 
   it('bounds an explicit full suite to two minutes by default and retains timeout diagnostics', async () => {
     const f = await fixture(`

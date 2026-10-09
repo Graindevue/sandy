@@ -119,18 +119,18 @@ describe('buildReviewPrompt', () => {
   ] satisfies {
     dependencyInstall: DependencyInstallResult;
     expected: string;
-  }[])('keeps unavailable dependencies in static-analysis mode: $dependencyInstall.status', ({
-    dependencyInstall,
-    expected,
-  }) => {
-    const prompt = buildReviewPrompt({ ...input, dependencyInstall });
+  }[])(
+    'keeps unavailable dependencies in static-analysis mode: $dependencyInstall.status',
+    ({ dependencyInstall, expected }) => {
+      const prompt = buildReviewPrompt({ ...input, dependencyInstall });
 
-    expect(prompt).toContain(expected);
-    expect(prompt).toContain('node_modules is NOT available.');
-    expect(prompt).toContain('Do NOT run package-manager or test commands');
-    expect(prompt).toContain('Limit yourself to static analysis.');
-    expect(prompt).not.toContain('You MAY run focused package scripts');
-  });
+      expect(prompt).toContain(expected);
+      expect(prompt).toContain('node_modules is NOT available.');
+      expect(prompt).toContain('Do NOT run package-manager or test commands');
+      expect(prompt).toContain('Limit yourself to static analysis.');
+      expect(prompt).not.toContain('You MAY run focused package scripts');
+    },
+  );
 
   it('makes no toolchain claims when no installation outcome is provided', () => {
     const prompt = buildReviewPrompt(input);

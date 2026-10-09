@@ -103,15 +103,14 @@ describe('ReviewServiceClient', () => {
     await expect(client.query(queryRef, {})).rejects.toThrow('Convex service request failed');
   });
 
-  it.each([
-    {},
-    { value: 'not-a-jwt' },
-    { value: token(0) },
-  ])('rejects malformed or expired tokens %j', async (response) => {
-    const fetch = vi.fn(async () => new Response(JSON.stringify(response)));
-    vi.stubGlobal('fetch', fetch);
-    const client = new ReviewServiceClient(url, env);
-    await expect(client.action(actionRef, {})).rejects.toThrow('Unable to authenticate');
-    expect(fetch).toHaveBeenCalledOnce();
-  });
+  it.each([{}, { value: 'not-a-jwt' }, { value: token(0) }])(
+    'rejects malformed or expired tokens %j',
+    async (response) => {
+      const fetch = vi.fn(async () => new Response(JSON.stringify(response)));
+      vi.stubGlobal('fetch', fetch);
+      const client = new ReviewServiceClient(url, env);
+      await expect(client.action(actionRef, {})).rejects.toThrow('Unable to authenticate');
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
 });
