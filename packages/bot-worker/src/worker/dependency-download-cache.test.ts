@@ -79,6 +79,8 @@ async function preparationFixture() {
   await writeFile(
     executable,
     `#!/usr/bin/env node
+    const profile = process.argv.find(value => value.startsWith('permissions.sandy='));
+    if (!profile?.includes(${JSON.stringify(`${JSON.stringify(join(root, 'sandy-dependency-downloads'))}="deny"`)})) throw new Error('Publication store must be denied to reviewed commands');
     const { spawn } = await import('node:child_process');
     const child = spawn('/bin/sh', ['-c', process.argv.at(-1)], { stdio: 'inherit', env: process.env });
     child.on('close', code => process.exit(code ?? 1));
@@ -404,3 +406,75 @@ it('validates restored tarball integrity and redownloads corrupt content', async
     'module.exports = "downloaded dependency";',
   );
 }, 20_000);
+
+it('publishes pnpm downloads before reviewed hooks and lifecycles can mutate their store', async () => {
+  const fixture = await preparationFixture();
+  const version = '10.34.1';
+  const lock = JSON.parse(fixture.lockfile) as { packages: Record<string, { resolved?: string }> };
+  const url = lock.packages['node_modules/download-fixture']?.resolved;
+  if (!url) throw new Error('Missing dependency URL');
+  await writeFile(
+    join(fixture.repo, 'package.json'),
+    JSON.stringify({
+      ...fixture.manifest,
+      packageManager: `pnpm@${version}`,
+      dependencies: { 'download-fixture': url },
+      scripts: { postinstall: 'node poison-store.cjs' },
+    }),
+  );
+  await writeFile(
+    join(fixture.repo, 'poison-store.cjs'),
+    `
+    const fs = require('node:fs'), path = require('node:path');
+    fs.appendFileSync('lifecycle.txt', 'ran\\n');
+    const store = process.env.npm_config_store_dir;
+    if (!store) throw new Error('Missing writable store');
+    fs.writeFileSync(path.join(store, 'auth.json'), 'must never be cached');
+    fs.writeFileSync('node_modules/download-fixture/index.js', 'module.exports = "modified installed dependency";');
+  `,
+  );
+  await rm(join(fixture.repo, 'package-lock.json'));
+  await exec(
+    'npx',
+    [
+      '--yes',
+      `pnpm@${version}`,
+      'install',
+      '--lockfile-only',
+      '--ignore-scripts',
+      '--store-dir',
+      join(fixture.root, 'fixture-lock-store'),
+    ],
+    { cwd: fixture.repo },
+  );
+  await writeFile(
+    join(fixture.repo, '.pnpmfile.cjs'),
+    `
+    const fs = require('node:fs');
+    fs.appendFileSync('hooks.txt', 'reviewed hook ran\\n');
+    module.exports = {};
+  `,
+  );
+  fixture.resetDownloads();
+  const input = { worktreePath: fixture.repo, cacheKey: 'acme/safe-pnpm' };
+  expect(await fixture.runner.installDependencies(input)).toMatchObject({
+    status: 'installed',
+    cache: { save: 'saved' },
+  });
+  expect(fixture.saved.flat().join('\n')).not.toContain('auth.json');
+  expect(await readFile(join(fixture.repo, 'hooks.txt'), 'utf8')).toBe('reviewed hook ran\n');
+  expect(await readFile(join(fixture.repo, 'lifecycle.txt'), 'utf8')).toBe('ran\n');
+  expect(await readFile(join(fixture.repo, 'node_modules/download-fixture/index.js'), 'utf8')).toBe(
+    'module.exports = "modified installed dependency";',
+  );
+  const snapshot = [...fixture.entries.values()][0];
+  if (!snapshot) throw new Error('Missing published snapshot');
+  const files = await readdir(snapshot, { recursive: true });
+  const bytes = await Promise.all(
+    files
+      .filter((name) => /^v10\/files\/[a-f0-9]{2}\/[a-f0-9]+$/.test(name))
+      .map((name) => readFile(join(snapshot, name), 'utf8')),
+  );
+  expect(bytes).toContain('module.exports = "downloaded dependency";');
+  expect(bytes).not.toContain('module.exports = "modified installed dependency";');
+}, 60_000);

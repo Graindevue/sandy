@@ -12,6 +12,7 @@ import {
   dependencyDownloadCacheKey,
   discardMutableStoreState,
   resetDownloadStore,
+  snapshotDownloadStore,
   validateDownloadStore,
 } from './dependency-download-cache.js';
 import {
@@ -152,19 +153,29 @@ export class CodexExecRunner {
       const store = resolvePath(
         this.#options.codexHome,
         '..',
-        'sandy-dependency-downloads',
+        'sandy-dependency-downloads-install',
         detected.packageManager,
       );
       const downloads = detected.packageManager === 'npm' ? join(store, '_cacache') : store;
+      const publishedStore = resolvePath(
+        this.#options.codexHome,
+        '..',
+        'sandy-dependency-downloads',
+        detected.packageManager,
+      );
+      const publishedDownloads =
+        detected.packageManager === 'npm' ? join(publishedStore, '_cacache') : publishedStore;
       const service = this.#options.dependencyDownloadCache;
       let key: string | undefined;
       let restored = false;
+      let publicationReady = false;
       let installCommand = detected.command;
       try {
         if (service !== undefined) {
           cache = {
             restore: 'unverified',
             restoreMs: 0,
+            fetchMs: 0,
             save: 'skipped',
             saveMs: 0,
             coldRetry: false,
@@ -191,12 +202,13 @@ export class CodexExecRunner {
             if (version.exitCode === 0 && version.output.trim() === candidate.version) {
               key = candidate.key;
               await resetDownloadStore(store);
-              await mkdir(downloads, { recursive: true });
+              await resetDownloadStore(publishedStore);
+              await mkdir(publishedDownloads, { recursive: true });
               const restoreStartedAt = Date.now();
               try {
                 const restoredKey = await service.restore({
                   key,
-                  storePath: downloads,
+                  storePath: publishedDownloads,
                   signal: AbortSignal.any([
                     ...(input.signal ? [input.signal] : []),
                     AbortSignal.timeout(remaining()),
@@ -204,7 +216,7 @@ export class CodexExecRunner {
                 });
                 if (restoredKey !== undefined && restoredKey !== key)
                   throw new Error('Incompatible cache');
-                await validateDownloadStore(downloads, detected.packageManager);
+                await snapshotDownloadStore(publishedDownloads, downloads, detected.packageManager);
                 restored = restoredKey === key;
                 cache.restore = restored ? 'hit' : 'miss';
               } catch {
@@ -212,12 +224,13 @@ export class CodexExecRunner {
                 cache.restore = 'unavailable';
                 await resetDownloadStore(store);
                 await mkdir(downloads, { recursive: true });
+                await resetDownloadStore(publishedStore);
               }
               cache.restoreMs = Date.now() - restoreStartedAt;
               installCommand =
                 detected.packageManager === 'npm'
                   ? `npm_config_cache=${shellQuote(store)} ${detected.command}`
-                  : `${detected.command} --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false`;
+                  : `${detected.command} --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`;
               this.#logger.info(
                 `Sandy dependency download cache ${cache.restore} after ${cache.restoreMs}ms.`,
               );
@@ -238,6 +251,28 @@ export class CodexExecRunner {
                 : remaining(),
             ),
           );
+        if (key !== undefined && detected.packageManager === 'pnpm' && cache !== undefined) {
+          const fetchStartedAt = Date.now();
+          try {
+            const fetched = await this.#sandboxCommand(
+              { ...input, downloadStorePath: store },
+              `CI=true LEFTHOOK=0 HUSKY=0 ${detected.packageManagerCommand ?? 'pnpm'} fetch --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`,
+              remaining(),
+            );
+            if (fetched.exitCode !== 0) throw new Error('Download-only preparation failed');
+            await discardMutableStoreState(downloads, detected.packageManager);
+            await snapshotDownloadStore(downloads, publishedDownloads, detected.packageManager);
+            publicationReady = true;
+          } catch {
+            input.signal?.throwIfAborted();
+            cache.restore = 'unavailable';
+            await resetDownloadStore(store);
+          }
+          cache.fetchMs = Date.now() - fetchStartedAt;
+          this.#logger.info(
+            `Sandy dependency download preparation ${publicationReady ? 'completed' : 'unavailable'} after ${cache.fetchMs}ms.`,
+          );
+        }
         const installationStartedAt = Date.now();
         installed = await install();
         if (installed.exitCode !== 0 && restored && cache !== undefined) {
@@ -256,6 +291,7 @@ export class CodexExecRunner {
           service !== undefined &&
           key !== undefined &&
           cache !== undefined &&
+          (detected.packageManager === 'npm' || publicationReady) &&
           !restored
         ) {
           const saveStartedAt = Date.now();
@@ -267,11 +303,14 @@ export class CodexExecRunner {
             });
             if (preparedKey?.key !== key)
               throw new Error('Reviewed install configuration changed during preparation');
-            await discardMutableStoreState(downloads, detected.packageManager);
-            await validateDownloadStore(downloads, detected.packageManager);
+            if (detected.packageManager === 'npm') {
+              await discardMutableStoreState(downloads, detected.packageManager);
+              await snapshotDownloadStore(downloads, publishedDownloads, detected.packageManager);
+            }
+            await validateDownloadStore(publishedDownloads, detected.packageManager);
             await service.save({
               key,
-              storePath: downloads,
+              storePath: publishedDownloads,
               signal: AbortSignal.any([
                 ...(input.signal ? [input.signal] : []),
                 AbortSignal.timeout(remaining()),
@@ -291,7 +330,10 @@ export class CodexExecRunner {
         this.#logger.info(`Sandy dependency install failed after ${Date.now() - startedAt}ms.`);
         throw error;
       } finally {
-        if (key !== undefined) await rm(store, { recursive: true, force: true });
+        if (key !== undefined) {
+          await rm(store, { recursive: true, force: true });
+          await rm(publishedStore, { recursive: true, force: true });
+        }
       }
       const durationMs = installationDurationMs;
       const preparationDurationMs = Date.now() - startedAt;
@@ -708,6 +750,7 @@ export class CodexExecRunner {
       ...new Set([
         resolvePath(this.#options.codexHome),
         this.#sandboxHome,
+        resolvePath(this.#options.codexHome, '..', 'sandy-dependency-downloads'),
         join(homedir(), '.codex'),
         join(homedir(), '.ssh'),
         join(homedir(), '.config', 'gh'),

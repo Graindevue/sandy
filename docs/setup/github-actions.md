@@ -119,6 +119,13 @@ still performs a fresh frozen installation. Supported stores are npm's
 excluded. Installed dependencies, source, test outputs, tool homes, logs,
 credentials, and configuration files are never saved.
 
+pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
+Sandy snapshots those validated downloads before the normal installation runs
+reviewed hooks and lifecycles. The publication snapshot is denied to reviewed
+commands, and package imports use copies to keep installation writes out of it.
+Only successful normal preparation publishes that snapshot. npm retains its
+lockfile tarball integrity checks when reading cached content.
+
 Download keys include the repository, operating system and architecture, Node
 major version, exact reviewed package-manager pin, and a digest of the reviewed
 lockfile, manifest, and install configuration. npm requires its installed CLI to
@@ -130,10 +137,11 @@ preparation budget. Cache workers have a 30-second operation limit and stop
 before cleanup on cancellation. Only successful dependency preparation publishes
 downloads; a genuine install failure retains static-analysis review.
 
-The store uses a stable `sandy-dependency-downloads` directory beside the dedicated
-Codex home, with an install-only sandbox write grant. It is cleared after each
-preparation. Keep that path stable across Actions runs because the cache service
-includes the supplied paths in its cache version. Phase logs distinguish cache
+The publication store uses a stable `sandy-dependency-downloads` directory beside
+the dedicated Codex home. Reviewed commands have an install-only write grant for
+the separate `sandy-dependency-downloads-install` store. Both are cleared after
+each preparation. Keep the publication path stable across Actions runs because
+the cache service includes the supplied paths in its cache version. Phase logs distinguish cache
 restore and save, installation, and total preparation time; a hit label alone
 does not prove fewer downloads.
 

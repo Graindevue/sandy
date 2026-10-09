@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { type FileHandle, lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
+import { cp, type FileHandle, lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { DetectedDependencyInstall, DetectedPackageManager } from './dependency-install.js';
 import { readPackageJson } from './dependency-install.js';
@@ -21,6 +21,7 @@ export interface DependencyDownloadCache {
 export interface DependencyDownloadCacheMetrics {
   restore: 'hit' | 'miss' | 'unavailable' | 'unverified' | 'discarded';
   restoreMs: number;
+  fetchMs: number;
   save: 'saved' | 'skipped' | 'unavailable';
   saveMs: number;
   coldRetry: boolean;
@@ -147,4 +148,24 @@ export async function discardMutableStoreState(
         await rm(join(path, entry.name, 'projects'), { recursive: true, force: true });
     }
   }
+}
+
+/** Copy only data; symlinks and special files are rejected without following their targets. */
+export async function snapshotDownloadStore(
+  source: string,
+  destination: string,
+  manager: DetectedPackageManager,
+): Promise<void> {
+  await validateDownloadStore(source, manager);
+  await resetDownloadStore(destination);
+  await cp(source, destination, {
+    recursive: true,
+    dereference: false,
+    filter: async (path) => {
+      const entry = await lstat(path);
+      if (!entry.isFile() && !entry.isDirectory()) throw new Error('Unsafe download-store entry');
+      return true;
+    },
+  });
+  await validateDownloadStore(destination, manager);
 }
