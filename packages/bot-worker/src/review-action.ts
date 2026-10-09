@@ -16,8 +16,10 @@ import { GitHubAppClient } from './github/app-client.js';
 import type { PullRequestFacts, RepoRef } from './github/types.js';
 import { disabledArchetypeAssigner } from './learning/archetype-assigner.js';
 import { ConvexSink } from './state/convex-sink.js';
-import { CodexExecRunner, type ReviewTestMode } from './worker/codex-exec-runner.js';
+import { CodexAppServerRunner } from './worker/codex-app-server-runner.js';
+import type { ReviewTestMode } from './worker/codex-exec-runner.js';
 import { ConvexExecutionStore } from './worker/execution-store.js';
+import { createGitHubDependencyDownloadCache } from './worker/github-dependency-download-cache.js';
 import { PullRequestPoster } from './worker/poster.js';
 import { ReviewExecutor } from './worker/review-executor.js';
 
@@ -172,8 +174,10 @@ export async function runReviewAction(
     store,
     cloneManager,
     diffInspector: github,
-    runner: new CodexExecRunner({
+    runner: new CodexAppServerRunner({
       codexHome: config.codexHome,
+      enableManagedRuntime: config.executionMode === 'parallel',
+      dependencyDownloadCache: createGitHubDependencyDownloadCache(),
       testMode: config.testMode,
       testTimeoutMs: config.testTimeoutMs,
       protectedPaths: [
@@ -198,6 +202,7 @@ export async function runReviewAction(
     archetypeAssigner: disabledArchetypeAssigner,
     ...(signal !== undefined ? { signal } : {}),
     maxChangedLines: config.maxChangedLines,
+    maxAgentConcurrency: config.maxAgentConcurrency,
     manifestBuilder: {
       buildManifest: async (productId, repos) => {
         const { buildManifest } = await import('@sandy/manifest-builder');
