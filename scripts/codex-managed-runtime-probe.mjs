@@ -2,16 +2,18 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as createSecureServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { zstdDecompressSync } from 'node:zlib';
 
 const exec = promisify(execFile);
 const sandyRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Native Codex turns against an anonymous loopback fixture; never a live model or login. */
-export async function runManagedRuntimeProbe(executable = 'codex') {
+/** Native turns against anonymous or synthetic ChatGPT loopback fixtures; no live login/model. */
+export async function runManagedRuntimeProbe(executable = 'codex', workspaceRouting = false) {
   const { CodexAppServerRunner } = await import(
     join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
   );
@@ -25,11 +27,42 @@ export async function runManagedRuntimeProbe(executable = 'codex') {
   const pending = [];
   let runtime;
   let providerFailure;
-  const server = createServer(async (request, response) => {
+  let backendOrigin;
+  let fixtureToken;
+  let fixtureCertificate;
+  let routingRequests = 0;
+  let paths;
+  const sendEvents = (response, events) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
+    response.end();
+  };
+  const handleRequest = async (request, response) => {
     try {
-      if (request.headers.authorization !== undefined)
+      if (workspaceRouting && request.headers.authorization !== undefined)
+        assert.ok(request.headers.authorization === `Bearer ${fixtureToken}`);
+      else if (request.headers.authorization !== undefined)
         throw new Error('Anonymous fixture received credentials');
-      if (request.url !== '/v1/responses') {
+      if (workspaceRouting && request.url === '/backend-api/wham/accounts/check') {
+        routingRequests++;
+        response.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            accounts: [
+              {
+                id: 'synthetic-account',
+                workspace_backend_origin: backendOrigin,
+                account_routing_override: 'NO_CONSTRAINT',
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (workspaceRouting && request.url === '/backend-api/wham/config/bundle') {
+        response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+        return;
+      }
+      if (request.url !== (workspaceRouting ? '/backend-api/codex/responses' : '/v1/responses')) {
         response.writeHead(404).end();
         return;
       }
@@ -40,11 +73,55 @@ export async function runManagedRuntimeProbe(executable = 'codex') {
         assert.ok(bytes < 2_000_000, 'Fixture request exceeded bound');
         chunks.push(chunk);
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const bytesReceived = Buffer.concat(chunks);
+      assert.ok(
+        request.headers['content-encoding'] === undefined ||
+          request.headers['content-encoding'] === 'zstd',
+        'Unsupported fixture request encoding',
+      );
+      const body = JSON.parse(
+        (request.headers['content-encoding'] === 'zstd'
+          ? zstdDecompressSync(bytesReceived, { maxOutputLength: 2_000_000 })
+          : bytesReceived
+        ).toString(),
+      );
       const index = keys.findIndex((key) =>
         JSON.stringify(body.input).includes(`NATIVE_PROBE_${key}`),
       );
       assert.ok(index >= 0, 'Unexpected native probe persona');
+      if (workspaceRouting) {
+        const toolOutputs = body.input.filter((item) => item.type === 'function_call_output');
+        if (toolOutputs.length === 0) {
+          const id = `sandbox-${index}`;
+          sendEvents(response, [
+            { type: 'response.created', response: { id } },
+            {
+              type: 'response.output_item.done',
+              item: {
+                type: 'function_call',
+                call_id: id,
+                name: 'exec_command',
+                arguments: JSON.stringify({
+                  cmd: 'node routing-tool-probe.cjs',
+                  workdir: paths[index],
+                  yield_time_ms: 1000,
+                  max_output_tokens: 1000,
+                }),
+              },
+            },
+            {
+              type: 'response.completed',
+              response: { id, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
+            },
+          ]);
+          return;
+        }
+        assert.equal(toolOutputs.length, 1);
+        assert.ok(
+          JSON.stringify(toolOutputs[0]).includes(`ROUTING_SANDBOX_OK:${keys[index]}`),
+          'Retained workspace profile must enforce its sandbox',
+        );
+      }
       pending.push({ response, index });
       if (pending.length === keys.length)
         for (const entry of [...pending].reverse()) {
@@ -75,28 +152,148 @@ export async function runManagedRuntimeProbe(executable = 'codex') {
               },
             },
           ];
-          entry.response.writeHead(200, { 'content-type': 'text/event-stream' });
-          for (const event of events) entry.response.write(`data: ${JSON.stringify(event)}\n\n`);
-          entry.response.end();
+          sendEvents(entry.response, events);
         }
     } catch (error) {
       providerFailure = error;
       response.destroy();
     }
-  });
+  };
+  let server = createServer(handleRequest);
+  let nativeExecutable = executable;
+  let stopped = true;
   try {
     const version = (await exec(executable, ['--version'], { timeout: 10_000 })).stdout.trim();
     assert.equal(version, 'codex-cli 0.162.0');
     await mkdir(auth);
     await mkdir(seed);
+    if (workspaceRouting) {
+      const key = join(root, 'fixture.key');
+      const certificate = join(root, 'fixture.pem');
+      fixtureCertificate = certificate;
+      const leafKey = join(root, 'server.key');
+      const leafCertificate = join(root, 'server.pem');
+      const request = join(root, 'server.csr');
+      const extensions = join(root, 'server.ext');
+      await exec(
+        'openssl',
+        [
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-keyout',
+          key,
+          '-out',
+          certificate,
+          '-days',
+          '1',
+          '-subj',
+          '/CN=Synthetic probe CA',
+          '-addext',
+          'basicConstraints=critical,CA:TRUE',
+        ],
+        { timeout: 10_000 },
+      );
+      await exec(
+        'openssl',
+        [
+          'req',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-keyout',
+          leafKey,
+          '-out',
+          request,
+          '-subj',
+          '/CN=localhost',
+        ],
+        { timeout: 10_000 },
+      );
+      await writeFile(
+        extensions,
+        'basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n',
+      );
+      await exec(
+        'openssl',
+        [
+          'x509',
+          '-req',
+          '-in',
+          request,
+          '-CA',
+          certificate,
+          '-CAkey',
+          key,
+          '-set_serial',
+          '1',
+          '-out',
+          leafCertificate,
+          '-days',
+          '1',
+          '-extfile',
+          extensions,
+        ],
+        { timeout: 10_000 },
+      );
+      server = createSecureServer(
+        { key: await readFile(leafKey), cert: await readFile(leafCertificate) },
+        handleRequest,
+      );
+      fixtureToken = [
+        Buffer.from('{"alg":"none"}').toString('base64url'),
+        Buffer.from(
+          JSON.stringify({
+            exp: Math.floor(Date.now() / 1000) + 86_400,
+            'https://api.openai.com/auth': {
+              chatgpt_account_id: 'synthetic-account',
+              chatgpt_user_id: 'synthetic-user',
+              chatgpt_plan_type: 'plus',
+            },
+          }),
+        ).toString('base64url'),
+        'synthetic-signature',
+      ].join('.');
+      await writeFile(
+        join(auth, 'auth.json'),
+        JSON.stringify({
+          auth_mode: 'chatgpt',
+          OPENAI_API_KEY: null,
+          tokens: {
+            id_token: fixtureToken,
+            access_token: fixtureToken,
+            refresh_token: 'SYNTHETIC_REFRESH',
+            account_id: 'synthetic-account',
+          },
+          last_refresh: new Date().toISOString(),
+        }),
+        { mode: 0o600 },
+      );
+      nativeExecutable = join(root, 'synthetic-routing-codex');
+    }
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
+    backendOrigin = `${workspaceRouting ? 'https' : 'http'}://127.0.0.1:${port}`;
+    if (workspaceRouting) {
+      await writeFile(
+        nativeExecutable,
+        `#!/usr/bin/env node
+const {spawnSync}=require('node:child_process');
+const result=spawnSync(${JSON.stringify(executable)},process.argv.slice(2),{stdio:'inherit',env:{...process.env,CODEX_CA_CERTIFICATE:${JSON.stringify(fixtureCertificate)},CODEX_REFRESH_TOKEN_URL_OVERRIDE:${JSON.stringify(`${backendOrigin}/oauth/token`)}},timeout:70000});
+process.exit(result.status??1);
+`,
+      );
+      await chmod(nativeExecutable, 0o755);
+    }
     await writeFile(
       join(auth, 'config.toml'),
-      `model_provider="probe"
+      `${workspaceRouting ? `chatgpt_base_url="${backendOrigin}/backend-api"\n` : ''}model_provider="probe"
 [model_providers.probe]
-name="Anonymous local adapter fixture"
-base_url="http://127.0.0.1:${port}/v1"
+name="${workspaceRouting ? 'OpenAI' : 'Anonymous local adapter fixture'}"
+base_url="${backendOrigin}${workspaceRouting ? '/backend-api/codex' : '/v1'}"
+requires_openai_auth=${workspaceRouting}
 wire_api="responses"
 request_max_retries=0
 stream_max_retries=0
@@ -115,16 +312,35 @@ supports_websockets=false
     await writeFile(join(seed, 'source.cjs'), 'exports.value=2;\n');
     await git(['-c', 'commit.gpgsign=false', 'commit', '-am', 'change']);
     const sha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    const paths = await Promise.all(
+    paths = await Promise.all(
       keys.map(async (key) => {
         const path = join(root, 'agents', key);
         await cp(seed, path, { recursive: true });
         return path;
       }),
     );
+    if (workspaceRouting)
+      await Promise.all(
+        paths.map((path, index) =>
+          writeFile(
+            join(path, 'routing-tool-probe.cjs'),
+            `const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {join}=require('node:path');
+for(const path of [process.cwd(),process.env.HOME,process.env.TMPDIR]) fs.writeFileSync(join(path,'own-artifact.txt'),'fixture');
+assert.equal(fs.readFileSync(${JSON.stringify(join(seed, 'source.cjs'))},'utf8'),'exports.value=2;\\n');
+assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(seed, 'source.cjs'))},'BAD'));
+assert.throws(()=>fs.readFileSync(${JSON.stringify(join(auth, 'auth.json'))}));
+assert.throws(()=>fs.readFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))}));
+assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))},'BAD'));
+console.log('ROUTING_SANDBOX_OK:${keys[index]}');
+`,
+          ),
+        ),
+      );
     const runner = new CodexAppServerRunner({
       codexHome: auth,
-      executable,
+      executable: nativeExecutable,
       enableManagedRuntime: true,
       logger: { info() {} },
     });
@@ -134,6 +350,7 @@ supports_websockets=false
       maxConcurrency: 3,
       signal: AbortSignal.timeout(30_000),
     });
+    stopped = false;
     assert.equal(
       runtime.mode,
       'parallel',
@@ -174,6 +391,7 @@ supports_websockets=false
           agentRunFailure(outcome.reason),
         );
       assert.equal(outcome.value.stdout, `<findings>${keys[index]}</findings>`);
+      if (workspaceRouting) assert.equal(outcome.value.activity?.toolCount, 1);
       assert.deepEqual(outcome.value.usage, {
         inputTokens: 90 * (index + 1),
         cacheReadInputTokens: 10 * (index + 1),
@@ -182,20 +400,26 @@ supports_websockets=false
       });
     }
     assert.equal(pending.length, 3, 'All native requests must overlap before responses');
+    if (workspaceRouting) assert.ok(routingRequests > 0, 'Native workspace discovery required');
     return {
       platform: process.platform,
       node: process.version,
       codexVersion: version,
-      provider: 'anonymous-loopback-fixture',
+      provider: workspaceRouting ? 'synthetic-loopback-chatgpt' : 'anonymous-loopback-fixture',
+      ...(workspaceRouting ? { routingRequests, retainedSandboxVerified: true } : {}),
       concurrentAgents: 3,
       completedAgents: 3,
       authoritativeUsage: true,
     };
   } finally {
-    await runtime?.close();
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    try {
+      await runtime?.close();
+      stopped = true;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      if (stopped) await rm(root, { recursive: true, force: true });
+    }
   }
 }
 
@@ -327,5 +551,5 @@ process.exit(result.status??1);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   process.stdout.write(
-    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
+    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), workspaceRouting: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
   );

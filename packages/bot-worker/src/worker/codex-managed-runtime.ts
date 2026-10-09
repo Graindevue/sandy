@@ -462,6 +462,8 @@ async function permissionConfig(
   const retained = new Set(await minimalSandboxDenials(denied, grants));
   for (const path of denied) if (!retained.has(path)) delete filesystem[path];
   return {
+    // Native workspace routing rebuilds retained layers without the RPC profile override.
+    default_permissions: 'sandy',
     'permissions.sandy': { filesystem, network: { enabled: true } },
     projects: { [cwd]: { trust_level: 'untrusted' } },
     'shell_environment_policy.inherit': 'core',
