@@ -133,6 +133,89 @@ describe('buildBenchmarkReport', () => {
         await rm(root, { recursive: true, force: true });
       }
     }, 25_000);
+
+    it('stops after retaining an all-failed parallel sample without starting serial or warm cells', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'sandy-benchmark-all-failed-'));
+      try {
+        const home = join(root, 'auth');
+        await mkdir(home);
+        await writeFile(join(home, 'auth.json'), '{}');
+        const executable = join(root, 'codex');
+        await writeFile(
+          executable,
+          `#!/usr/bin/env node
+const fs=require('node:fs'); const path=require('node:path'); const {spawnSync}=require('node:child_process');
+const args=process.argv.slice(2);
+if(args[0]==='--version'){console.log('codex-cli 0.162.0');process.exit(0);}
+if(args[0]==='sandbox'){const command=args.slice(args.indexOf('--')+1);const run=spawnSync(command[0],command.slice(1),{stdio:'inherit'});process.exit(run.status??1);}
+if(args.includes('generate-json-schema')){
+ const out=args[args.indexOf('--out')+1];fs.mkdirSync(path.join(out,'v2'),{recursive:true});
+ const schemas={ThreadStartParams:['permissions','runtimeWorkspaceRoots','config','ephemeral'],TurnStartParams:['threadId','input','effort','permissions'],ThreadTokenUsageUpdatedNotification:['threadId','turnId','tokenUsage'],TurnCompletedNotification:['threadId','turn'],TurnInterruptParams:['threadId','turnId'],ThreadBackgroundTerminalsCleanParams:['threadId'],GetAccountParams:['refreshToken']};
+ for(const [name,fields]of Object.entries(schemas))fs.writeFileSync(path.join(out,'v2',name+'.json'),JSON.stringify({properties:Object.fromEntries(fields.map(k=>[k,{}])),definitions:{TokenUsageBreakdown:{properties:{inputTokens:{},cachedInputTokens:{},cacheWriteInputTokens:{},outputTokens:{}}}}}));
+ process.exit(0);
+}
+if(args[0]!=='app-server')process.exit(1);
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');let next=0;
+require('node:readline').createInterface({input:process.stdin}).on('line',async line=>{
+ const {id,method,params}=JSON.parse(line);const reply=result=>send({id,result});
+ if(method==='initialize')reply({userAgent:'fixture'});
+ if(method==='thread/start')reply({thread:{id:'thread-'+ ++next},cwd:params.cwd,runtimeWorkspaceRoots:params.runtimeWorkspaceRoots,approvalPolicy:'never',activePermissionProfile:{id:'sandy'}});
+ if(method==='thread/backgroundTerminals/clean')reply({});
+ if(method==='turn/start'){
+  const turnId='turn-'+params.threadId;reply({turn:{id:turnId}});
+  if(JSON.stringify(params.input).includes('NATIVE_PROBE_')){
+   const config=fs.readFileSync(path.join(process.env.CODEX_HOME,'config.toml'),'utf8');const base=/base_url="([^"]+)"/.exec(config)[1];
+   const response=await fetch(base+'/responses',{method:'POST',body:JSON.stringify({input:params.input})});const events=(await response.text()).split('\\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
+   const usage=events.find(e=>e.type==='response.completed').response.usage;const text=events.find(e=>e.type==='response.output_item.done').item.content[0].text;
+   const total={inputTokens:usage.input_tokens,cachedInputTokens:usage.input_tokens_details.cached_tokens,cacheWriteInputTokens:0,outputTokens:usage.output_tokens};
+   send({method:'thread/tokenUsage/updated',params:{threadId:params.threadId,turnId,tokenUsage:{total,last:total}}});
+   send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'completed',items:[{type:'agentMessage',text}]}}});
+  }else send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'failed',error:{message:'stream disconnected before completion: websocket PRIVATE_FAILURE_SENTINEL',codexErrorInfo:'other'},items:[]}}});
+ }
+});
+`,
+        );
+        await chmod(executable, 0o755);
+        const output = join(root, 'results.json');
+        await expect(
+          promisify(execFile)(
+            process.execPath,
+            [
+              'scripts/review-benchmark.mjs',
+              'run',
+              '--ci-home',
+              home,
+              '--codex',
+              executable,
+              '--out',
+              output,
+              '--cases',
+              'defects',
+              '--modes',
+              'parallel,serial',
+              '--timeout-minutes',
+              '1',
+            ],
+            { env: { PATH: process.env.PATH, HOME: root }, timeout: 30_000 },
+          ),
+        ).rejects.toThrow('All selected Agents failed');
+        const captured = await readFile(output, 'utf8');
+        const result = JSON.parse(captured);
+        expect(result.samples).toHaveLength(1);
+        expect(result.samples[0]).toMatchObject({
+          mode: 'parallel',
+          cache: 'cold',
+          outcome: 'failed',
+        });
+        expect(result.samples[0].agents).toHaveLength(3);
+        expect(
+          result.samples[0].agents.every((agent: { status: string }) => agent.status === 'failed'),
+        ).toBe(true);
+        expect(captured).not.toContain('PRIVATE_FAILURE_SENTINEL');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }, 35_000);
   });
 
   it('keeps absent usage unknown and summarizes observed phase durations', () => {

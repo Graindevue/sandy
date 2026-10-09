@@ -120,6 +120,65 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it.each([
+    {
+      message: 'stream disconnected before completion: websocket error PRIVATE_STREAM_SENTINEL',
+      expected: { messageClass: 'stream-disconnected', messageIndicators: ['websocket'] },
+    },
+    {
+      message: JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_parameter',
+          param: 'reasoning.summary',
+          message: 'PRIVATE_REQUEST_SENTINEL',
+        },
+      }),
+      expected: {
+        messageClass: 'provider-json',
+        providerErrorType: 'invalid_request_error',
+        providerErrorCode: 'unsupported_parameter',
+        requestParameter: 'reasoning.summary',
+      },
+    },
+  ])('retains fixed diagnostic classes for native other errors without message values', async ({
+    message,
+    expected,
+  }) => {
+    const f = await executable(
+      protocolFixture.replace(
+        "status:'completed',items:[{type:'agentMessage',text}]",
+        `status:'failed',error:{message:${JSON.stringify(message)},codexErrorInfo:'other'},items:[]`,
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const outcomes = await Promise.allSettled(w.inputs.map((input) => runtime.runAgent(input)));
+      for (const outcome of outcomes) {
+        expect(outcome.status).toBe('rejected');
+        if (outcome.status !== 'rejected') throw new Error('Expected failed native turn');
+        expect(outcome.reason.failure).toEqual({
+          stage: 'turn',
+          code: 'turn-failed',
+          codexErrorInfo: 'other',
+          ...expected,
+        });
+        expect(JSON.stringify(outcome.reason.failure)).not.toContain('PRIVATE_');
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('requests native authentication refresh before admitting independent Agent threads', async () => {
     const f = await executable(
       protocolFixture

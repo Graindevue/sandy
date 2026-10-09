@@ -369,7 +369,7 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
               ? error.message
               : `Codex turn ${String(terminal.status)}`,
             undefined,
-            codexTurnFailure(error.codexErrorInfo),
+            codexTurnFailure(error.codexErrorInfo, error.message),
           ),
         );
       }

@@ -12,6 +12,11 @@ export interface AgentRunFailure {
   rpcCode?: number;
   codexErrorInfo?: string;
   httpStatusCode?: number;
+  messageClass?: string;
+  messageIndicators?: readonly string[];
+  providerErrorType?: string;
+  providerErrorCode?: string;
+  requestParameter?: string;
 }
 
 /** Adapter failures can still carry authoritative usage from their own thread. */
@@ -33,7 +38,7 @@ export function agentRunFailure(error: unknown): AgentRunFailure {
 }
 
 /** Only protocol enums and numeric status codes may enter benchmark artifacts. */
-export function codexTurnFailure(info: unknown): AgentRunFailure {
+export function codexTurnFailure(info: unknown, message?: unknown): AgentRunFailure {
   const failure: AgentRunFailure = { stage: 'turn', code: 'turn-failed' };
   const names = new Set([
     'contextWindowExceeded',
@@ -78,7 +83,98 @@ export function codexTurnFailure(info: unknown): AgentRunFailure {
       }
     }
   }
+  if (failure.codexErrorInfo === 'other') classifyOtherMessage(failure, message);
   return failure;
+}
+
+/** Fixed classes only: messages can contain request bodies, URLs and credentials. */
+function classifyOtherMessage(failure: AgentRunFailure, value: unknown): void {
+  const message = typeof value === 'string' ? value.slice(0, 4096) : '';
+  const indicators: readonly [string, RegExp][] = [
+    ['websocket', /websocket/i],
+    ['sse', /\bSSE\b/i],
+    ['http', /\bHTTP\b/i],
+    ['json', /json|ResponseCompleted/i],
+    ['timeout', /timed? ?out|timeout/i],
+    ['client', /originator|client[ _]?(?:name|id)/i],
+    ['model', /\bmodel\b|model_not_found/i],
+    ['configuration', /config(?:uration)?/i],
+    ['filesystem', /read-only file system|Permission denied|No such file or directory|os error/i],
+    ['authentication', /refresh token|authentication|authorization|unauthorized|invalid api key/i],
+  ];
+  const present = indicators.filter(([, pattern]) => pattern.test(message)).map(([name]) => name);
+  if (present.length > 0) failure.messageIndicators = present;
+  try {
+    const parsed: unknown = JSON.parse(message);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const details = 'error' in parsed ? parsed.error : parsed;
+      failure.messageClass = 'provider-json';
+      if (typeof details === 'object' && details !== null && !Array.isArray(details)) {
+        const codes = new Set([
+          'invalid_request_error',
+          'invalid_parameter',
+          'unsupported_parameter',
+          'model_not_found',
+          'invalid_model',
+          'unsupported_model',
+          'invalid_client',
+          'invalid_originator',
+          'authentication_error',
+          'invalid_api_key',
+          'invalid_token',
+          'token_expired',
+          'unauthorized',
+          'permission_denied',
+        ]);
+        if ('type' in details && typeof details.type === 'string' && codes.has(details.type))
+          failure.providerErrorType = details.type;
+        if ('code' in details && typeof details.code === 'string' && codes.has(details.code))
+          failure.providerErrorCode = details.code;
+        const parameters = new Set([
+          'model',
+          'reasoning.effort',
+          'reasoning.summary',
+          'parallel_tool_calls',
+          'tools',
+          'store',
+          'truncation',
+          'temperature',
+          'max_output_tokens',
+          'input',
+          'originator',
+          'clientInfo.name',
+        ]);
+        if (
+          'param' in details &&
+          typeof details.param === 'string' &&
+          parameters.has(details.param)
+        )
+          failure.requestParameter = details.param;
+      }
+      return;
+    }
+  } catch {
+    // Non-JSON native errors are matched against fixed, bounded patterns below.
+  }
+  const classes: readonly [string, RegExp][] = [
+    ['incomplete-response', /Incomplete response returned/i],
+    ['response-json', /failed to parse ResponseCompleted|invalid json|json error/i],
+    ['stream-disconnected', /stream disconnected before completion/i],
+    ['invalid-request', /invalid[ _]request|unsupported[ _]parameter|invalid[ _]parameter/i],
+    ['client', /invalid[ _]client|originator|client[ _]?(?:name|id)/i],
+    [
+      'model',
+      /model_not_found|unsupported model|model.+(?:not supported|not found|does not exist)/i,
+    ],
+    ['authentication', /refresh token|authentication|authorization|unauthorized|invalid api key/i],
+    ['filesystem', /read-only file system|Permission denied|No such file or directory|os error/i],
+    ['configuration', /config(?:uration)?/i],
+    ['timeout', /timed? ?out|timeout/i],
+    ['content-filter', /content_filter/i],
+    ['stream', /websocket|\bSSE\b/i],
+  ];
+  failure.messageClass =
+    classes.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unclassified';
 }
 
 export class ReviewSupersededError extends Error {

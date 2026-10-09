@@ -546,6 +546,8 @@ async function liveBenchmark(options) {
             );
             for (const workspace of privateWorkspaces) await cloneManager.removeWorktree(workspace);
             await cloneManager.removeWorktree(seed);
+            if (sample.outcome === 'failed')
+              throw new Error('All selected Agents failed; see recorded classifications');
             if (options['require-auth-refresh'] && authRefreshObserved === false)
               throw new Error('Required dedicated test authentication refresh was not observed');
           }
