@@ -47,3 +47,42 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  codex-compatibility:
+    name: Pinned Codex sandbox compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install the exact deployed Codex pin
+        run: npm install --global --ignore-scripts @openai/codex@0.162.0
+
+      - name: Prepare the dedicated bubblewrap AppArmor profile
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+
+      # Uses a local mock provider, temporary canaries and a clean child env.
+      # No sandy-codex environment, auth secret, App key or model request.
+      - name: Verify concurrent turns and Linux sandbox boundaries without credentials
+        run: node scripts/codex-compatibility-probe.mjs codex "$RUNNER_TEMP/codex-compatibility.json"
+
+      - name: Upload the bounded compatibility report
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-compatibility
+          path: ${{ runner.temp }}/codex-compatibility.json
+          if-no-files-found: error
