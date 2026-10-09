@@ -33,6 +33,7 @@ export interface ReviewCloneManager {
   createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
   materializeAgentWorkspace?(seed: ReviewWorktree, agentKey: string): Promise<ReviewWorktree>;
   removeWorktree(worktree: ReviewWorktree): Promise<void>;
+  materializeAgentWorkspace?(seed: ReviewWorktree, agentKey: string): Promise<ReviewWorktree>;
 }
 
 export interface ReviewWorkspaceContext {
