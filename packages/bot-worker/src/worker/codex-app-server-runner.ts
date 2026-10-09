@@ -65,6 +65,8 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
     }
     const controller = new AbortController();
     const reviewSignal = input.signal;
+    const preparedWorkspacePath = input.worktreePath;
+    const privateWorkspacePaths = input.privateWorkspacePaths ?? [];
     const pending = new Set<Promise<unknown>>();
     return {
       mode: 'serial',
@@ -73,9 +75,20 @@ export class CodexAppServerRunner implements ReviewAgentRunner {
         controller.signal.throwIfAborted();
         const task = (async () => {
           const toolHome = await mkdtemp(join(input.worktreePath, '.sandy-tools-'));
+          const temporaryDirectory = join(toolHome, 'tmp');
+          await mkdir(temporaryDirectory);
+          const ownPath = await realpath(input.worktreePath);
+          const protectedWorkspacePaths = await Promise.all(
+            [preparedWorkspacePath, ...privateWorkspacePaths].map((path) => realpath(path)),
+          );
           const serial = new CodexExecRunner({
             ...this.#options,
             toolHome,
+            temporaryDirectory,
+            protectedPaths: [
+              ...(this.#options.protectedPaths ?? []),
+              ...protectedWorkspacePaths.filter((path) => path !== ownPath),
+            ],
             env: { ...this.#options.env, OPENSRC_HOME: join(toolHome, 'opensrc') },
           });
           return serial.runAgent({

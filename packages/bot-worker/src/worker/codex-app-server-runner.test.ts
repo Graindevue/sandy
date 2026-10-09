@@ -119,6 +119,41 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it('keeps the prepared seed and peer workspaces protected in serial rollback', async () => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const current = w.inputs[0];
+    const peer = w.inputs[1];
+    if (current === undefined || peer === undefined) throw new Error('Missing fixture Agents');
+    await mkdir(f.codexHome);
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node
+      import { realpathSync } from 'node:fs';
+      const args = process.argv.slice(2);
+      const config = args.find(arg=>arg.startsWith('permissions.sandy='));
+      for (const protectedPath of ${JSON.stringify([w.seed, peer.worktreePath])}) {
+        if (!config?.includes(JSON.stringify(realpathSync(protectedPath))+'="deny"')) throw new Error('Serial rollback exposes another workspace');
+      }
+      if (config.includes(JSON.stringify(${JSON.stringify(current.worktreePath)})+'="deny"')) throw new Error('Own workspace cannot be denied');
+      for await (const chunk of process.stdin) {}
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'<findings>protected</findings>'}})+'\\n');
+    `,
+    );
+    const runner = new CodexAppServerRunner({ codexHome: f.codexHome, executable: f.path });
+    const runtime = await runner.openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 1,
+    });
+    try {
+      const result = await runtime.runAgent(current);
+      expect(result.stdout).toBe('<findings>protected</findings>');
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('keeps parallel execution disabled until explicitly opted in', async () => {
     const f = await executable('throw new Error("Runtime must not start");');
     const runner = new CodexAppServerRunner({ codexHome: f.codexHome, executable: f.path });
