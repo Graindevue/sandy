@@ -478,3 +478,47 @@ it('publishes pnpm downloads before reviewed hooks and lifecycles can mutate the
   expect(bytes).toContain('module.exports = "downloaded dependency";');
   expect(bytes).not.toContain('module.exports = "modified installed dependency";');
 }, 60_000);
+
+it('reuses the same provider path across Reviews with distinct temporary Codex homes', async () => {
+  const fixture = await preparationFixture();
+  const publication = join(fixture.root, 'stable-reviewed-downloads');
+  await writeFile(
+    fixture.executable,
+    `#!/usr/bin/env node
+    const profile = process.argv.find(value => value.startsWith('permissions.sandy='));
+    if (!profile?.includes(${JSON.stringify(`${JSON.stringify(publication)}="deny"`)})) throw new Error('Configured publication directory must be denied');
+    const { spawn } = await import('node:child_process');
+    const child = spawn('/bin/sh', ['-c', process.argv.at(-1)], { stdio: 'inherit', env: process.env });
+    child.on('close', code => process.exit(code ?? 1));
+  `,
+  );
+  const paths = [];
+  const cache = {
+    async restore(input: { key: string; storePath: string }) {
+      paths.push(input.storePath);
+      return fixture.cache.restore(input);
+    },
+    save: (input: { key: string; storePath: string }) => fixture.cache.save(input),
+  };
+  for (const temporaryHome of ['review-a/codex', 'review-b/codex']) {
+    const runner = new CodexExecRunner({
+      codexHome: join(fixture.root, temporaryHome),
+      executable: fixture.executable,
+      dependencyDownloadCache: cache,
+      dependencyDownloadCacheDirectory: publication,
+    });
+    expect(
+      await runner.installDependencies({
+        worktreePath: fixture.repo,
+        cacheKey: 'acme/stable-provider-path',
+      }),
+    ).toMatchObject({ status: 'installed' });
+  }
+  expect(paths).toEqual([
+    join(publication, 'npm', '_cacache'),
+    join(publication, 'npm', '_cacache'),
+  ]);
+  expect(fixture.downloads()).toBe(1);
+  expect(fixture.saved).toHaveLength(1);
+  expect(fixture.saved.flat().join('\n')).not.toMatch(/node_modules|auth\.json|\.npmrc/);
+}, 20_000);

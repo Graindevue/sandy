@@ -74,6 +74,8 @@ export interface CodexExecRunnerOptions {
   /** Full-suite verification is opt-in; targeted mode leaves it to CI. */
   testMode?: ReviewTestMode;
   dependencyDownloadCache?: DependencyDownloadCache;
+  /** Stable provider path across Reviews; installation stores remain Review-local. */
+  dependencyDownloadCacheDirectory?: string;
   logger?: { info(message: string): void };
 }
 
@@ -86,6 +88,7 @@ export class CodexExecRunner {
   readonly #options: CodexExecRunnerOptions;
   readonly #toolHome: string;
   readonly #sandboxHome: string;
+  readonly #dependencyCacheDirectory: string;
   readonly #logger: { info(message: string): void };
 
   constructor(options: CodexExecRunnerOptions) {
@@ -103,6 +106,10 @@ export class CodexExecRunner {
         ? resolvePath(options.codexHome, '..', 'sandy-tool-home')
         : resolvePath(options.toolHome);
     this.#sandboxHome = resolvePath(options.codexHome, '..', 'sandy-sandbox-home');
+    this.#dependencyCacheDirectory = resolvePath(
+      options.dependencyDownloadCacheDirectory ??
+        resolvePath(options.codexHome, '..', 'sandy-dependency-downloads'),
+    );
   }
 
   async runAgent(input: RunAgentInput): Promise<AgentRunResult> {
@@ -165,12 +172,7 @@ export class CodexExecRunner {
         detected.packageManager,
       );
       const downloads = detected.packageManager === 'npm' ? join(store, '_cacache') : store;
-      const publishedStore = resolvePath(
-        this.#options.codexHome,
-        '..',
-        'sandy-dependency-downloads',
-        detected.packageManager,
-      );
+      const publishedStore = join(this.#dependencyCacheDirectory, detected.packageManager);
       const publishedDownloads =
         detected.packageManager === 'npm' ? join(publishedStore, '_cacache') : publishedStore;
       const service = this.#options.dependencyDownloadCache;
@@ -758,7 +760,7 @@ export class CodexExecRunner {
       ...new Set([
         resolvePath(this.#options.codexHome),
         this.#sandboxHome,
-        resolvePath(this.#options.codexHome, '..', 'sandy-dependency-downloads'),
+        this.#dependencyCacheDirectory,
         join(homedir(), '.codex'),
         join(homedir(), '.ssh'),
         join(homedir(), '.config', 'gh'),
