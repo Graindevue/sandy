@@ -25,8 +25,9 @@ export class AgentRunError extends Error {
     message: string,
     readonly usage?: AgentRunUsage,
     readonly failure?: AgentRunFailure,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'AgentRunError';
   }
 }

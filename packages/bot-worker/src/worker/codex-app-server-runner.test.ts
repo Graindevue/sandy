@@ -286,6 +286,9 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
           httpStatusCode: 401,
         });
         expect(outcome.reason.usage).toBeDefined();
+        expect(outcome.reason.cause).toBe('PRIVATE_DETAILS');
+        expect(Object.keys(outcome.reason)).not.toContain('cause');
+        expect(outcome.reason.message).toBe('PRIVATE_TURN_MESSAGE');
         expect(JSON.stringify(outcome.reason.failure)).not.toContain('PRIVATE_');
       }
     } finally {

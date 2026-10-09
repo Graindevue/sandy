@@ -139,7 +139,17 @@ describe('buildBenchmarkReport', () => {
       try {
         const home = join(root, 'auth');
         await mkdir(home);
-        await writeFile(join(home, 'auth.json'), '{}');
+        await writeFile(
+          join(home, 'auth.json'),
+          JSON.stringify({
+            tokens: {
+              access_token: 'seed$secret',
+              refresh_token: 'seed$refresh',
+              id_token: 'seed$id',
+              account_id: 'acct-short',
+            },
+          }),
+        );
         const executable = join(root, 'codex');
         await writeFile(
           executable,
@@ -158,7 +168,10 @@ if(args[0]!=='app-server')process.exit(1);
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');let next=0;
 require('node:readline').createInterface({input:process.stdin}).on('line',async line=>{
  const {id,method,params}=JSON.parse(line);const reply=result=>send({id,result});
- if(method==='initialize')reply({userAgent:'fixture'});
+ if(method==='initialize'){
+  const authPath=path.join(process.env.CODEX_HOME,'auth.json');if(fs.existsSync(authPath)){const auth=JSON.parse(fs.readFileSync(authPath,'utf8'));auth.tokens.access_token='rotated$secret';fs.writeFileSync(authPath,JSON.stringify(auth));}
+  reply({userAgent:'fixture'});
+ }
  if(method==='thread/start')reply({thread:{id:'thread-'+ ++next},cwd:params.cwd,runtimeWorkspaceRoots:params.runtimeWorkspaceRoots,approvalPolicy:'never',activePermissionProfile:{id:'sandy'}});
  if(method==='thread/backgroundTerminals/clean')reply({});
  if(method==='turn/start'){
@@ -170,7 +183,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
    const total={inputTokens:usage.input_tokens,cachedInputTokens:usage.input_tokens_details.cached_tokens,cacheWriteInputTokens:0,outputTokens:usage.output_tokens};
    send({method:'thread/tokenUsage/updated',params:{threadId:params.threadId,turnId,tokenUsage:{total,last:total}}});
    send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'completed',items:[{type:'agentMessage',text}]}}});
-  }else send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'failed',error:{message:'stream disconnected before completion: websocket PRIVATE_FAILURE_SENTINEL',codexErrorInfo:'other'},items:[]}}});
+  }else send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'failed',error:{message:'Native fault seed$secret rotated$secret brief reason',additionalDetails:'Native detail seed$id acct-short',codexErrorInfo:'other'},items:[]}}});
  }
 });
 `,
@@ -212,6 +225,14 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
           result.samples[0].agents.every((agent: { status: string }) => agent.status === 'failed'),
         ).toBe(true);
         expect(captured).not.toContain('PRIVATE_FAILURE_SENTINEL');
+        expect(result.samples[0].agents[0].diagnostic).toMatchObject({
+          messageLength: 52,
+          excerpt: 'Native fault [REDACTED] [REDACTED] brief reason',
+          detailsLength: 32,
+          detailsExcerpt: 'Native detail [REDACTED] [REDACTED]',
+        });
+        for (const credential of ['seed$secret', 'rotated$secret', 'seed$id', 'acct-short'])
+          expect(captured).not.toContain(credential);
       } finally {
         await rm(root, { recursive: true, force: true });
       }

@@ -212,6 +212,7 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
         failure.message,
         state.usage,
         failure instanceof AgentRunError ? failure.failure : undefined,
+        typeof failure.cause === 'string' ? { cause: failure.cause } : undefined,
       );
     return {
       stdout,
@@ -370,6 +371,9 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
               : `Codex turn ${String(terminal.status)}`,
             undefined,
             codexTurnFailure(error.codexErrorInfo, error.message),
+            typeof error.additionalDetails === 'string'
+              ? { cause: error.additionalDetails }
+              : undefined,
           ),
         );
       }

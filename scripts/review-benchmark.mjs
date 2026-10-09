@@ -82,6 +82,7 @@ async function liveBenchmark(options) {
     { parseFindingsPayload },
     { synthesizeAgentOutputs },
     { agentRunFailure },
+    { createDedicatedBenchmarkDiagnostics },
   ] = await Promise.all([
     import(join(worker, 'git/clone-manager.js')),
     import(join(worker, 'worker/codex-app-server-runner.js')),
@@ -89,6 +90,7 @@ async function liveBenchmark(options) {
     import(join(worker, 'worker/findings-parser.js')),
     import(join(worker, 'synthesizer/synthesizer.js')),
     import(join(worker, 'worker/review-errors.js')),
+    import(join(worker, 'benchmark/agent-failure-diagnostics.js')),
   ]);
   const definitions = await loadAgentDefinitions(join(sandyRoot, 'agents'));
   const agents = ['logic', 'security'].map((key) => {
@@ -120,6 +122,7 @@ async function liveBenchmark(options) {
   let nativePreflight;
   const runId = randomUUID();
   let refreshProbe;
+  let diagnostics;
   let authRefreshObserved = null;
   const termination = new AbortController();
   const abortOnTermination = () =>
@@ -353,6 +356,7 @@ async function liveBenchmark(options) {
               disk.allocatedBytes += measured.allocatedBytes;
             }
             const startup = Date.now();
+            diagnostics ??= await createDedicatedBenchmarkDiagnostics(codexHome);
             if (
               mode === 'parallel' &&
               options['require-auth-refresh'] &&
@@ -380,6 +384,7 @@ async function liveBenchmark(options) {
                 throw new Error('Required native authentication refresh operation unavailable');
               try {
                 await runtime.refreshAuthentication();
+                await diagnostics.capture().catch(() => {});
                 authRefreshObserved = await refreshProbe.refreshObserved();
                 await appendFile(journal, `${JSON.stringify({ authRefreshObserved })}\n`);
                 if (!authRefreshObserved)
@@ -465,6 +470,7 @@ async function liveBenchmark(options) {
                       activity: result?.activity ?? null,
                       findings: [],
                       failure: agentRunFailure(error),
+                      diagnostic: await diagnostics.describe(error),
                     };
                   }
                 }
