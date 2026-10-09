@@ -130,11 +130,14 @@ files. CI verifies the shipped adapter against the real Linux cache provider wit
 a harmless save/remove/restore fixture, without a Codex login or model request.
 
 pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
-Sandy snapshots those validated downloads before the normal installation runs
-reviewed hooks and lifecycles. The publication snapshot is denied to reviewed
-commands, and package imports use copies to keep installation writes out of it.
-Only successful normal preparation publishes that snapshot. npm retains its
-lockfile tarball integrity checks when reading cached content.
+npm stages its frozen graph with `ci --ignore-scripts`, then performs the normal
+fresh `ci` installation. Sandy snapshots validated downloads before reviewed
+hooks and lifecycles run; each ordinary lifecycle still runs once. The
+publication snapshot is denied to reviewed commands, and pnpm package imports
+use copies to keep installation writes out of it. Only successful normal
+preparation publishes that snapshot. The v2 namespace excludes earlier
+post-lifecycle npm snapshots. npm retains its lockfile tarball integrity checks
+when reading cached content. Both stages share the preparation timeout budget.
 
 Download keys include the repository, operating system and architecture, Node
 major version, exact reviewed package-manager pin, and a digest of the reviewed

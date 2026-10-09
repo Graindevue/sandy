@@ -215,7 +215,15 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
   });
 
   it('interrupts only the cancelled thread, drains its usage, and preserves its successful peer', async () => {
-    const f = await executable(`${protocolFixture.replace('if (turns.length === 2)', 'if (false)')}
+    const f = await executable(`${protocolFixture
+      .replace('if (turns.length === 2)', 'if (false)')
+      .replace(
+        "if (method === 'thread/backgroundTerminals/clean') reply(id,{});",
+        `if (method === 'thread/backgroundTerminals/clean') {
+        send({method:'thread/tokenUsage/updated',params:{threadId:params.threadId,turnId:'turn-'+params.threadId,tokenUsage:{total:{inputTokens:60,cachedInputTokens:5,cacheWriteInputTokens:0,outputTokens:9}}}});
+        reply(id,{});
+      }`,
+      )}
     require('node:readline').createInterface({input:process.stdin}).on('line',line=> {
       const {id,method,params} = JSON.parse(line);
       if (method === 'turn/start') {
@@ -254,14 +262,56 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
       controller.abort(new Error('Cancelled Agent'));
       expect(await outcome).toMatchObject({
         usage: {
-          inputTokens: 45,
+          inputTokens: 55,
           cacheReadInputTokens: 5,
           cacheCreationInputTokens: 0,
-          outputTokens: 7,
+          outputTokens: 9,
         },
       });
       expect(successful.stdout).toBe('<findings>peer</findings>');
       expect(runtime.failureSignal?.aborted).toBe(false);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('returns authoritative usage received after terminal completion while cleaning child tools', async () => {
+    const f = await executable(
+      protocolFixture.replace(
+        "if (method === 'thread/backgroundTerminals/clean') reply(id,{});",
+        `if (method === 'thread/backgroundTerminals/clean') setTimeout(() => {
+        const total = {inputTokens:300,cachedInputTokens:20,cacheWriteInputTokens:30,outputTokens:40};
+        send({method:'thread/tokenUsage/updated',params:{threadId:params.threadId,turnId:'turn-'+params.threadId,tokenUsage:{total}}});
+        reply(id,{});
+      },10);`,
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+      expect(results.map((result) => result.usage)).toEqual([
+        {
+          inputTokens: 250,
+          cacheReadInputTokens: 20,
+          cacheCreationInputTokens: 30,
+          outputTokens: 40,
+        },
+        {
+          inputTokens: 250,
+          cacheReadInputTokens: 20,
+          cacheCreationInputTokens: 30,
+          outputTokens: 40,
+        },
+      ]);
     } finally {
       await runtime.close();
     }
@@ -286,6 +336,41 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
       expect(messages).toEqual([
         expect.stringContaining('unavailable before Agent execution; using serial mode'),
       ]);
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    { items: [{ type: 'webSearch' }], count: 1 },
+    { items: [{ type: 'commandExecution', durationMs: 7 }, { type: 'webSearch' }], count: 2 },
+  ])('keeps tool duration unknown when completed tools omit it: $count tools', async ({
+    items,
+    count,
+  }) => {
+    const f = await executable(
+      protocolFixture.replace(
+        "const text = '<findings>'+entry.params.threadId+'</findings>';",
+        `const text = '<findings>'+entry.params.threadId+'</findings>';
+      for (const item of ${JSON.stringify(items)}) send({method:'item/completed',params:{threadId:entry.params.threadId,turnId,item}});`,
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+      expect(results.map((result) => result.activity)).toEqual([
+        { toolCount: count },
+        { toolCount: count },
+      ]);
+    } finally {
       await runtime.close();
     }
   });

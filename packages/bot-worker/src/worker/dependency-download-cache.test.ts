@@ -172,6 +172,51 @@ it('retains cold installation when the optional cache service fails', async () =
   expect(fixture.downloads()).toBe(1);
 }, 20_000);
 
+it('publishes only npm downloads captured before reviewed lifecycle output enters the content store', async () => {
+  const fixture = await preparationFixture();
+  await writeFile(
+    join(fixture.repo, 'package.json'),
+    JSON.stringify({
+      ...fixture.manifest,
+      scripts: { postinstall: 'node poison-store.cjs' },
+    }),
+  );
+  await writeFile(
+    join(fixture.repo, 'poison-store.cjs'),
+    `
+    const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+    fs.appendFileSync('lifecycle.txt', 'ran\\n');
+    const content = 'simulated-source-credential-and-review-output';
+    const hash = crypto.createHash('sha512').update(content).digest('hex');
+    const destination = path.join(process.env.npm_config_cache, '_cacache', 'content-v2', 'sha512', hash.slice(0,2), hash.slice(2,4), hash.slice(4));
+    fs.mkdirSync(path.dirname(destination), {recursive:true});
+    fs.writeFileSync(destination, content);
+  `,
+  );
+  expect(
+    await fixture.runner.installDependencies({
+      worktreePath: fixture.repo,
+      cacheKey: 'acme/safe-npm',
+    }),
+  ).toMatchObject({
+    status: 'installed',
+    cache: { save: 'saved' },
+  });
+  const snapshot = [...fixture.entries.values()][0];
+  if (!snapshot) throw new Error('Missing published snapshot');
+  const contents = await Promise.all(
+    (await readdir(snapshot, { recursive: true }))
+      .filter((name) => /^content-v2\/sha512\/[^/]+\/[^/]+\/[^/]+$/.test(name))
+      .map((name) => readFile(join(snapshot, name))),
+  );
+  expect(
+    contents.some((bytes) => bytes.includes('simulated-source-credential-and-review-output')),
+  ).toBe(false);
+  expect(contents.length).toBeGreaterThan(0);
+  expect(fixture.downloads()).toBe(1);
+  expect(await readFile(join(fixture.repo, 'lifecycle.txt'), 'utf8')).toBe('ran\n');
+}, 20_000);
+
 it('discards an unsafe restored store without exposing its symlink target to installation', async () => {
   const fixture = await preparationFixture();
   fixture.cache.restore = async (input) => {
@@ -210,8 +255,9 @@ it('does not publish credential or installed-tree entries added to a download st
       worktreePath: fixture.repo,
       cacheKey: 'acme/fixture',
     }),
-  ).toMatchObject({ status: 'installed', cache: { save: 'unavailable' } });
-  expect(fixture.saved).toHaveLength(0);
+  ).toMatchObject({ status: 'installed', cache: { save: 'saved' } });
+  expect(fixture.saved).toHaveLength(1);
+  expect(fixture.saved.flat().join('\n')).not.toContain('auth.json');
 }, 20_000);
 
 it('retries once with discarded downloads when a restored installation fails', async () => {

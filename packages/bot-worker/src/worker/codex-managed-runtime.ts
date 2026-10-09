@@ -4,10 +4,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentRunUsage } from '@sandy/shared-types';
-import { isIgnoredPath } from '../config/ignore.js';
 import { type CodexAppServer, protocolObject, runtimeEnvironment } from './codex-app-server.js';
 import type { CodexAppServerRunnerOptions } from './codex-app-server-runner.js';
 import type { AgentRunResult, RunAgentInput } from './codex-exec-runner.js';
+import { readReviewDiff } from './review-diff.js';
 import { AgentRunError } from './review-errors.js';
 import type { ReviewAgentRunner, ReviewAgentRuntime } from './review-executor.js';
 import { buildReviewPrompt } from './review-prompt.js';
@@ -29,7 +29,7 @@ interface ThreadState {
   usage?: AgentRunUsage;
   turn?: TurnState;
   tools: number;
-  toolDurationMs: number;
+  toolDurationMs: number | undefined;
 }
 
 /** Sandy admits Agents; this object owns one transport and one authentication manager. */
@@ -95,7 +95,7 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
     if (cwd === (await realpath(this.review.worktreePath)))
       throw new Error('Managed Agents require a private workspace');
     const config = await permissionConfig(this.review, this.options, cwd);
-    const prompt = `${buildReviewPrompt(input)}\nPR diff:\n${await reviewDiff(input)}`;
+    const prompt = `${buildReviewPrompt(input)}\nPR diff:\n${await readReviewDiff(input, runtimeEnvironment(process.env))}`;
     signal.throwIfAborted();
     const response = await this.server.request('thread/start', {
       model: input.agent.model,
@@ -140,8 +140,10 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
         ),
       30_000,
     );
+    let stdout = '';
+    let failure: Error | undefined;
     try {
-      let stdout = await this.#turn(
+      stdout = await this.#turn(
         threadId,
         state,
         prompt,
@@ -162,15 +164,8 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
           throw new Error('Codex did not complete the findings after one continuation');
       }
       turnSignal.throwIfAborted();
-      return {
-        stdout,
-        ...(state.usage ? { usage: state.usage } : {}),
-        ...(state.tools > 0
-          ? { activity: { toolCount: state.tools, toolDurationMs: state.toolDurationMs } }
-          : {}),
-      };
     } catch (error) {
-      throw new AgentRunError(error instanceof Error ? error.message : String(error), state.usage);
+      failure = error instanceof Error ? error : new Error(String(error));
     } finally {
       clearTimeout(timer);
       clearInterval(heartbeat);
@@ -183,10 +178,26 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
         }
       }
       this.options.logger?.info(
-        `Sandy Agent ${JSON.stringify(state.key)} finished after ${Date.now() - startedAt}ms (${state.tools} completed tools, ${state.toolDurationMs}ms tool activity).`,
+        `Sandy Agent ${JSON.stringify(state.key)} finished after ${Date.now() - startedAt}ms (${state.tools} completed tools, ${state.tools > 0 && state.toolDurationMs !== undefined ? `${state.toolDurationMs}ms` : 'unknown duration'} tool activity).`,
       );
       this.#threads.delete(threadId);
     }
+    // Cleanup can emit final usage and tool events even after the turn terminal.
+    if (failure !== undefined) throw new AgentRunError(failure.message, state.usage);
+    return {
+      stdout,
+      ...(state.usage ? { usage: state.usage } : {}),
+      ...(state.tools > 0
+        ? {
+            activity: {
+              toolCount: state.tools,
+              ...(state.toolDurationMs !== undefined
+                ? { toolDurationMs: state.toolDurationMs }
+                : {}),
+            },
+          }
+        : {}),
+    };
   }
 
   async #turn(
@@ -300,8 +311,14 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
       if (item.type === 'agentMessage' && typeof item.text === 'string') turn.stdout = item.text;
       if (['commandExecution', 'mcpToolCall', 'webSearch'].includes(String(item.type))) {
         state.tools++;
-        if (typeof item.durationMs === 'number' && item.durationMs >= 0)
+        if (
+          state.toolDurationMs !== undefined &&
+          typeof item.durationMs === 'number' &&
+          Number.isFinite(item.durationMs) &&
+          item.durationMs >= 0
+        )
           state.toolDurationMs += item.durationMs;
+        else state.toolDurationMs = undefined;
       }
     } else if (method === 'turn/completed') {
       const terminal = protocolObject(params.turn, 'terminal turn');
@@ -420,52 +437,4 @@ async function permissionConfig(
       npm_config_manage_package_manager_versions: 'false',
     },
   };
-}
-
-async function reviewDiff(input: RunAgentInput): Promise<string> {
-  const options = {
-    cwd: input.worktreePath,
-    env: runtimeEnvironment(process.env),
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 10_000,
-    ...(input.signal ? { signal: input.signal } : {}),
-  };
-  const revision = `refs/remotes/origin/${input.pullRequest.baseRef}...${input.pullRequest.headSha}`;
-  const { stdout: changed } = await exec(
-    'git',
-    ['diff', '--name-status', '--find-renames', '-z', revision, '--'],
-    options,
-  );
-  const entries = changed.split('\0');
-  const paths: string[][] = [];
-  for (let index = 0; index < entries.length && entries[index] !== ''; ) {
-    const status = entries[index++];
-    const before = entries[index++];
-    const renamed = status?.startsWith('R') || status?.startsWith('C');
-    const after = renamed ? entries[index++] : before;
-    if (before === undefined || after === undefined)
-      throw new Error('Git emitted incomplete changed paths');
-    if (!isIgnoredPath(after, input.botConfig?.ignorePatterns))
-      paths.push(renamed ? [before, after] : [after]);
-  }
-  let diff = '';
-  for (let index = 0; index < paths.length; index += 100) {
-    const { stdout } = await exec(
-      'git',
-      [
-        'diff',
-        '--no-ext-diff',
-        '--no-textconv',
-        '--no-color',
-        '--find-renames',
-        revision,
-        '--',
-        ...[...new Set(paths.slice(index, index + 100).flat())].map((path) => `:(literal)${path}`),
-      ],
-      options,
-    );
-    diff += stdout;
-    if (diff.length > 16 * 1024 * 1024) throw new Error('Review diff exceeds 16MiB');
-  }
-  return diff;
 }

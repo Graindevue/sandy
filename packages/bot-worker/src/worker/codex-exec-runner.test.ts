@@ -477,6 +477,30 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
   });
+
+  it('includes literal unusual filenames and changed files beyond the first diff chunk', async () => {
+    const f = await fixture(`
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt.includes('LITERAL_FILENAME_CONTENT')||!prompt.includes('FINAL_CHUNK_CONTENT'))throw new Error('Changed file omitted');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    await writeFile(
+      join(f.input.worktreePath, ':(exclude)review.ts'),
+      'LITERAL_FILENAME_CONTENT\n',
+    );
+    for (let index = 0; index < 101; index++)
+      await writeFile(
+        join(f.input.worktreePath, `changed-${String(index).padStart(3, '0')}.ts`),
+        index === 100 ? 'FINAL_CHUNK_CONTENT\n' : 'changed\n',
+      );
+    await exec('git', ['add', '.'], { cwd: f.input.worktreePath });
+    await exec('git', ['commit', '-m', 'many changed files'], { cwd: f.input.worktreePath });
+    f.input.pullRequest.headSha = (
+      await exec('git', ['rev-parse', 'HEAD'], { cwd: f.input.worktreePath })
+    ).stdout.trim();
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+  });
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {

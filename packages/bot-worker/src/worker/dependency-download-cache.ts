@@ -68,7 +68,7 @@ export async function dependencyDownloadCacheKey(input: {
     }
     const repository = createHash('sha256').update(input.repository.toLowerCase()).digest('hex');
     return {
-      key: `sandy-downloads-v1-${repository}-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-${manifest.packageManager}-${digest.digest('hex')}`,
+      key: `sandy-downloads-v2-${repository}-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-${manifest.packageManager}-${digest.digest('hex')}`,
       version: pin[2],
     };
   } catch {
