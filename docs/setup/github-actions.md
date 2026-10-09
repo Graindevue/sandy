@@ -2,8 +2,9 @@
 
 The caller workflow lives in the reviewed repository. It checks out a trusted
 Sandy commit and invokes [.github/actions/review/action.yml](../../.github/actions/review/action.yml).
-The canonical source is private `Graindevue/sandy`; source checkout uses
-explicit read access rather than the caller's automatic token.
+The canonical source is `Graindevue/sandy`. Private source deployments require
+explicit read access rather than the caller's automatic token. The supplied
+production template retains this explicit source-access path.
 
 ## 1. Prepare access and the environment
 
@@ -115,14 +116,38 @@ and temporary cache directories, and read-only shared Git metadata and sibling
 source. Native caches must also satisfy ownership checks on their ancestor
 directories, including those enforced by SWC.
 
-Optional dependency caching restores npm or pnpm download stores for the actual
-reviewed head, independently from Sandy's own build cache. The namespace includes
-Repo, OS/architecture, Node compatibility, exact package-manager pin, lockfile
-and relevant install configuration. Every preparation still runs a fresh frozen
-install; an unavailable cache is a cold install, and an unusable restored store
-permits one cold retry inside the preparation budget. Unsupported/unverified
-stores keep ordinary preparation. Installed trees, credentials, configuration
-and Review outputs are never published as cache artifacts.
+The action optionally restores the reviewed repository's package downloads from
+GitHub Actions cache, separately from the cache used to build Sandy. Every review
+still performs a fresh frozen installation. Supported stores are npm's
+`_cacache` and pnpm's content store, with side-effect and local-project records
+excluded. Installed dependencies, source, test outputs, tool homes, logs,
+credentials, and configuration files are never saved.
+
+pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
+Sandy snapshots those validated downloads before the normal installation runs
+reviewed hooks and lifecycles. The publication snapshot is denied to reviewed
+commands, and package imports use copies to keep installation writes out of it.
+Only successful normal preparation publishes that snapshot. npm retains its
+lockfile tarball integrity checks when reading cached content.
+
+Download keys include the repository, operating system and architecture, Node
+major version, exact reviewed package-manager pin, and a digest of the reviewed
+lockfile, manifest, and install configuration. npm requires its installed CLI to
+match the reviewed pin; pnpm retains the existing exact `npx` pin. Missing or
+unverified keys, other stores, credential-bearing configuration, and unavailable
+cache services retain ordinary installation. Restored stores are checked before
+use, and a failed warm installation gets at most one cold retry within the
+preparation budget. Cache workers have a 30-second operation limit and stop
+before cleanup on cancellation. Only successful dependency preparation publishes
+downloads; a genuine install failure retains static-analysis review.
+
+The publication store uses a stable `sandy-dependency-downloads` directory beside
+the dedicated Codex home. Reviewed commands have an install-only write grant for
+the separate `sandy-dependency-downloads-install` store. Both are cleared after
+each preparation. Keep the publication path stable across Actions runs because
+the cache service includes the supplied paths in its cache version. Phase logs
+distinguish cache restore and save, installation, and total preparation time; a hit label alone
+does not prove fewer downloads.
 
 Parallel Reviews prepare dependencies once and copy private source/installation
 workspaces before starting the runtime. This complete inventory lets the
