@@ -82,6 +82,52 @@ async function fixture(program: string, temporaryDirectory = tmpdir()) {
 }
 
 describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
+  it('uses scoped Linux reads while preserving linked Git metadata, sibling access, and credential denials', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      const args = process.argv.slice(2);
+      const profile = args.find(value => value.startsWith('permissions.sandy='));
+      if (profile?.includes('extends=":workspace"') || profile?.includes('":root"="read"')) throw new Error('Host root ownership leaks into the native cache ancestry');
+      for (const grant of ['":minimal"="read"', '":workspace_roots"="write"', '"/opt"="read"']) {
+        if (!profile?.includes(grant)) throw new Error('Missing Linux runtime grant: ' + grant);
+      }
+      const fs = await import('node:fs');
+      const childProcess = await import('node:child_process');
+      const common = fs.realpathSync(childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim());
+      if (!profile.includes(JSON.stringify(common) + '="read"')) throw new Error('Linked worktree cannot read its shared Git history');
+      const siblingPath = (await import('node:path')).join((await import('node:path')).dirname(process.cwd()), 'sibling');
+      const siblingCommon = fs.realpathSync(childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {cwd:siblingPath,encoding:'utf8'}).trim());
+      if (!profile.includes(JSON.stringify(siblingCommon) + '="read"')) throw new Error('Sibling cannot read its own shared Git history');
+      if (!profile.includes('sibling"="read"') || !profile.includes('app.pem"="deny"') || !profile.includes('ci-codex"="deny"')) throw new Error('Sibling or credential isolation was lost');
+      process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}})+'\\n');
+    `);
+    const sourcePath = f.input.worktreePath;
+    const linkedPath = join(f.root, 'linked');
+    const siblingPath = join(f.root, 'sibling');
+    const siblingSourcePath = join(f.root, 'sibling-source');
+    await exec('git', ['worktree', 'add', '--detach', linkedPath, f.input.pullRequest.headSha], {
+      cwd: sourcePath,
+    });
+    await exec('git', ['clone', '--no-hardlinks', sourcePath, siblingSourcePath]);
+    await exec('git', ['worktree', 'add', '--detach', siblingPath, 'origin/main'], {
+      cwd: siblingSourcePath,
+    });
+    f.input.worktreePath = linkedPath;
+    f.input.siblingWorktrees = [{ repo: 'acme/sibling', sha: 'main', hostPath: siblingPath }];
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        executable: f.executable,
+        protectedPaths: [join(f.root, 'app.pem')],
+      });
+      await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
+    } finally {
+      if (platform !== undefined) Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it.each([
     {
       testStatus: 'passed' as const,
@@ -254,6 +300,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       if (!args.includes('default_permissions="sandy"')) throw new Error('Missing enforced permissions');
       const profile = args.find(arg => arg.startsWith('permissions.sandy='));
       if (!profile?.includes(process.env.CODEX_HOME) || !profile.includes('app.pem') || !profile.includes('"deny"')) throw new Error('Missing protected paths');
+      if (${process.platform !== 'linux'} && !profile.includes('extends=":workspace"')) throw new Error('Non-Linux workspace permissions changed');
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:${JSON.stringify(findings)}}}) + '\\n');
     `);
     const runner = new CodexExecRunner({
@@ -329,6 +376,94 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 });
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
+  it('installs and tests a Linux linked worktree with shared Git history readable and host reads scoped', async () => {
+    const f = await fixture(`
+      const args = process.argv.slice(2);
+      const profile = args.find(value => value.startsWith('permissions.sandy='));
+      if (profile?.includes('extends=":workspace"') || !profile?.includes('":minimal"="read"')) throw new Error('Install/test mounts the host root');
+      const fs = await import('node:fs');
+      const childProcess = await import('node:child_process');
+      const common = fs.realpathSync(childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim());
+      if (!profile.includes(JSON.stringify(common) + '="read"') || profile.includes(JSON.stringify(common) + '="write"')) throw new Error('Shared Git metadata access is incorrect');
+      if (!profile.includes('app.pem"="deny"') || !profile.includes('sandy-sandbox-home"="deny"')) throw new Error('Install credentials became accessible');
+      process.stdout.write(args.at(-1).includes(' ci ') ? 'install verified' : 'test verified');
+    `);
+    const sourcePath = f.input.worktreePath;
+    const linkedPath = join(f.root, 'linked');
+    await exec('git', ['worktree', 'add', '--detach', linkedPath, f.input.pullRequest.headSha], {
+      cwd: sourcePath,
+    });
+    await writeFile(
+      join(linkedPath, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node test.js' } }),
+    );
+    await writeFile(join(linkedPath, 'package-lock.json'), '{}');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const runner = new CodexExecRunner({
+        codexHome: f.codexHome,
+        executable: f.executable,
+        protectedPaths: [join(f.root, 'app.pem')],
+      });
+      await expect(runner.installDependencies({ worktreePath: linkedPath })).resolves.toMatchObject(
+        {
+          status: 'installed',
+          testStatus: 'passed',
+          testResult: 'npm test exited 0.\ntest verified',
+        },
+      );
+    } finally {
+      if (platform !== undefined) Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('aborts Linux Git metadata resolution before starting reviewed install code', async () => {
+    const f = await fixture(
+      `await (await import('node:fs/promises')).writeFile('unexpected-install', 'started');`,
+    );
+    await writeFile(join(f.input.worktreePath, 'package.json'), '{}');
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    const gitStarted = join(f.input.worktreePath, 'git-started');
+    await writeFile(
+      join(f.root, 'git'),
+      `#!/usr/bin/env node\n(await import('node:fs')).writeFileSync(${JSON.stringify(gitStarted)}, 'started'); setInterval(() => {}, 100);`,
+    );
+    await chmod(join(f.root, 'git'), 0o755);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const originalPath = process.env.PATH;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    process.env.PATH = `${f.root}:${originalPath ?? ''}`;
+    const controller = new AbortController();
+    try {
+      const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+      const result = runner.installDependencies({
+        worktreePath: f.input.worktreePath,
+        signal: controller.signal,
+      });
+      const rejected = expect(result).rejects.toThrow('Metadata lookup cancelled');
+      for (let attempts = 0; attempts < 100; attempts++) {
+        if (
+          await stat(gitStarted).then(
+            () => true,
+            () => false,
+          )
+        )
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(await readFile(gitStarted, 'utf8')).toBe('started');
+      controller.abort(new Error('Metadata lookup cancelled'));
+      await rejected;
+      expect(await readdir(f.input.worktreePath)).not.toContain('unexpected-install');
+    } finally {
+      controller.abort();
+      if (platform !== undefined) Object.defineProperty(process, 'platform', platform);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
   it('rejects a reviewed manifest symlink without reading its outside target', async () => {
     const f = await fixture('throw new Error("Install must not start");');
     const outside = join(f.root, 'outside-secret');
@@ -459,7 +594,10 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
   it.skipIf(process.platform !== 'linux' || process.env.SANDY_NATIVE_SANDBOX_TEST !== '1')(
     'runs one native Linux npm install and test with credentials inaccessible',
     async () => {
-      const f = await fixture('throw new Error("Native probe must use the installed Codex CLI");');
+      const f = await fixture(
+        'throw new Error("Native probe must use the installed Codex CLI");',
+        process.env.RUNNER_TEMP ?? tmpdir(),
+      );
       const keyPath = join(f.root, 'app.pem');
       const sandboxHome = join(f.root, 'sandy-sandbox-home');
       await writeFile(keyPath, 'dummy-probe-key');
@@ -491,12 +629,26 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         join(f.input.worktreePath, 'probe.mjs'),
         `import assert from 'node:assert/strict';
          import fs from 'node:fs';
+         import { execFileSync } from 'node:child_process';
+         import { dirname, join } from 'node:path';
          for (const path of ${JSON.stringify([join(f.codexHome, 'auth.json'), keyPath, `/proc/${process.pid}/environ`, `/proc/${process.pid}/mem`])}) {
            assert.throws(() => fs.openSync(path, 'r'), 'Credential path readable: ' + path);
          }
          assert.throws(() => fs.writeFileSync(${JSON.stringify(join(sandboxHome, 'config.toml'))}, 'malicious override'));
          assert.equal(process.env.GH_TOKEN, undefined);
          assert.equal(process.env.CODEX_AUTH_JSON, undefined);
+         assert.match(execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(), /^[a-f0-9]{40}$/);
+         const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim();
+         assert.throws(() => { const fd = fs.openSync(join(common, 'config'), 'a'); fs.closeSync(fd); }, 'Shared Git metadata became writable');
+         const cache = join(process.env.HOME, '.cache');
+         fs.mkdirSync(cache, {recursive:true, mode:0o700});
+         for (let directory = cache; ; directory = dirname(directory)) {
+           const metadata = fs.lstatSync(directory);
+           assert.ok(metadata.isDirectory() && !metadata.isSymbolicLink(), 'Cache ancestor is not a real directory: ' + directory);
+           assert.ok(metadata.uid === 0 || metadata.uid === process.geteuid(), 'Cache ancestor has unmapped ownership: ' + directory);
+           assert.ok((metadata.mode & 0o022) === 0 || (metadata.mode & 0o1000) !== 0, 'Cache ancestor permits unsafe writes: ' + directory);
+           if (directory === '/') break;
+         }
          const countsPath = 'probe-counts.json';
          const counts = fs.existsSync(countsPath) ? JSON.parse(fs.readFileSync(countsPath, 'utf8')) : {install:0,test:0};
          const stage = process.argv[2];
@@ -527,6 +679,9 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
       ).toEqual({ install: 1, test: 1 });
       console.info(
         'Native Linux sandbox: npm ci and npm test passed once; hook-only prepare omitted during install and restored before tests; auth, app key, parent proc credentials, and helper configuration protected.',
+      );
+      console.info(
+        'Native Linux cache: every cache ancestor has trusted ownership and permissions; Git history is readable and shared Git metadata stays read-only.',
       );
     },
     60_000,

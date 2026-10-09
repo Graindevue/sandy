@@ -190,7 +190,7 @@ export class CodexExecRunner {
       'sandy',
       '--cd',
       input.worktreePath,
-      ...this.#permissionConfig(input.worktreePath),
+      ...(await this.#permissionConfig(input.worktreePath, [], input.signal)),
       '--',
       '/bin/sh',
       '-c',
@@ -341,7 +341,7 @@ export class CodexExecRunner {
       input.agent.model,
       '--ignore-user-config',
       '--ignore-rules',
-      ...this.#permissionConfig(input.worktreePath, input.siblingWorktrees),
+      ...(await this.#permissionConfig(input.worktreePath, input.siblingWorktrees, input.signal)),
     );
     if (input.agent.effort !== undefined)
       args.push('-c', `model_reasoning_effort=${JSON.stringify(input.agent.effort)}`);
@@ -457,10 +457,11 @@ export class CodexExecRunner {
     };
   }
 
-  #permissionConfig(
+  async #permissionConfig(
     worktreePath: string,
     siblings: readonly RunnerSiblingWorktree[] = [],
-  ): string[] {
+    signal?: AbortSignal,
+  ): Promise<string[]> {
     const denied = [
       ...new Set([
         resolvePath(this.#options.codexHome),
@@ -479,6 +480,34 @@ export class CodexExecRunner {
     if (opensrcHome !== undefined)
       filesystem.push(`${JSON.stringify(resolvePath(opensrcHome))}="write"`);
     if (process.platform === 'linux') {
+      // A host-root bind exposes unmapped root ownership inside the user
+      // namespace. Scoped reads retain a fresh root and cache ancestors owned
+      // by this user, which native addons require when materializing images.
+      filesystem.push(
+        '":minimal"="read"',
+        '":workspace_roots"="write"',
+        '":tmpdir"="write"',
+        '":slash_tmp"="write"',
+        '"/opt"="read"',
+      );
+      const commonDirectories = new Set<string>();
+      for (const path of new Set([worktreePath, ...siblings.map((sibling) => sibling.hostPath)])) {
+        const { stdout } = await exec(
+          'git',
+          ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+          {
+            cwd: path,
+            env: safeEnvironment(process.env),
+            maxBuffer: 4096,
+            timeout: 10_000,
+            ...(signal !== undefined ? { signal } : {}),
+          },
+        );
+        const commonDirectory = await realpath(stdout.trim());
+        if (commonDirectory === '/') throw new Error('Git metadata must have a scoped directory');
+        commonDirectories.add(commonDirectory);
+      }
+      for (const path of commonDirectories) filesystem.push(`${JSON.stringify(path)}="read"`);
       // These patterns only match /proc/<pid>/<file>. Unbounded expansion also
       // enters other users' fd/ns/task directories, which makes Linux sandbox
       // construction fail before the reviewed command starts.
@@ -500,7 +529,7 @@ export class CodexExecRunner {
       '-c',
       'default_permissions="sandy"',
       '-c',
-      `permissions.sandy={extends=":workspace",filesystem={${filesystem.join(',')}},network={enabled=true}}`,
+      `permissions.sandy={${process.platform === 'linux' ? '' : 'extends=":workspace",'}filesystem={${filesystem.join(',')}},network={enabled=true}}`,
       '-c',
       `projects={${JSON.stringify(resolvePath(worktreePath))}={trust_level="untrusted"}}`,
       '-c',

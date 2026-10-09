@@ -37,8 +37,12 @@ token-usage history remain durable in Convex.
 Reviewed install and test commands execute in a credential-free Codex sandbox.
 Review agents use an explicit filesystem profile that permits the review
 workspace while denying auth files, the App key, instance config, and other
-credential directories. The review entry point enforces an overall deadline
-below the existing abandoned-Review reaper cutoff.
+credential directories. Linux uses explicit grants for required system reads,
+review-worktree and temporary cache writes, and read-only shared Git metadata
+and sibling sources. Scoped mounts avoid broad host-root reads that remap cache
+ancestor ownership incompatibly with native tools such as SWC. macOS retains
+the `:workspace` profile with the same credential denies. The review entry point
+enforces an overall deadline below the existing abandoned-Review reaper cutoff.
 
 Each persona runs once with `codex exec --json`, receiving its diff and context
 up front. A missing completion signal permits one resume of that same session;

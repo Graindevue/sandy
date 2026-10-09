@@ -106,6 +106,10 @@ reviewed worktree. It restores the original `package.json` bytes before tests
 and review; other dependency lifecycle scripts still run.
 Turbo's cache lives inside the reviewed worktree so linked-worktree cache sharing
 does not write to the protected parent clone.
+Linux uses explicit filesystem grants for required system tools, writable review
+and temporary cache directories, and read-only shared Git metadata and sibling
+source. Native caches must also satisfy ownership checks on their ancestor
+directories, including those enforced by SWC.
 
 ## 4. Choose Product configuration
 
