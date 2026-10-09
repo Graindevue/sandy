@@ -20,21 +20,11 @@ Use harness PR-monitoring tools when available; otherwise poll the PR for new
 comments, review state, and checks. Use waits of at most 60 seconds so new user
 instructions can steer the work.
 
-When Greptile is configured and included in the requested workflow, use fresh
-`@greptile` comments to request reviews, including after pushes. This workflow
-owns triggering and monitoring; do not assume PR creation or a push requests
-the review. The confidence score is reported in the PR body.
-
-If a review is already running, wait for it to finish before requesting the
-new head. Request at most once per head. If no review starts within 10 minutes
-of the request, report the missing review and last observed state instead of
-polling forever or posting repeated mentions. If a required review integration
-is unavailable, report that limitation without substituting a successful score.
-Follow the user's instructions about retriggering reviews.
-
-Judge checks and review results against the current head SHA. Earlier comments
-can provide context, but verify whether their findings still apply; timestamps
-alone do not establish which commit a review covered.
+Use [coderabbit-review](../coderabbit-review/SKILL.md) to request reviews and
+verify completion against the current head SHA, including after pushes.
+That skill defines trigger selection, bounded waits, and the review gate.
+This workflow owns ongoing monitoring and fixes; coordinate requests so each
+head receives one review request.
 
 ## Fixing feedback
 
@@ -68,15 +58,16 @@ matching states and affected responsive variants. Keep assets out of commits.
 
 ## Base branch and completion
 
-Sandy feature PRs target `main`. Watch changes to the actual PR base and
+Sandy feature PRs target `staging`; release PRs promote `staging` to `main`.
+Watch changes to the actual PR base and
 integrate them when needed, following the repository's branch rules. If an
 overlapping PR makes this one obsolete, stop monitoring and report it; ask
 before closing unless closure was explicitly authorized.
 
-For a requested Greptile 5/5 workflow, keep the PR in draft until the latest
-commit scores 5/5, then mark it ready with `gh pr ready`. Do not mark it ready
-at a lower score unless the user says so. Otherwise use the review gate the
-user requested and Sandy's maintainer-review policy.
+Keep draft PRs in draft until the CodeRabbit review gate passes on the current
+head, then mark them ready with `gh pr ready`, unless the user requests a
+different readiness workflow. CodeRabbit review and maintainer review are
+separate requirements.
 
 Stop when required checks are green on the latest commit, the requested bot
 review gate is satisfied, and the PR is marked ready. Report its current head
