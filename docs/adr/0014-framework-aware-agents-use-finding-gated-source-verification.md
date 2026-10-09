@@ -4,6 +4,13 @@ Date: 2026-06-01
 
 Status: Accepted
 
+> **Amendment (2026-10-09).** Verify runtime claims against the exact installed
+> version's implementation, reading local source first and using `opensrc` when
+> needed. Version-matched bundled official docs guide targeted source reads;
+> pin fetched source explicitly and resolve dependencies from their owning
+> workspace. The [agent guidance audit](../research/2026-10-09-agent-guidance-audit.md)
+> records current official guidance and the latest-version fallback risk.
+
 ## Context
 
 Sandy's framework-aware Agents review libraries that change faster than model

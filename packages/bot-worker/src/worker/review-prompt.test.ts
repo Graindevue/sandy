@@ -179,10 +179,10 @@ describe('buildReviewPrompt', () => {
       'Once the diff is covered and every candidate is confirmed or suppressed',
     );
     expect(prompt).toContain('Do not fetch dependency source preemptively.');
-    expect(prompt).toContain(
-      "verify that behavior against the installed version's source with opensrc",
-    );
-    expect(prompt).toContain('Record the verification in the Finding.evidence');
+    expect(prompt).toContain("verify that behavior against the installed version's source");
+    expect(prompt).toContain('use opensrc when the needed source is unavailable locally');
+    expect(prompt).toContain('opensrc path <package>@<resolved-version>');
+    expect(prompt).toContain('Record the verification in Finding.evidence');
     expect(prompt).toContain(
       "cannot verify enough for the Finding's confidence, suppress the Finding",
     );

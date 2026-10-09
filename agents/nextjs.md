@@ -19,9 +19,9 @@ This optional Agent runs only when explicitly enabled for a Repo that uses Next.
 Next.js evolves quickly. Do not review from a frozen feature checklist.
 
 1. Read the PR diff first. Identify the Next.js surfaces it touches: App Router files, route handlers, server actions, metadata, caching directives, config flags, client/server component boundaries, middleware/proxy files, or public HTTP routes.
-2. Check the ApiSurfaceManifest for the resolved Next.js version, and read `next.config.*` for flags that change behavior (`cacheComponents`, PPR, experimental routing/caching options, etc.).
+2. Resolve Next.js from the relevant app workspace and check the ApiSurfaceManifest. Read `next.config.*`, the App/Pages Router boundary, runtime and deployment mode, and flags that change behavior (`cacheComponents`, PPR, experimental routing/caching options, etc.).
 3. Build suspicions from the diff plus the installed version and config. New Next.js features that are not named below are still in scope.
-4. Before emitting a Finding whose correctness depends on Next.js behavior, follow the shared Framework source verification contract. The Finding evidence must cite installed-version source, not model memory.
+4. Read the relevant bundled official docs at that workspace's `node_modules/next/dist/docs/` when present (Next.js 16.2+). Older versions need version-matched documentation/source. Before emitting a Finding whose correctness depends on Next.js behavior, follow the shared Framework source verification contract and cite installed-version source.
 5. If source verification shows the code is valid for this Next.js version, suppress the Finding.
 
 ## Non-exhaustive priming examples
@@ -29,9 +29,9 @@ Next.js evolves quickly. Do not review from a frozen feature checklist.
 These are examples of failure modes worth recognizing. They are not the spec; the diff, config, and installed Next.js source are the authority.
 
 ### Caching and data isolation
-- Shared caching around per-user data (`cookies()`, `headers()`, auth/session reads, tenant-scoped data) can leak data across users.
+- Identify the cache mechanism, lifetime, key, and scope before alleging a privacy leak. React `cache` is request-scoped memoization; persistent/shared Next.js caches and supported private cache directives have different isolation rules. Prove how one user's protected result can reach another.
 - Cached pages/functions without a suitable invalidation plan (`cacheLife`, `cacheTag`, `revalidatePath`, `revalidateTag`, or equivalent for the installed version) can serve stale data after mutations.
-- Cache tags that collide across unrelated routes or tenants can invalidate too broadly or too narrowly.
+- Cache tags and keys must preserve the app's required tenant/resource boundaries. Missing tags alone are not a defect when time-based expiration, uncached reads, or another valid invalidation mechanism satisfies the contract.
 
 ### Routing, params, and metadata
 - Route params or search params may be sync or async depending on version and surface; verify before flagging missing `await` or invalid types.
@@ -45,7 +45,7 @@ These are examples of failure modes worth recognizing. They are not the spec; th
 - Public route handlers can become cross-repo contracts. Use the ApiSurfaceManifest and Cross-Repo Search contract when routes are added, renamed, or change response shape.
 
 ### Rendering and bundling
-- Client components that import server-only modules or large server-oriented dependencies can break builds or bloat bundles.
+- Client boundaries that transitively import server-only code or expose secrets can break builds or leak data. Trace actual module usage and serialization; verify bundle impact before reporting a dependency as too large.
 - Server components that perform mutations or client-only side effects are suspicious.
 - Metadata or static rendering paths that depend on per-user state can leak or cache the wrong result.
 
@@ -61,6 +61,4 @@ Same JSON-block format. Use `"agentKey": "nextjs"` and `"category": "nextjs"`.
 
 ## Severity
 
-- **P0** — per-user data cached as static (privacy leak), broken auth flow
-- **P1** — broken caching directive, incorrect async param handling, missing revalidation after a mutation
-- **P2** — bundling inefficiency, missing cache tags, suboptimal route structure
+Apply the shared severity and confidence definitions to the actual failure. Privacy impact, broken routes, stale data, and bundle costs need confirmed behavior; a missing cache API or preferred route structure alone is insufficient.

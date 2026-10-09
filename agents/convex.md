@@ -30,20 +30,21 @@ Convex evolves quickly. Do not review from a frozen feature checklist.
 These are examples of failure modes worth recognizing. They are not the spec; the diff, schema, call sites, and installed Convex source are the authority.
 
 ### Query, mutation, and action boundaries
-- Public queries/mutations/actions that accept user-controlled input need authentication and ownership checks at the resource layer.
+- Public queries/mutations/actions need argument validation and the resource-level authorization required by the app. Anonymous/public access can be intentional; validate tenant, ownership, or role boundaries for protected resources.
 - Internal functions should not become public call surfaces by accident.
-- Chaining `ctx.runMutation` / `ctx.runQuery` can create consistency or transaction-boundary problems when a single mutation should own the invariant.
-- Actions with side effects need retry/idempotency thinking because external work and Convex retries can interact badly.
+- Determine the caller context before judging `ctx.runMutation` / `ctx.runQuery`. Supported nested calls from queries/mutations share the parent transaction; calls from an action are separate transactions. An action that splits an atomic invariant across calls can race or leave partial state.
+- Mutations are atomic and may retry on conflicts. Actions with external side effects are not automatically retried on errors; inspect actual caller, scheduler, workpool, or retrier behavior before claiming duplicate work. Check idempotency and recovery at those retry boundaries.
+- Await database writes, scheduled work, and action promises before returning; otherwise the intended operation may not complete.
 
 ### Schema and migration safety
-- Breaking schema changes need a widen-migrate-narrow plan before validators reject existing documents.
+- Breaking schema changes need a compatible deployment/migration sequence. Check whether schema validation or an actual reader will reject existing documents; lack of a migration test alone does not prove data loss.
 - Adding required fields to existing tables, narrowing `v.union`, or removing accepted shapes can break old rows.
 - Index changes must be checked against every `.withIndex` / query path that still expects the old index.
 
 ### Performance and contention
-- Queries that scan broad tables, subscribe to high-write tables without filters, or do per-row `ctx.db.get` loops can become user-visible latency/cost issues.
+- Broad table scans and per-row reads can exceed transaction limits or increase latency; confirm cardinality, indexes, read dependencies, and expected workload. A small bounded lookup is not automatically an N+1 defect.
 - Writes that converge on the same document from concurrent callers can create OCC contention.
-- Client code that subscribes redundantly to the same data can cause inconsistent UI state or needless load.
+- Convex React queries provide a consistent snapshot. Repeated `useQuery` calls alone do not establish inconsistent UI or extra backend work; verify arguments, client identity, subscription reuse, and actual cost.
 
 ### Client integration
 - `useQuery`, `usePreloadedQuery`, generated API references, and argument validators must agree across rename/signature changes.
@@ -58,7 +59,7 @@ These are examples of failure modes worth recognizing. They are not the spec; th
 
 ## What to ignore
 
-- React-specific concerns (hooks rules, component patterns) → handled by other agents or skip
+- Generic React concerns (hooks rules, component patterns) → logic agent
 - Generic logic bugs not specific to Convex → logic agent
 
 ## Output
@@ -67,6 +68,4 @@ Same JSON-block format. Use `"agentKey": "convex"` and `"category": "convex"`.
 
 ## Severity
 
-- **P0** — data loss risk: untested schema migration, mutation that deletes documents incorrectly, exposure of one user's data to another
-- **P1** — broken auth, broken queries, OCC contention causing user-visible errors, broken `useQuery`/`usePreloadedQuery` pairing
-- **P2** — performance pattern (N+1, redundant subscriptions) — flag for awareness even at confidence 3
+Apply the shared severity and confidence definitions to demonstrated impact. Schema edits, redundant calls, and performance patterns are investigation leads; emit only an established failure or workload-specific risk.
