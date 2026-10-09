@@ -31,8 +31,8 @@ export interface ReviewCloneManager {
   ensureCloned(repo: RepoForWorktree): Promise<unknown>;
   resolveDefaultBranchSha(repo: RepoForWorktree): Promise<string>;
   createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
-  removeWorktree(worktree: ReviewWorktree): Promise<void>;
   materializeAgentWorkspace?(seed: ReviewWorktree, agentKey: string): Promise<ReviewWorktree>;
+  removeWorktree(worktree: ReviewWorktree): Promise<void>;
 }
 
 export interface ReviewWorkspaceContext {
