@@ -5,19 +5,15 @@ is) and `CONTEXT.md` (domain glossary).
 
 ## Branching & PRs
 
-`main` (default / production) ← `staging` (integration, cut from `main`) ←
-feature branches (`phase-N/<slug>`).
-
-- Branch feature work from **`staging`**.
-- Feature PRs target **`staging`** — never directly against `main`.
-- `staging` is promoted to `main` via a separate release PR — the one place a
-  human reviews the integrated work.
+- Branch feature work from **`main`** (default / production), using
+  `phase-N/<slug>` names.
+- Open feature PRs against **`main`**.
 
 ## Code review
 
 Review feature work locally and pass lint, type-check, and tests before opening
-a PR. GitHub Actions CI checks feature PRs and integration-branch pushes; a
-human reviews the integrated `staging`→`main` release PR.
+a PR. GitHub Actions CI checks PRs to `main` and pushes to `main`. A maintainer
+reviews each PR before merge.
 
 ## Runtime
 

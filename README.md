@@ -78,7 +78,7 @@ the caller's trusted default branch rather than a PR head.
 
 Read [CONTEXT.md](./CONTEXT.md) for vocabulary and [AGENTS.md](./AGENTS.md) for
 contribution rules. Run `pnpm install`, `pnpm lint`, `pnpm type-check`, and
-`pnpm test` before opening a PR against `staging`.
+`pnpm test` before opening a PR against `main`.
 
 ## License
 

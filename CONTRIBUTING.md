@@ -16,15 +16,13 @@ Sandy is built primarily for one developer's daily use, but the runtime is gener
 
 ## Pull request workflow
 
-Branches: `main` (default / production) ← `staging` (integration) ← feature branches.
+Branches: `main` (default / production) ← feature branches.
 
-1. Branch from `staging` (name it `phase-N/<slug>`)
+1. Branch from `main` (name it `phase-N/<slug>`)
 2. Make focused changes; include tests where reasonable
 3. Run `pnpm lint:fix && pnpm type-check && pnpm test`
-4. Open a PR **against `staging`**, never directly against `main`
-5. A maintainer reviews before merge — there is no automated PR reviewer (yet; see below)
-
-`staging` is promoted to `main` via a separate release PR. Once Sandy is operational, it will review its own PRs too.
+4. Open a PR **against `main`**
+5. A maintainer reviews before merge
 
 ## What we won't merge
 

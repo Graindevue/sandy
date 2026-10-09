@@ -1,10 +1,11 @@
 name: CI
 
-# Runs the merge gate on every PR and on integration/production pushes.
+# Runs the merge gate on PRs to main and pushes to main.
 on:
   pull_request:
+    branches: [main]
   push:
-    branches: [main, staging]
+    branches: [main]
 
 # A newer commit on the same ref supersedes any in-flight run for it.
 concurrency:
