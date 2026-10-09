@@ -141,6 +141,22 @@ describe('CodexAppServerRunner Review runtime lifecycle', () => {
         requestParameter: 'reasoning.summary',
       },
     },
+    {
+      message: JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_value',
+          param: 'text.verbosity',
+          message: 'PRIVATE_VALUE_SENTINEL',
+        },
+      }),
+      expected: {
+        messageClass: 'provider-json',
+        providerErrorType: 'invalid_request_error',
+        providerErrorCode: 'unsupported_value',
+        requestParameter: 'text.verbosity',
+      },
+    },
   ])('retains fixed diagnostic classes for native other errors without message values', async ({
     message,
     expected,

@@ -114,6 +114,11 @@ function classifyOtherMessage(failure: AgentRunFailure, value: unknown): void {
           'invalid_request_error',
           'invalid_parameter',
           'unsupported_parameter',
+          'unsupported_value',
+          'invalid_value',
+          'missing_required_parameter',
+          'unknown_parameter',
+          'invalid_request',
           'model_not_found',
           'invalid_model',
           'unsupported_model',
@@ -143,6 +148,12 @@ function classifyOtherMessage(failure: AgentRunFailure, value: unknown): void {
           'input',
           'originator',
           'clientInfo.name',
+          'instructions',
+          'metadata',
+          'stream',
+          'text.verbosity',
+          'text.format',
+          'tool_choice',
         ]);
         if (
           'param' in details &&
