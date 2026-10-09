@@ -5,14 +5,16 @@ is) and `CONTEXT.md` (domain glossary).
 
 ## Branching & PRs
 
-- Branch feature work from **`main`** (default / production), using
+- Branch feature work from **`staging`** (integration), using
   `phase-N/<slug>` names.
-- Open feature PRs against **`main`**.
+- Open feature PRs against **`staging`**.
+- Promote `staging` to **`main`** (production) through a separate release PR
+  reviewed by a maintainer.
 
 ## Code review
 
 Review feature work locally and pass lint, type-check, and tests before opening
-a PR. GitHub Actions CI checks PRs to `main` and pushes to `main`. A maintainer
+a PR. GitHub Actions CI checks PRs and pushes to `staging` and `main`. A maintainer
 reviews each PR before merge.
 
 ## Runtime

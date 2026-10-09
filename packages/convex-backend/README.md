@@ -12,6 +12,15 @@ to every row.
 
 ## Functions
 
+Every public function uses the `convex-helpers` builders in
+[`convex/serviceFunctions.ts`](./convex/serviceFunctions.ts). The deployment
+trusts one private caller's GitHub Actions OIDC identity: immutable repository
+ID, exact trusted workflow ref, and signed environment claim, with manual-comment
+events and initial attempts only. Missing deployment configuration fails closed.
+[`convex/auth.config.ts`](./convex/auth.config.ts) verifies GitHub's JWT signature,
+issuer, expiry, and the `sandy-review` audience. Setup and coordinated activation
+are documented in [docs/setup/convex.md](../../docs/setup/convex.md).
+
 - **reviewJobs** — `enqueue`, `enqueueSuperseding` (Cancel-on-Supersede for
   superseding triggers), `claim` (OCC-protected: claims a `pending` job and
   transitions it to `running`; the loser of a race returns `false`),
@@ -28,7 +37,8 @@ to every row.
 - **agentRuns** — `record`, which also links the run back onto its ReviewJob.
 - **crons** — `reapStuckJobs` runs every 5 minutes and marks `running`
   ReviewJobs claimed more than 30 minutes ago as `failed`; the SuggestedRule
-  inference cron runs daily.
+  inference cron runs daily. Its reaction-read and rule-creation helpers are
+  internal functions, so a scheduled run needs no Actions token.
 
 ## Local setup
 

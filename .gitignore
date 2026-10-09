@@ -20,8 +20,17 @@ coverage/
 
 # Env files
 .env
-.env.local
+.env.*
 *.env.local
+!.env.example
+!.env.*.example
+
+# Credentials (examples must use unmistakably fake values).
+auth.json
+*.pem
+*.key
+!*.example.pem
+!*.example.key
 
 # Convex local state
 .convex/

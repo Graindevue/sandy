@@ -62,6 +62,8 @@ test('the caller workflow subscribes only to new comments and keeps the auth job
     'cancel-in-progress': false,
   });
   assert.equal(workflow.jobs.review.environment, 'sandy-codex');
+  assert.equal(workflow.jobs.review.permissions['id-token'], 'write');
+  assert.equal(workflow.jobs.review.permissions.contents, 'read');
 });
 
 test('the exact caller authorization script accepts @sandy and rejects old or unauthorized requests', async () => {

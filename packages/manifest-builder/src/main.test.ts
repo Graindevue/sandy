@@ -1,11 +1,13 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import npmExports from './extractors/npm-exports.js';
 import { buildManifest } from './main.js';
 
 let tmpRoot: string;
+const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(join(tmpdir(), 'sandy-manifest-'));
@@ -94,16 +96,16 @@ describe('buildManifest', () => {
     await write(web, 'package.json', JSON.stringify({ name: '@acme/web', dependencies: {} }));
     await write(web, 'src/index.ts', 'export const appName = "web";\n');
 
-    const result = await buildManifest(
-      'product-1',
-      [repoInput('acme/api', api, '1111111'), repoInput('acme/web', web, '2222222')],
-      { now: () => 1_800_000_000_000 },
-    );
+    const apiInput = await repoInput('acme/api', api);
+    const webInput = await repoInput('acme/web', web);
+    const result = await buildManifest('product-1', [apiInput, webInput], {
+      now: () => 1_800_000_000_000,
+    });
 
     expect(result.structured.productId).toBe('product-1');
     expect(result.structured.repoShas).toEqual([
-      { repo: 'acme/api', sha: '1111111' },
-      { repo: 'acme/web', sha: '2222222' },
+      { repo: 'acme/api', sha: apiInput.sha },
+      { repo: 'acme/web', sha: webInput.sha },
     ]);
     expect(result.structured.repos.map((repo) => repo.repo)).toEqual(['acme/api', 'acme/web']);
     for (const repo of result.structured.repos) {
@@ -119,8 +121,8 @@ describe('buildManifest', () => {
 
     expect(result.markdown).toContain('# API Surface Manifest');
     expect(result.markdown).toContain('Product: `product-1`');
-    expect(result.markdown).toContain('`acme/api` @ `1111111`');
-    expect(result.markdown).toContain('`acme/web` @ `2222222`');
+    expect(result.markdown).toContain(`\`acme/api\` @ \`${apiInput.sha}\``);
+    expect(result.markdown).toContain(`\`acme/web\` @ \`${webInput.sha}\``);
     expect(result.markdown).toContain('### Framework Versions');
     expect(result.markdown).toContain('next');
     expect(result.markdown).toContain('16.0.1');
@@ -158,7 +160,7 @@ describe('buildManifest', () => {
       ].join('\n'),
     );
 
-    const result = await buildManifest('product-1', [repoInput('acme/api', repo, 'abc123')], {
+    const result = await buildManifest('product-1', [await repoInput('acme/api', repo)], {
       customExtractorsDir: customDir,
       now: () => 1_800_000_000_000,
     });
@@ -192,7 +194,7 @@ describe('buildManifest', () => {
       }),
     );
 
-    const result = await buildManifest('product-1', [repoInput('acme/api', repo, 'abc123')], {
+    const result = await buildManifest('product-1', [await repoInput('acme/api', repo)], {
       extractors: [npmExports],
       now: () => 1_800_000_000_000,
     });
@@ -214,7 +216,7 @@ describe('buildManifest', () => {
     );
     await write(repo, 'src/index.ts', 'export const publicName = "api";\n');
 
-    const result = await buildManifest('product-1', [repoInput('acme/api', repo, 'abc123')], {
+    const result = await buildManifest('product-1', [await repoInput('acme/api', repo)], {
       extractors: [npmExports],
       now: () => 1_800_000_000_000,
     });
@@ -244,7 +246,25 @@ function packageJson(name: string): unknown {
   };
 }
 
-function repoInput(fullName: string, worktreePath: string, sha: string) {
+async function repoInput(fullName: string, worktreePath: string) {
+  await execFileAsync('git', ['init', '-q', worktreePath]);
+  await execFileAsync('git', ['-C', worktreePath, 'add', '.']);
+  await execFileAsync('git', [
+    '-C',
+    worktreePath,
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.test',
+    '-c',
+    'commit.gpgsign=false',
+    'commit',
+    '-q',
+    '-m',
+    'Fixture',
+  ]);
+  const { stdout } = await execFileAsync('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
+  const sha = stdout.trim();
   const [owner, name] = fullName.split('/');
   return {
     owner: owner ?? '',
@@ -261,3 +281,5 @@ async function write(root: string, path: string, contents: string): Promise<void
   await mkdir(join(fullPath, '..'), { recursive: true });
   await writeFile(fullPath, contents);
 }
+
+import { execFile } from 'node:child_process';

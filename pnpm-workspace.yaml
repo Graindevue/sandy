@@ -7,3 +7,9 @@ packages:
 # (7 * 24 * 60 = 10080). `pnpm audit --fix` appends to minimumReleaseAgeExclude
 # so security patches can still be installed without waiting out the window.
 minimumReleaseAge: 10080
+
+# Patch vulnerable transitive versions without changing their major/minor line.
+# Remove these selectors once upstream resolution no longer selects them.
+overrides:
+  "esbuild@0.28.0": "0.28.1"
+  "vite@>=8.0.0 <8.0.16": "8.0.16"

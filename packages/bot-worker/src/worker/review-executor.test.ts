@@ -133,6 +133,102 @@ describe('ReviewExecutor', () => {
     expect(store.completed).toHaveLength(1);
   });
 
+  it('captures manifest, rules, and Agent selection before reviewed dependency scripts begin', async () => {
+    const events: string[] = [];
+    const capturedRules = { repoRules: 'Pinned PR rules', productRules: null, ignorePatterns: [] };
+    let scriptsStarted = false;
+    const store = new FakeExecutionStore(makeContext());
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      resolveAgent: () => logicAgent,
+      resolveAgents: () => {
+        expect(scriptsStarted).toBe(false);
+        events.push('selection');
+        return [logicAgent];
+      },
+      resolveReviewBotConfig: async ({ worktreePath }) => {
+        expect(scriptsStarted).toBe(false);
+        if (worktreePath !== undefined) events.push('rules');
+        return { ...capturedRules };
+      },
+      manifestBuilder: {
+        buildManifest: async () => {
+          expect(scriptsStarted).toBe(false);
+          events.push('manifest');
+          return {
+            markdown: 'Pinned manifest',
+            structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+          };
+        },
+      },
+      runner: {
+        installDependencies: async () => {
+          scriptsStarted = true;
+          events.push('install');
+          capturedRules.repoRules = 'Poisoned mutable rules';
+          return { status: 'skipped', reason: 'No dependencies' };
+        },
+        runAgent: async ({ botConfig, apiSurfaceManifest }) => {
+          events.push('agent');
+          expect(botConfig?.repoRules).toBe('Pinned PR rules');
+          expect(apiSurfaceManifest).toBe('Pinned manifest');
+          return runnerOutput(findingsOutput([]));
+        },
+      },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(events).toEqual(['manifest', 'rules', 'selection', 'install', 'agent']);
+    expect(store.completed).toHaveLength(1);
+    expect(store.failed).toEqual([]);
+  });
+
+  it.each([
+    'manifest',
+    'rules',
+  ])('does not start reviewed scripts when %s capture fails', async (phase) => {
+    let installCalls = 0;
+    const store = new FakeExecutionStore(makeContext());
+    const executor = new ReviewExecutor({
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster: new FakePoster(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      resolveAgent: () => logicAgent,
+      resolveReviewBotConfig: async ({ worktreePath }) => {
+        if (phase === 'rules' && worktreePath !== undefined) throw new Error('Invalid rules');
+        return { repoRules: null, productRules: null, ignorePatterns: [] };
+      },
+      manifestBuilder: {
+        buildManifest: async () => {
+          if (phase === 'manifest') throw new Error('Invalid manifest');
+          return {
+            markdown: 'Manifest',
+            structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+          };
+        },
+      },
+      runner: {
+        installDependencies: async () => {
+          installCalls += 1;
+          return { status: 'skipped', reason: 'No dependencies' };
+        },
+        runAgent: async () => runnerOutput(findingsOutput([])),
+      },
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(installCalls).toBe(0);
+    expect(store.failed).toHaveLength(1);
+  });
+
   it('logs bounded failed-test diagnostics without posting reviewed output to GitHub', async () => {
     const statusLines: string[] = [];
     const poster = new FakePoster();
@@ -206,8 +302,15 @@ describe('ReviewExecutor', () => {
     const reviewing = executor.executeClaimedJob('job-1');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(logs).toContain('Sandy ReviewJob job-1: API surface manifest started.');
-    expect(logs).toContain('Sandy ReviewJob job-1: Dependency preparation started.');
+    expect(logs).not.toContain('Sandy ReviewJob job-1: Dependency preparation started.');
     expect(logs.join('\n')).not.toContain('Agent "logic" started.');
+
+    manifest.resolve({
+      markdown: 'untrusted manifest',
+      structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(logs).toContain('Sandy ReviewJob job-1: Dependency preparation started.');
 
     install.resolve({
       status: 'installed',
@@ -221,21 +324,16 @@ describe('ReviewExecutor', () => {
     expect(logs).toContainEqual(
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
     );
-    expect(logs.join('\n')).not.toContain('Agent "logic" started.');
 
-    manifest.resolve({
-      markdown: 'untrusted manifest',
-      structured: { productId: 'product-1', builtAt: 0, repoShas: [], repos: [] },
-    });
     await reviewing;
 
     expect(logs).toEqual([
       'Sandy ReviewJob job-1: Workspace preparation started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Workspace preparation finished in \d+ms\.$/),
       'Sandy ReviewJob job-1: API surface manifest started.',
+      expect.stringMatching(/^Sandy ReviewJob job-1: API surface manifest finished in \d+ms\.$/),
       'Sandy ReviewJob job-1: Dependency preparation started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Dependency preparation finished in \d+ms\.$/),
-      expect.stringMatching(/^Sandy ReviewJob job-1: API surface manifest finished in \d+ms\.$/),
       'Full project test suite deferred to CI; reviewers may run focused verification.',
       'Sandy ReviewJob job-1: Selected Agent order: "logic" -> "security".',
       'Sandy ReviewJob job-1: Agent "logic" started.',
