@@ -23,8 +23,8 @@ instructions can steer the work.
 Use [coderabbit-review](../coderabbit-review/SKILL.md) to request reviews and
 verify completion against the current head SHA, including after pushes.
 That skill defines trigger selection, bounded waits, and the review gate.
-This workflow owns ongoing monitoring and fixes; coordinate requests so each
-head receives one review request.
+This workflow owns ongoing monitoring and fixes; coordinate requests to avoid
+duplicate in-flight or completed reviews.
 
 ## Fixing feedback
 

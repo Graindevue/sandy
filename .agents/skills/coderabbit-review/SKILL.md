@@ -25,8 +25,12 @@ explicitly, including after pushes, while this restriction applies.
 
 Check for an automatic review already running or completed on the current head
 before posting. Wait for an in-flight review to finish before requesting the new
-head. Request at most once per head unless the user explicitly asks for another
-pass. Manual requests also work on draft PRs.
+head. Avoid duplicate requests for an in-flight or completed review of the same
+head unless the user explicitly asks for another pass. After a skipped, failed,
+or rate-limited attempt, retry the same head once the cause is corrected or the
+stated retry time arrives, within the monitoring bounds below. Report repeated
+failures instead of posting repeated mentions. Manual requests also work on
+draft PRs.
 
 ## Verify completion
 
