@@ -115,16 +115,16 @@ directories, including those enforced by SWC.
 ## 4. Choose Product configuration
 
 Without `SANDY_CONFIG_PATH`, the action creates one Product for the caller Repo
-and selects `logic` at `xhigh`, `security` at `high`, and `convex` at
-`high` only for Convex changes. When dependency installation succeeds and a
-test script exists, Sandy runs the project test suite once and includes its
-result in the review. Optional repository variables:
+and selects `logic` and `security`, adding `convex` only for Convex changes.
+All three use `gpt-6.1-sol` with `xhigh` effort by default. When dependency
+installation succeeds and a test script exists, Sandy runs the project test
+suite once and includes its result in the review. Optional repository variables:
 
 | Variable | Purpose |
 |----------|---------|
 | `SANDY_PRODUCT_SLUG` | Stable Product identity; defaults to repository name. |
 | `SANDY_PRODUCT_NAME` | Product display name. |
-| `SANDY_MODEL` | Codex model for generated config; default `gpt-5.5`. |
+| `SANDY_MODEL` | Codex model for generated config; default `gpt-6.1-sol`. Effort is `xhigh` for all selected reviewers. |
 | `SANDY_CONFIG_PATH` | Trusted `bot.yaml` path relative to `GITHUB_WORKSPACE`. |
 
 For multiple Repos or custom selection, commit a non-secret

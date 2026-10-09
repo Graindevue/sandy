@@ -28,7 +28,7 @@ const agent: AgentDefinition = {
   description: 'Find bugs',
   category: 'logic',
   vendor: 'codex',
-  model: 'gpt-5.5',
+  model: 'gpt-6.1-sol',
   effort: 'xhigh',
   tools: [],
   maxIterations: 30,
@@ -174,7 +174,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
-      if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-5.5' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
+      if (!args.includes('--json') || args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options');
       const shellPolicy = args.find(value => value.startsWith('shell_environment_policy.set='));
       const path = await import('node:path');
       const turboCache = process.env.TURBO_CACHE_DIR;
@@ -214,6 +214,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       const resumed = args.includes('resume');
+      if (args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes('model_reasoning_effort="xhigh"')) throw new Error('Wrong model options on exec or resume');
       if (resumed && (!args.includes('review-thread') || args.includes('--last') || prompt.includes('PR diff:'))) throw new Error('Wrong resume context');
       process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'review-thread'}) + '\\n');
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:resumed ? ${JSON.stringify(findings)} : 'I inspected the change.'}}) + '\\n');

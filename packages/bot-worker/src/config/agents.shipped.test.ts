@@ -33,17 +33,18 @@ describe('shipped agents/', () => {
     for (const agent of agents.values()) {
       expect(agent.name.length).toBeGreaterThan(0);
       expect(agent.description.length).toBeGreaterThan(0);
-      expect(agent.model.length).toBeGreaterThan(0);
+      expect(agent.model).toBe('gpt-6.1-sol');
+      expect(agent.effort).toBe('xhigh');
       expect(agent.vendor).toBe('codex');
       expect(agent.tools).toBeUndefined();
       expect(agent.maxIterations).toBeUndefined();
     }
   });
 
-  it('keeps specialized optional agents disabled and directs effort to the core reviewers', async () => {
+  it('keeps specialized optional agents disabled and Convex conditional', async () => {
     const agents = await loadAgentDefinitions(shippedAgentsDir);
     expect(requireAgent(agents, 'logic').effort).toBe('xhigh');
-    expect(requireAgent(agents, 'security').effort).toBe('high');
+    expect(requireAgent(agents, 'security').effort).toBe('xhigh');
     expect(requireAgent(agents, 'convex').defaultEnabled).toBe('auto');
     for (const key of ['test-coverage', 'style', 'nextjs', 'i18n']) {
       expect(requireAgent(agents, key).defaultEnabled).toBe(false);

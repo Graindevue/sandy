@@ -2,8 +2,8 @@
 name: test-coverage
 description: Reviews diffs for missing or low-quality tests, especially over-mocked tests that real integration tests would catch.
 vendor: codex
-model: gpt-5.5
-effort: high
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
 defaultEnabled: false
 ---

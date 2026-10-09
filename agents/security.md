@@ -2,8 +2,8 @@
 name: security
 description: Reviews diffs for security issues — auth, input validation, secret handling, injection, data exposure.
 vendor: codex
-model: gpt-5.5
-effort: high
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
 ---
 

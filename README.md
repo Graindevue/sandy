@@ -28,6 +28,9 @@ Reviews and Agent Runs share a dedicated Codex login and are serialized to
 preserve its rotating refresh token. Each Agent uses one `codex exec --json`
 invocation, with at most one resume to finish the structured Findings response.
 This uses ChatGPT plan quota; GitHub Actions compute remains a separate cost.
+Default `logic`, `security`, and conditional `convex` reviewers use
+`gpt-6.1-sol` with `xhigh` effort. Optional shipped personas use the same model
+and effort when enabled.
 
 Cross-repo review reads actual sibling source pinned to each Repo's default
 branch. The manifest identifies contracts worth searching; Findings cite

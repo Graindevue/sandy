@@ -142,4 +142,4 @@ jobs:
           config-path: ${{ vars.SANDY_CONFIG_PATH }}
           product-slug: ${{ vars.SANDY_PRODUCT_SLUG }}
           product-name: ${{ vars.SANDY_PRODUCT_NAME }}
-          model: ${{ vars.SANDY_MODEL || 'gpt-5.5' }}
+          model: ${{ vars.SANDY_MODEL || 'gpt-6.1-sol' }}

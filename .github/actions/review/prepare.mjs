@@ -58,7 +58,7 @@ if (env.SANDY_INPUT_CONFIG_PATH) {
   }
   await copyFile(source, configPath);
 } else {
-  const model = env.SANDY_INPUT_MODEL?.trim() || 'gpt-5.5';
+  const model = env.SANDY_INPUT_MODEL?.trim() || 'gpt-6.1-sol';
   const slug = env.SANDY_INPUT_PRODUCT_SLUG?.trim() || repository.name.toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
     throw new Error('product-slug must contain only lowercase letters, numbers and hyphens');
@@ -84,8 +84,8 @@ if (env.SANDY_INPUT_CONFIG_PATH) {
               enable: ['logic', 'security', 'convex'],
               overrides: {
                 logic: runtime('xhigh'),
-                security: runtime('high'),
-                convex: runtime('high'),
+                security: runtime('xhigh'),
+                convex: runtime('xhigh'),
               },
             },
           },

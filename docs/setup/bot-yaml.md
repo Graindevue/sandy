@@ -26,16 +26,16 @@ products:
       overrides:
         logic:
           vendor: codex
-          model: gpt-5.5
+          model: gpt-6.1-sol
           effort: xhigh
         security:
           vendor: codex
-          model: gpt-5.5
-          effort: high
+          model: gpt-6.1-sol
+          effort: xhigh
         convex:
           vendor: codex
-          model: gpt-5.5
-          effort: high
+          model: gpt-6.1-sol
+          effort: xhigh
 ```
 
 Product `slug` is a stable identity used in Convex: keep it lowercase and avoid
@@ -51,12 +51,12 @@ standalone `@sandy`. It does not restrict those requests.
 
 Keys are filenames without `.md` in `agents/` and `.config/agents/`.
 The current generated Actions configuration uses `logic`, `security`, and
-conditional `convex`. The Convex persona runs only when the reviewed diff
-touches a `convex/` directory. When dependencies install and a project test script
-is available, Sandy runs the suite once and includes its result in reviewer
-context; a separate coverage persona is not part of the generated
-selection. Next.js, style, and other legacy personas remain available for
-explicit custom selection.
+conditional `convex`, all on `gpt-6.1-sol` with `xhigh` effort. The Convex persona
+runs only when the reviewed diff touches a `convex/` directory. When dependencies
+install and a project test script is available, Sandy runs the suite once and
+includes its result in reviewer context; a separate coverage persona is not part
+of the generated selection. Next.js, style, and other optional shipped personas
+use the same model and effort when explicitly selected.
 
 List form chooses an exact set:
 
@@ -70,8 +70,8 @@ Object form adds runtime overrides:
 agents:
   enable: [logic, security]
   overrides:
-    logic: { vendor: codex, model: gpt-5.5, effort: xhigh }
-    security: { vendor: codex, model: gpt-5.5, effort: high }
+    logic: { vendor: codex, model: gpt-6.1-sol, effort: xhigh }
+    security: { vendor: codex, model: gpt-6.1-sol, effort: xhigh }
 ```
 
 Without an exact set, Sandy considers each persona's `defaultEnabled` value:
@@ -83,7 +83,7 @@ change the operator's runtime selection or expand an exact Product set.
 
 The Actions runner supports **`vendor: codex`**. Existing non-Codex config may
 parse for compatibility, but selected non-Codex personas cannot execute.
-Override every selected legacy persona to Codex or update its definition.
+Update older instance configuration or persona definitions to use Codex.
 
 An override replaces `vendor`, `model`, and optional `effort` together. Both
 vendor and model are required. Codex effort values are `low`, `medium`, `high`,

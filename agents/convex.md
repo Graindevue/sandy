@@ -2,8 +2,8 @@
 name: convex
 description: Reviews diffs in Convex-using codebases for installed-version query/mutation correctness, schema safety, auth at ownership layer, and performance.
 vendor: codex
-model: gpt-5.5
-effort: high
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
 defaultEnabled: auto
 ---

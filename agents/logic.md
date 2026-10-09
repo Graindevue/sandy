@@ -2,7 +2,7 @@
 name: logic
 description: Reviews diffs for logic bugs, broken invariants, and cross-file/cross-repo correctness issues.
 vendor: codex
-model: gpt-5.5
+model: gpt-6.1-sol
 effort: xhigh
 completionSignal: "</findings>"
 ---

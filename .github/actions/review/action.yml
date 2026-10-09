@@ -31,7 +31,7 @@ inputs:
     default: ''
   model:
     description: Codex model for the generated logic/security/conditional-convex agent configuration.
-    default: gpt-5.5
+    default: gpt-6.1-sol
 
 runs:
   using: composite
@@ -117,10 +117,14 @@ runs:
 
     - name: Warm up Codex and allow its built-in session refresh
       shell: bash
+      env:
+        SANDY_INPUT_MODEL: ${{ inputs.model }}
       working-directory: ${{ runner.temp }}
       run: >-
         timeout --signal=TERM --kill-after=30s 5m
         codex exec --json --skip-git-repo-check --sandbox read-only
+        --model "$SANDY_INPUT_MODEL"
+        -c model_reasoning_effort='"xhigh"'
         -c cli_auth_credentials_store='"file"'
         "Reply with the single word OK. Do not use tools." >/dev/null
 

@@ -2,8 +2,8 @@
 name: nextjs
 description: Reviews diffs in Next.js codebases for installed-version routing, caching, server action, and rendering correctness.
 vendor: codex
-model: gpt-5.5
-effort: high
+model: gpt-6.1-sol
+effort: xhigh
 completionSignal: "</findings>"
 defaultEnabled: false
 ---
