@@ -151,6 +151,12 @@ export interface ReviewDiffInspector {
 }
 
 export interface ReviewAgentRunner {
+  openReview?(input: {
+    worktreePath: string;
+    siblingWorktrees?: readonly RunnerSiblingWorktree[];
+    maxConcurrency: number;
+    signal?: AbortSignal;
+  }): Promise<ReviewAgentRuntime>;
   runAgent(input: {
     agent: AgentDefinition;
     worktreePath: string;
@@ -171,6 +177,16 @@ export interface ReviewAgentRunner {
     cacheKey?: string;
     signal?: AbortSignal;
   }): Promise<DependencyInstallResult>;
+}
+
+export interface ReviewAgentRuntime {
+  mode: 'serial' | 'parallel';
+  maxConcurrency: number;
+  runAgent(input: Parameters<ReviewAgentRunner['runAgent']>[0]): Promise<AgentRunResult>;
+  /** Aborted only for a fatal runtime failure; completed results remain usable. */
+  failureSignal?: AbortSignal;
+  /** Stop all child activity and drain final events before resolving. */
+  close(): Promise<void>;
 }
 
 type ReviewAgentRunInput = Parameters<ReviewAgentRunner['runAgent']>[0];
@@ -242,6 +258,7 @@ interface AgentExecutionInput {
   reviewBotConfig: ReviewBotContext;
   dependencyInstall: DependencyInstallResult | undefined;
   cancellationSignal: AbortSignal | undefined;
+  runtime?: ReviewAgentRuntime;
 }
 
 export interface ReviewPoster {
@@ -281,6 +298,7 @@ export interface ReviewExecutorOptions {
   signal?: AbortSignal;
   maxChangedLines?: number;
   agentTimeoutMs?: number;
+  maxAgentConcurrency?: number;
   now?: () => number;
   logger?: ReviewStatusCheckLogger;
 }
@@ -310,6 +328,7 @@ export class ReviewExecutor {
   readonly #signal: AbortSignal | undefined;
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
+  readonly #maxAgentConcurrency: number;
   readonly #now: () => number;
   readonly #logger: ReviewStatusCheckLogger;
 
@@ -328,6 +347,10 @@ export class ReviewExecutor {
     this.#signal = options.signal;
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
+    this.#maxAgentConcurrency = options.maxAgentConcurrency ?? 1;
+    if (!Number.isSafeInteger(this.#maxAgentConcurrency) || this.#maxAgentConcurrency < 1) {
+      throw new Error('Maximum Agent concurrency must be a positive safe integer');
+    }
     this.#now = options.now ?? Date.now;
     this.#logger = options.logger ?? console;
   }
@@ -447,6 +470,7 @@ export class ReviewExecutor {
         reviewBotConfig,
         dependencyInstall,
         cancellationSignal,
+        worktrees,
       });
       failedAgentCount = agentResults.failedAgentCount;
       let postedReview: PostedReviewResult | null = null;
@@ -597,23 +621,66 @@ export class ReviewExecutor {
     reviewBotConfig: ReviewBotContext;
     dependencyInstall: DependencyInstallResult | undefined;
     cancellationSignal: AbortSignal | undefined;
+    worktrees: ReviewWorktree[];
   }): Promise<SelectedAgentReviewResults> {
-    const outputs: AgentReviewOutput[] = [];
-    let failedAgentCount = 0;
-    // One managed Codex auth file belongs to one execution stream. Starting
-    // the timeout here also gives each Agent its full budget after the prior
-    // Agent has finished, rather than consuming it while waiting for auth.
-    for (const agent of input.agents) {
-      const result = await this.#runSelectedAgent({ ...input, agent });
-      if (result.status === 'failed') {
-        failedAgentCount += 1;
-        continue;
+    const runtime = await this.#runner.openReview?.({
+      worktreePath: input.workspace.prWorktree.path,
+      siblingWorktrees: input.workspace.siblingWorktrees,
+      maxConcurrency: this.#maxAgentConcurrency,
+      ...(input.cancellationSignal === undefined ? {} : { signal: input.cancellationSignal }),
+    });
+    const cap =
+      runtime === undefined ? 1 : Math.min(this.#maxAgentConcurrency, runtime.maxConcurrency);
+    const results: SelectedAgentReviewResult[] = [];
+    let next = 0;
+    try {
+      if (!Number.isSafeInteger(cap) || cap < 1)
+        throw new Error('Runtime returned an invalid concurrency cap');
+      if (cap > 1 && this.#cloneManager.materializeAgentWorkspace === undefined) {
+        throw new Error('Concurrent Agents require private writable workspaces');
       }
-      outputs.push(result.output);
+      this.#logProgress(
+        input.context.job.id,
+        `Execution mode: ${cap === 1 ? 'serial' : 'parallel'} (maximum ${cap} Agents).`,
+      );
+      const consume = async () => {
+        while (next < input.agents.length) {
+          const index = next++;
+          const agent = input.agents[index];
+          if (agent === undefined) return;
+          await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
+          let workspace = input.workspace;
+          if (runtime !== undefined && this.#cloneManager.materializeAgentWorkspace !== undefined) {
+            const startedAt = Date.now();
+            const prWorktree = await this.#cloneManager.materializeAgentWorkspace(
+              input.workspace.prWorktree,
+              agent.key,
+            );
+            input.worktrees.push(prWorktree);
+            workspace = { ...workspace, prWorktree };
+            this.#logProgress(
+              input.context.job.id,
+              `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
+            );
+          }
+          results[index] = await this.#runSelectedAgent({
+            ...input,
+            agent,
+            workspace,
+            ...(runtime === undefined ? {} : { runtime }),
+          });
+        }
+      };
+      const settled = await Promise.allSettled(
+        Array.from({ length: Math.min(cap, input.agents.length) }, consume),
+      );
+      for (const result of settled) if (result.status === 'rejected') throw result.reason;
+    } finally {
+      await runtime?.close();
     }
     return {
-      outputs,
-      failedAgentCount,
+      outputs: results.flatMap((result) => (result.status === 'completed' ? [result.output] : [])),
+      failedAgentCount: results.filter((result) => result.status === 'failed').length,
       selectedAgentCount: input.agents.length,
     };
   }
@@ -645,7 +712,12 @@ export class ReviewExecutor {
     let usage: AgentRunUsage | undefined;
 
     try {
-      const result = await this.#runAgentWithTimeout(runInput, agent.key, cancellationSignal);
+      const result = await this.#runAgentWithTimeout(
+        runInput,
+        agent.key,
+        cancellationSignal,
+        input.runtime,
+      );
       usage = result.usage;
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
       const payload = parseFindingsPayload(result.stdout);
@@ -679,6 +751,7 @@ export class ReviewExecutor {
     input: ReviewAgentRunInput,
     agentKey: string,
     parentSignal: AbortSignal | undefined,
+    runtime?: ReviewAgentRuntime,
   ): Promise<AgentRunResult> {
     parentSignal?.throwIfAborted();
 
@@ -709,7 +782,7 @@ export class ReviewExecutor {
 
     try {
       return await Promise.race([
-        this.#runner.runAgent({ ...input, signal: controller.signal }),
+        (runtime ?? this.#runner).runAgent({ ...input, signal: controller.signal }),
         timeoutPromise,
         parentAbortPromise,
       ]);
