@@ -16,6 +16,7 @@
     "review": "node ./dist/review-action.js"
   },
   "dependencies": {
+    "@actions/cache": "^4.1.0",
     "@sandy/convex-backend": "workspace:*",
     "@sandy/manifest-builder": "workspace:*",
     "@sandy/shared-types": "workspace:*",
