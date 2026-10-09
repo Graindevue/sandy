@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { type FileHandle, lstat, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import type { DependencyDownloadCacheMetrics } from './dependency-download-cache.js';
 
 /** JS package managers the review install step knows how to drive. */
 export type DetectedPackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun';
@@ -12,7 +13,7 @@ export interface DetectedDependencyInstall {
   command: string;
   /** Runtime command using the reviewed Repo's package-manager pin when present. */
   packageManagerCommand?: string;
-  /** Lockfile present in the worktree, when one exists — keys the node_modules seed cache. */
+  /** Reviewed lockfile, when present; download caches still require a verified manager pin. */
   lockfile?: string;
 }
 
@@ -27,6 +28,8 @@ export type DependencyInstallResult =
       packageManager: DetectedPackageManager;
       command: string;
       durationMs: number;
+      preparationDurationMs?: number;
+      cache?: DependencyDownloadCacheMetrics;
       /** Structured outcome; never inferred from reviewed stdout/stderr. */
       testStatus?: 'passed' | 'failed' | 'skipped' | 'deferred';
       /** Optional suite verification or an explicit deferral to CI and focused Agent tests. */
