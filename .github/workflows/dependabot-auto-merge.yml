@@ -1,0 +1,41 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_run:
+    workflows: [CI, Security]
+    types: [completed]
+  workflow_dispatch:
+
+# GitHub branch rules retain responsibility for checks, fresh approvals and
+# resolved review threads. This workflow never approves or bypasses them.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-auto-merge
+  cancel-in-progress: false
+
+jobs:
+  enable:
+    if: >-
+      github.event_name != 'pull_request_review' ||
+      (github.event.review.user.login == 'coderabbitai[bot]' &&
+       github.event.pull_request.user.login == 'dependabot[bot]' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      # Only trusted default-branch code runs with write access.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { enableDependabotAutoMerge } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/actions/dependabot-auto-merge.mjs`
+            );
+            await enableDependabotAutoMerge({ github, context, core });
