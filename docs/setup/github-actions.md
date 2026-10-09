@@ -2,8 +2,9 @@
 
 The caller workflow lives in the reviewed repository. It checks out a trusted
 Sandy commit and invokes [.github/actions/review/action.yml](../../.github/actions/review/action.yml).
-The canonical source is private `Graindevue/sandy`; source checkout uses
-explicit read access rather than the caller's automatic token.
+The canonical source is `Graindevue/sandy`. Private source deployments require
+explicit read access rather than the caller's automatic token. The supplied
+production template retains this explicit source-access path.
 
 ## 1. Prepare access and the environment
 

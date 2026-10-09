@@ -23,7 +23,8 @@ directly and retaining Convex Cloud for durable state.
 
 The caller checks out trusted Sandy code and runs its composite action. The
 initial cross-owner setup used private `tony-co/sandy`; the canonical source is
-now private `Graindevue/sandy`, preserving the original history. The caller
+`Graindevue/sandy`, preserving the original history. Its source is currently
+public; ChatGPT-managed automation remains confined to private caller Repos. The caller
 checks out an audited Sandy commit with explicit read access and invokes the
 local composite rather than a private cross-owner reusable workflow.
 
@@ -114,6 +115,13 @@ but environment secrets when its job starts; queued Reviews must receive the
 auth refreshed by the preceding Review. The App therefore needs repository
 **Environments: read & write** for secret write-back. Every workflow sharing
 this auth stream must use the same environment and serialization policy.
+
+The isolated issue #4 benchmark uses a different dedicated login in
+`Graindevue/graindevue` environment `sandy-codex-test`, with whole-job lock
+`sandy-codex-test-session`. It never copies the production login. Its manual
+workflow runs pinned disposable fixtures without Convex or PR posting and
+persists the test session even when measurements fail. This does not enable
+parallel production reviews. See [benchmark setup](../setup/review-benchmark.md).
 
 ## Retained and retired behavior
 

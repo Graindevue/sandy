@@ -71,7 +71,8 @@ deployment, trusted Product config, caller workflow, and dedicated CI login.
 The login is separate from your interactive Codex credentials. Auth is stored
 in the `sandy-codex` GitHub environment and written back after every run.
 
-The canonical source is the private `Graindevue/sandy` repository. The caller
+The canonical source is `Graindevue/sandy`. ChatGPT-managed CI credentials
+belong only in private caller repositories. The caller
 checks out an audited Sandy commit with explicit read access and invokes the
 checked-out composite action at `.github/actions/review`. The original
 `tony-co/sandy` repository retains its history. The caller workflow and setup
