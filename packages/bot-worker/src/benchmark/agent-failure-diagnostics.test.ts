@@ -4,6 +4,53 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { createDedicatedBenchmarkDiagnostics } from './agent-failure-diagnostics.js';
 
+it('withholds entities, controls, non-ASCII and unsupported syntax while retaining ordinary native prose', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'sandy-diagnostic-prose-'));
+  try {
+    await writeFile(
+      join(home, 'auth.json'),
+      JSON.stringify({
+        tokens: {
+          access_token: 'seedlogin',
+          refresh_token: 'seedlogin',
+          id_token: 'seedlogin',
+        },
+      }),
+    );
+    const diagnostics = await createDedicatedBenchmarkDiagnostics(home);
+    for (const message of [
+      '&#115;&#101;&#101;&#100;&#108;&#111;&#103;&#105;&#110;',
+      '&#x73;&#x65;&#x65;&#x64;&#x6c;&#x6f;&#x67;&#x69;&#x6e;',
+      '&amp;seedlogin',
+      'native\nerror',
+      'native\tError',
+      'native\u200berror',
+      'native erreur é',
+      'native <error>',
+      'native {error}',
+      'native [115,101]',
+      'native a=b',
+      'native a+b',
+      'native a/b',
+      'native person@short.test',
+    ])
+      expect(await diagnostics.describe(new Error(message, { cause: message }))).toEqual({
+        messageLength: message.length,
+        excerpt: null,
+        detailsLength: message.length,
+        detailsExcerpt: null,
+      });
+    expect(
+      await diagnostics.describe(new Error('Native request failed: no tool output for this call.')),
+    ).toEqual({
+      messageLength: 52,
+      excerpt: 'Native request failed: no tool output for this call.',
+    });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 it('withholds recoverable uppercase, mixed and nested encoded credentials in message and details', async () => {
   const home = await mkdtemp(join(tmpdir(), 'sandy-diagnostic-escape-'));
   const credential = 'KnownLoginAa2bb3CC456';
@@ -98,7 +145,7 @@ it('withholds oversized or unverifiable details and redacts unknown authenticati
     );
     const diagnostics = await createDedicatedBenchmarkDiagnostics(home);
     const unsafe =
-      'Bearer tiny Authorization: "Basic tiny-two" eyAbCd.eyEfGh.signature https://short.test/a person@short.test UnknownOpaque123456 acct-inner';
+      'Bearer tiny Authorization: "Basic tiny-two" eyAbCd.eyEfGh.signature UnknownOpaque123456 acct-inner';
     const result = await diagnostics.describe(new Error(`Reason: ${unsafe}`));
     expect(result.excerpt).toContain('Reason:');
     for (const value of ['tiny', 'eyAbCd', 'short.test', 'UnknownOpaque123456', 'acct-inner'])
@@ -130,8 +177,8 @@ it('withholds oversized or unverifiable details and redacts unknown authenticati
 
 it('redacts seed, rotated and current authentication before bounding native failure excerpts', async () => {
   const home = await mkdtemp(join(tmpdir(), 'sandy-diagnostic-auth-'));
-  const credentials = ['seed$secret/one', 'rotated$secret/two', 'current$secret/three'];
-  const account = 'acct-short';
+  const credentials = ['seedlogin', 'rotalogin', 'currlogin'];
+  const account = 'acctlogin';
   const variants = (value: string) => [
     value,
     JSON.stringify(value).slice(1, -1),
@@ -162,7 +209,7 @@ it('redacts seed, rotated and current authentication before bounding native fail
     const boundary = new Error(`${'short '.repeat(169)}${credentials[0]} final`);
     const bounded = await diagnostics.describe(boundary);
     expect(bounded.excerpt?.length).toBeLessThanOrEqual(1024);
-    expect(bounded.excerpt).not.toContain('seed$');
+    expect(bounded.excerpt).not.toContain('seedlo');
     expect(bounded.excerpt).toContain('[REDACTED]');
   } finally {
     await rm(home, { recursive: true, force: true });

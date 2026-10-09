@@ -143,9 +143,9 @@ describe('buildBenchmarkReport', () => {
           join(home, 'auth.json'),
           JSON.stringify({
             tokens: {
-              access_token: 'seed$secret',
-              refresh_token: 'seed$refresh',
-              id_token: 'seed$id',
+              access_token: 'seedlogin',
+              refresh_token: 'seedrefresh',
+              id_token: 'seedid',
               account_id: 'acct-short',
             },
           }),
@@ -169,7 +169,7 @@ const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');let next=0;
 require('node:readline').createInterface({input:process.stdin}).on('line',async line=>{
  const {id,method,params}=JSON.parse(line);const reply=result=>send({id,result});
  if(method==='initialize'){
-  const authPath=path.join(process.env.CODEX_HOME,'auth.json');if(fs.existsSync(authPath)){const auth=JSON.parse(fs.readFileSync(authPath,'utf8'));auth.tokens.access_token='rotated$secret';fs.writeFileSync(authPath,JSON.stringify(auth));}
+  const authPath=path.join(process.env.CODEX_HOME,'auth.json');if(fs.existsSync(authPath)){const auth=JSON.parse(fs.readFileSync(authPath,'utf8'));auth.tokens.access_token='rotalogin';fs.writeFileSync(authPath,JSON.stringify(auth));}
   reply({userAgent:'fixture'});
  }
  if(method==='thread/start')reply({thread:{id:'thread-'+ ++next},cwd:params.cwd,runtimeWorkspaceRoots:params.runtimeWorkspaceRoots,approvalPolicy:'never',activePermissionProfile:{id:'sandy'}});
@@ -183,7 +183,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
    const total={inputTokens:usage.input_tokens,cachedInputTokens:usage.input_tokens_details.cached_tokens,cacheWriteInputTokens:0,outputTokens:usage.output_tokens};
    send({method:'thread/tokenUsage/updated',params:{threadId:params.threadId,turnId,tokenUsage:{total,last:total}}});
    send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'completed',items:[{type:'agentMessage',text}]}}});
-  }else send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'failed',error:{message:'Native fault seed$secret rotated$secret brief reason',additionalDetails:'Native detail seed$id acct-short',codexErrorInfo:'other'},items:[]}}});
+  }else send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'failed',error:{message:'Native fault seedlogin rotalogin brief reason',additionalDetails:'Native detail seedid acct-short',codexErrorInfo:'other'},items:[]}}});
  }
 });
 `,
@@ -226,12 +226,12 @@ require('node:readline').createInterface({input:process.stdin}).on('line',async 
         ).toBe(true);
         expect(captured).not.toContain('PRIVATE_FAILURE_SENTINEL');
         expect(result.samples[0].agents[0].diagnostic).toMatchObject({
-          messageLength: 52,
+          messageLength: 45,
           excerpt: 'Native fault [REDACTED] [REDACTED] brief reason',
-          detailsLength: 32,
+          detailsLength: 31,
           detailsExcerpt: 'Native detail [REDACTED] [REDACTED]',
         });
-        for (const credential of ['seed$secret', 'rotated$secret', 'seed$id', 'acct-short'])
+        for (const credential of ['seedlogin', 'rotalogin', 'seedid', 'acct-short'])
           expect(captured).not.toContain(credential);
       } finally {
         await rm(root, { recursive: true, force: true });
