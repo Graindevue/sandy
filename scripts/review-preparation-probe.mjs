@@ -16,6 +16,64 @@ const { CodexAppServerRunner } = await import(
   join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
 );
 
+async function denyMaskCases(executable, root, environment) {
+  const directory = join(root, 'command-files');
+  const child = join(directory, 'environment');
+  await mkdir(directory);
+  await writeFile(child, 'DISPOSABLE_COMMAND_CANARY');
+  const script = `
+    const fs = require('node:fs');
+    for (const operation of [() => fs.readFileSync(process.argv[1]), () => fs.writeFileSync(process.argv[1], 'changed')]) {
+      let denied = false;
+      try { operation(); } catch { denied = true; }
+      if (!denied) throw new Error('Command canary exposed');
+    }
+  `;
+  const cases = [];
+  for (const [name, paths] of [
+    ['parent-and-child', [directory, child]],
+    ['parent-only', [directory]],
+    ['child-only', [child]],
+  ]) {
+    const filesystem = [
+      ...(process.platform === 'linux'
+        ? ['":minimal"="read"', '"/opt"="read"']
+        : ['":root"="read"']),
+      `${JSON.stringify(root)}="write"`,
+      ...paths.map((path) => `${JSON.stringify(path)}="deny"`),
+    ];
+    try {
+      await exec(
+        executable,
+        [
+          'sandbox',
+          '--permission-profile',
+          'sandy',
+          '--cd',
+          root,
+          '-c',
+          `permissions.sandy={filesystem={${filesystem.join(',')}},network={enabled=false}}`,
+          '--',
+          'node',
+          '-e',
+          script,
+          child,
+        ],
+        { env: environment, timeout: 10_000, maxBuffer: 16_000 },
+      );
+      cases.push({ name, status: 'launched-and-denied' });
+    } catch (error) {
+      cases.push({
+        name,
+        status: 'failed',
+        error: String(error.stderr ?? error.message).slice(0, 2000),
+      });
+    }
+    assert.equal(await readFile(child, 'utf8'), 'DISPOSABLE_COMMAND_CANARY');
+  }
+  return cases;
+}
+
 /** Reproduce benchmark priming through the shipped adapter, without login or model requests. */
 export async function runPreparationProbe(executable = 'codex', outputPath) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'sandy-primer-probe-')));
@@ -37,6 +95,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
       await exec(executable, ['--version'], { env: environment, timeout: 10_000 })
     ).stdout.trim();
     assert.equal(version, 'codex-cli 0.162.0', 'Use the exact deployed Codex pin');
+    const denyCases = await denyMaskCases(executable, authRoot, environment);
     suite = await prepareBenchmarkFixtures(root);
     const fixture = suite.fixtures.find((fixture) => fixture.id === 'defects');
     assert.ok(fixture);
@@ -138,6 +197,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
         node: process.version,
         codexVersion: version,
         packageManager: fixture.packageManager,
+        denyCases,
         outcomes,
         phases,
       };
