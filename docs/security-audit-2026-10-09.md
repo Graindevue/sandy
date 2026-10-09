@@ -18,6 +18,8 @@ The fixes are prepared from public `main` at `c1eaf919e7f0704335516c579f35ea5959
 
 Reviewable changes are in [Sandy PR #7](https://github.com/Graindevue/sandy/pull/7) and [the caller's OIDC permission PR #739](https://github.com/Graindevue/graindevue/pull/739), both targeting `staging`. The caller change adds job-scoped `id-token: write`; it does not update the active Sandy source pin. The maintainer-reviewed release required by `AGENTS.md` remains the activation gate. No backend code has been redeployed and the current caller still uses the audited source revision, so the live F1/F2 vulnerabilities remain until the coordinated rollout.
 
+Both implementation PRs are now merged into `staging`. The production release PRs are [Sandy #8](https://github.com/Graindevue/sandy/pull/8) and [caller #740](https://github.com/Graindevue/graindevue/pull/740). The caller's Greptile gate was explicitly waived by the maintainer for the five-line permission change; its CI passed before merge.
+
 Deployment discovery found **40 public functions on the linked development deployment**, whose URL matches the local worker configuration. The project's production deployment has no functions. Do not blindly deploy with `--prod`: first confirm which endpoint the caller's encrypted `CONVEX_URL` actually selects. Deployment identifiers and URLs are intentionally omitted here.
 
 A read-only review of 500 recent backend execution records covered 2026-10-08 23:30 UTC through 2026-10-09 12:33 UTC. All were successful executions of known Sandy functions, including internal crons. Every record reported an unknown identity, so these records cannot establish caller legitimacy or rule out prior unauthorized access. No private payloads or credentials are included in this report.
@@ -27,10 +29,12 @@ F5 privacy/history changes are outside the requested high, medium, dependency an
 Remediation validation:
 
 - Lint, type checks and the worker/shared-types/manifest TypeScript builds pass.
-- **393 Vitest tests** and **17 Actions/scanner tests** pass locally. Two native Linux tests are skipped on macOS. All four Ubuntu CI checks pass, including actual execution of the hostile credential-fixture probe through the native sandbox and its never-skip gate. Fresh-checkout CI also verifies tests without prebuilt local package output.
+- **393 Vitest tests** and **18 Actions/scanner tests** pass locally. Two native Linux tests are skipped on macOS. All four Ubuntu CI checks pass, including actual execution of the hostile credential-fixture probe through the native sandbox and its never-skip gate. Fresh-checkout CI also verifies tests without prebuilt local package output.
 - Both full and production `pnpm audit` report **zero advisories**.
 - An isolated Convex push regenerated the committed types. Actual HTTP calls verified anonymous denial, authorized reads and writes, and rejection of wrong audience, expired or invalid signatures, repository/workflow/environment mismatches, wrong events and retries. Signed test tokens used a disposable local JWKS, then the real GitHub provider was restored and pushed again. No production data was used.
 - Staged files and all locally fetched history pass completely redacted Gitleaks scans.
+
+During release preparation, full-history CI detected two new generic-key matches in `scripts/review-benchmark.mjs` on the separate performance branch. Review traced both to fixed dependency-install cache identifiers, with no authentication use. The two `.gitleaksignore` entries bind only those matches to commit `80e4ed10ae0084544b610c0a1e918a367ca314cf`, file, rule and line. They do not exclude any path, rule or future commit. A scanner regression verifies that a later credential at the same file and line is still rejected and redacted.
 
 For activation, first confirm the caller's encrypted `CONVEX_URL`, let active reviews finish, release both reviewed changes, and coordinate the authenticated backend deployment with the caller's new immutable Sandy source pin. Verify anonymous HTTP rejection and one authorized review against the actual endpoint before considering F1/F2 closed in operation.
 
