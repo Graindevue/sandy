@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
@@ -55,6 +58,62 @@ describe('buildBenchmarkReport', () => {
       ),
     ).rejects.toThrow('Explicit --ci-home is required');
   });
+
+  it('retains scoped priming failure evidence without raw preparation logs or model execution', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sandy-benchmark-primer-test-'));
+    try {
+      const home = join(root, 'auth');
+      await mkdir(home);
+      await writeFile(join(home, 'auth.json'), '{}');
+      const executable = join(root, 'codex');
+      await writeFile(
+        executable,
+        `#!/usr/bin/env node
+        if (process.argv[2] === '--version') { console.log('codex-cli 0.162.0'); process.exit(0); }
+        if (process.argv[2] !== 'sandbox') throw new Error('Model runtime must not start');
+        process.stderr.write('bwrap: Read-only file system SENSITIVE_DIAGNOSTIC_SENTINEL');
+        process.exit(1);
+      `,
+      );
+      await chmod(executable, 0o755);
+      const output = join(root, 'results.json');
+      await expect(
+        promisify(execFile)(
+          process.execPath,
+          [
+            'scripts/review-benchmark.mjs',
+            'run',
+            '--ci-home',
+            home,
+            '--codex',
+            executable,
+            '--out',
+            output,
+            '--cases',
+            'defects',
+            '--timeout-minutes',
+            '1',
+          ],
+          { env: { PATH: process.env.PATH, HOME: root }, timeout: 20_000 },
+        ),
+      ).rejects.toThrow('Controlled warm-cache priming failed');
+      const journal = await readFile(`${output}.jsonl`, 'utf8');
+      expect(journal).not.toContain('SENSITIVE_DIAGNOSTIC_SENTINEL');
+      const records = journal
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(records).toContainEqual({
+        priming: expect.objectContaining({
+          status: 'failed',
+          failure: { stage: 'sandbox-startup', code: 'EROFS' },
+          downloads: { requests: 0, bytes: 0 },
+        }),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 25_000);
 
   it('keeps absent usage unknown and summarizes observed phase durations', () => {
     const report = buildBenchmarkReport({

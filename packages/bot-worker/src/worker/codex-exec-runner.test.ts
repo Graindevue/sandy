@@ -505,6 +505,58 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
 
 describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => {
   it.each([
+    false,
+    true,
+  ])('starts preparation with a protected directory while retaining child protection after a workspace grant (symlink: %s)', async (aliased) => {
+    const f = await fixture(`
+      const path = await import('node:path');
+      const profile = process.argv.find(value => value.startsWith('permissions.sandy='));
+      const cwd = process.argv[process.argv.indexOf('--cd') + 1];
+      const root = path.resolve(cwd, '..', '..');
+      const commandFiles = path.join(root, 'command-files');
+      const child = path.join(commandFiles, 'environment');
+      const deny = value => profile?.includes(JSON.stringify(value)+'="deny"');
+      if (!deny(commandFiles)) throw new Error('Command directory protection lost');
+      if (deny(child)) throw new Error('bwrap cannot create a child mask beneath a frozen denied directory');
+      if (!deny(path.join(root, 'workspaces', 'repo', 'private.key'))) throw new Error('Workspace grant reopened a protected child');
+    `);
+    const privateParent = join(f.root, 'workspaces');
+    f.input.worktreePath = join(privateParent, 'repo');
+    await exec(
+      'git',
+      ['worktree', 'add', '--detach', f.input.worktreePath, f.input.pullRequest.headSha],
+      { cwd: join(f.root, 'repo') },
+    );
+    const commandFiles = join(f.root, 'command-files');
+    await mkdir(commandFiles);
+    await writeFile(join(commandFiles, 'environment'), 'DISPOSABLE_COMMAND_CANARY');
+    await writeFile(join(f.input.worktreePath, 'private.key'), 'DISPOSABLE_PRIVATE_CANARY');
+    await writeFile(
+      join(f.input.worktreePath, 'package.json'),
+      JSON.stringify({ packageManager: 'npm@11.19.0' }),
+    );
+    await writeFile(join(f.input.worktreePath, 'package-lock.json'), '{}');
+    if (aliased) {
+      const alias = join(f.root, 'workspaces-alias');
+      await symlink(privateParent, alias);
+      f.input.worktreePath = join(alias, 'repo');
+    }
+    const runner = new CodexExecRunner({
+      codexHome: f.codexHome,
+      executable: f.executable,
+      protectedPaths: [
+        privateParent,
+        commandFiles,
+        join(commandFiles, 'environment'),
+        join(privateParent, 'repo', 'private.key'),
+      ],
+    });
+    const result = await runner.installDependencies({ worktreePath: f.input.worktreePath });
+    if (result.status === 'failed') throw new Error(result.error.slice(0, 2000));
+    expect(result).toMatchObject({ status: 'installed' });
+  });
+
+  it.each([
     undefined,
     'turbo run test && pnpm test:sandcastle',
   ])('installs dependencies without running the full suite by default (test script: %s)', async (test) => {

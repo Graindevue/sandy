@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -119,6 +119,42 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it('retains logical and physical protected paths for native symlink validation', async () => {
+    const f = await executable('');
+    const w = await workspaces(f.root);
+    const target = join(f.root, 'protected-target');
+    const alias = join(f.root, 'protected-alias');
+    await mkdir(target);
+    await symlink(target, alias);
+    const protectedPaths = [alias, await realpath(target)];
+    await writeFile(
+      f.path,
+      `#!/usr/bin/env node\n${protocolFixture.replace(
+        "if (method === 'thread/start') reply(id,",
+        `if (method === 'thread/start' && !${JSON.stringify(protectedPaths)}.every(path => params.config['permissions.sandy'].filesystem[path] === 'deny')) throw new Error('Native symlink protection was removed');
+      if (method === 'thread/start') reply(id,`,
+      )}`,
+    );
+    const runner = new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+      protectedPaths: [alias],
+    });
+    const runtime = await runner.openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const results = await Promise.all(w.inputs.map((input) => runtime.runAgent(input)));
+      expect(results).toHaveLength(2);
+      expect(results.every((result) => result.stdout.includes('<findings>'))).toBe(true);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('keeps the prepared seed and peer workspaces protected in serial rollback', async () => {
     const f = await executable('');
     const w = await workspaces(f.root);
