@@ -154,6 +154,7 @@ export interface ReviewAgentRunner {
   openReview?(input: {
     worktreePath: string;
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
+    privateWorkspacePaths?: readonly string[];
     maxConcurrency: number;
     signal?: AbortSignal;
   }): Promise<ReviewAgentRuntime>;
@@ -639,15 +640,60 @@ export class ReviewExecutor {
       input.cancellationSignal === undefined
         ? cancellation.signal
         : AbortSignal.any([input.cancellationSignal, cancellation.signal]);
+    const results: SelectedAgentReviewResult[] = [];
+    const privateWorkspaces = new Map<number, ReviewWorktree>();
+    const failBeforeStart = async (index: number, agent: AgentDefinition, error: string) => {
+      const timestamp = this.#now();
+      await this.#store.recordAgentRun({
+        reviewJobId: input.context.job.id,
+        agentKey: agent.key,
+        status: 'failed',
+        findingCount: 0,
+        startedAt: timestamp,
+        finishedAt: timestamp,
+        error,
+      });
+      results[index] = { status: 'failed' };
+    };
+    // The runtime needs every peer root before it can construct safe deny rules.
+    // Snapshot from the quiescent seed; investigation budgets start later.
+    if (
+      this.#runner.openReview !== undefined &&
+      this.#cloneManager.materializeAgentWorkspace !== undefined
+    ) {
+      for (const [index, agent] of input.agents.entries()) {
+        await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+        const startedAt = Date.now();
+        try {
+          const worktree = await this.#cloneManager.materializeAgentWorkspace(
+            input.workspace.prWorktree,
+            agent.key,
+          );
+          input.worktrees.push(worktree);
+          privateWorkspaces.set(index, worktree);
+          this.#logProgress(
+            input.context.job.id,
+            `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
+          );
+        } catch (error) {
+          await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+          await failBeforeStart(
+            index,
+            agent,
+            `Agent workspace could not be prepared: ${describeError(error)}`,
+          );
+        }
+      }
+    }
     const runtime = await this.#runner.openReview?.({
       worktreePath: input.workspace.prWorktree.path,
       siblingWorktrees: input.workspace.siblingWorktrees,
+      privateWorkspacePaths: [...privateWorkspaces.values()].map((worktree) => worktree.path),
       maxConcurrency: this.#maxAgentConcurrency,
       signal,
     });
     const cap =
       runtime === undefined ? 1 : Math.min(this.#maxAgentConcurrency, runtime.maxConcurrency);
-    const results: SelectedAgentReviewResult[] = [];
     let next = 0;
     let teardownError: unknown;
     let checking: Promise<void> | undefined;
@@ -678,38 +724,20 @@ export class ReviewExecutor {
             const index = next++;
             const agent = input.agents[index];
             if (agent === undefined) return;
+            if (results[index] !== undefined) continue;
             await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
             if (runtime?.failureSignal?.aborted) {
-              const timestamp = this.#now();
-              await this.#store.recordAgentRun({
-                reviewJobId: input.context.job.id,
-                agentKey: agent.key,
-                status: 'failed',
-                findingCount: 0,
-                startedAt: timestamp,
-                finishedAt: timestamp,
-                error: `Agent was not started because the Review runtime failed: ${describeError(runtime.failureSignal.reason)}`,
-              });
-              results[index] = { status: 'failed' };
+              await failBeforeStart(
+                index,
+                agent,
+                `Agent was not started because the Review runtime failed: ${describeError(runtime.failureSignal.reason)}`,
+              );
               continue;
             }
-            let workspace = input.workspace;
-            if (
-              runtime !== undefined &&
-              this.#cloneManager.materializeAgentWorkspace !== undefined
-            ) {
-              const startedAt = Date.now();
-              const prWorktree = await this.#cloneManager.materializeAgentWorkspace(
-                input.workspace.prWorktree,
-                agent.key,
-              );
-              input.worktrees.push(prWorktree);
-              workspace = { ...workspace, prWorktree };
-              this.#logProgress(
-                input.context.job.id,
-                `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
-              );
-            }
+            const workspace = {
+              ...input.workspace,
+              prWorktree: privateWorkspaces.get(index) ?? input.workspace.prWorktree,
+            };
             results[index] = await this.#runSelectedAgent({
               ...input,
               cancellationSignal: signal,

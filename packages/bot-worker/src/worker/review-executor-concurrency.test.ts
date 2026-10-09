@@ -189,7 +189,7 @@ describe('claimed ReviewJob concurrency', () => {
     }
     expect(fixture.poster.results).toEqual([]);
     expect(fixture.store.status).toBe('failed');
-    expect(fixture.clones.removed).toHaveLength(2);
+    expect(fixture.clones.removed).toHaveLength(3);
   });
 
   it('bounds fan-out and gives queued Agents a full timeout budget after admission', async () => {
@@ -197,7 +197,7 @@ describe('claimed ReviewJob concurrency', () => {
     const firstStarted = deferred<void>();
     const secondStarted = deferred<void>();
     const thirdStarted = deferred<void>();
-    const admitSecond = deferred<void>();
+    const finishSecond = deferred<void>();
     const finish = deferred<void>();
     const starts: string[] = [];
     const signals = new Map<string, AbortSignal | undefined>();
@@ -216,31 +216,27 @@ describe('claimed ReviewJob concurrency', () => {
           );
         } else {
           (agent.key === 'security' ? secondStarted : thirdStarted).resolve();
-          await finish.promise;
+          await (agent.key === 'security' ? finishSecond.promise : finish.promise);
         }
         return runnerOutput(findingsOutput([]));
       },
     });
-    const materialize = fixture.clones.materializeAgentWorkspace;
-    fixture.clones.materializeAgentWorkspace = async (seed, key) => {
-      if (key === 'security') await admitSecond.promise;
-      return materialize(seed, key);
-    };
     const reviewing = fixture.executor.executeClaimedJob('job-1');
     try {
       await firstStarted.promise;
-      await vi.advanceTimersByTimeAsync(60);
-      admitSecond.resolve();
       await secondStarted.promise;
       expect(starts).toEqual(['logic', 'security']);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(60);
+      finishSecond.resolve();
       await thirdStarted.promise;
+      await vi.advanceTimersByTimeAsync(50);
       expect(starts).toEqual(['logic', 'security', 'custom']);
-      expect(signals.get('security')?.aborted).toBe(false);
       expect(signals.get('custom')?.aborted).toBe(false);
-      expect(fixture.store.agentRuns).toMatchObject([{ agentKey: 'logic', status: 'timed_out' }]);
+      expect(fixture.store.agentRuns.find((run) => run.agentKey === 'logic')?.status).toBe(
+        'timed_out',
+      );
     } finally {
-      admitSecond.resolve();
+      finishSecond.resolve();
       finish.resolve();
       await reviewing;
       vi.useRealTimers();
@@ -283,7 +279,7 @@ describe('claimed ReviewJob concurrency', () => {
     }
     expect(fixture.poster.results).toEqual([]);
     expect(fixture.store.status).toBe('superseded');
-    expect(fixture.clones.removed).toHaveLength(2);
+    expect(fixture.clones.removed).toHaveLength(3);
   });
 
   it('records authoritative usage on failed Agents without borrowing successful peer usage', async () => {
@@ -316,6 +312,21 @@ describe('claimed ReviewJob concurrency', () => {
     expect(fixture.store.status).toBe('failed');
     expect(fixture.store.failed[0]?.error).toContain('runtime shutdown');
   });
+
+  it('provides the complete private workspace inventory before any runtime thread can start', async () => {
+    let inventory: readonly string[] | undefined;
+    const fixture = managedReview({
+      onOpen: (paths) => {
+        inventory = paths;
+      },
+      runAgent: async () => runnerOutput(findingsOutput([])),
+    });
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(inventory).toEqual([
+      '/tmp/worktree/acme/widget/job-1-logic',
+      '/tmp/worktree/acme/widget/job-1-security',
+    ]);
+  });
 });
 
 function managedReview(options: {
@@ -326,6 +337,7 @@ function managedReview(options: {
   close?: () => Promise<void>;
   runAgent: ReviewAgentRuntime['runAgent'];
   agentTimeoutMs?: number;
+  onOpen?: (paths: readonly string[] | undefined) => void;
 }) {
   const agents = options.agents ?? [logicAgent, securityAgent];
   const store = new FakeExecutionStore(
@@ -351,13 +363,16 @@ function managedReview(options: {
       runAgent: async () => {
         throw new Error('legacy runner must not be used');
       },
-      openReview: async () => ({
-        mode: (options.cap ?? 2) === 1 ? 'serial' : 'parallel',
-        maxConcurrency: options.cap ?? 2,
-        ...(options.failureSignal === undefined ? {} : { failureSignal: options.failureSignal }),
-        runAgent: options.runAgent,
-        close: options.close ?? (async () => {}),
-      }),
+      openReview: async ({ privateWorkspacePaths }) => {
+        options.onOpen?.(privateWorkspacePaths);
+        return {
+          mode: (options.cap ?? 2) === 1 ? 'serial' : 'parallel',
+          maxConcurrency: options.cap ?? 2,
+          ...(options.failureSignal === undefined ? {} : { failureSignal: options.failureSignal }),
+          runAgent: options.runAgent,
+          close: options.close ?? (async () => {}),
+        };
+      },
     },
     resolveAgents: () => agents,
     resolveAgent: () => logicAgent,
