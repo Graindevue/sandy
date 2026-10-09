@@ -67,14 +67,15 @@ describe('Convex service authorization', () => {
     }
   });
 
-  it.each(publicFunctions)('rejects anonymous calls to $name before private state', async ({
-    fn,
-  }) => {
-    const ctx = context(null);
-    await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
-    expect(ctx.auth.getUserIdentity).toHaveBeenCalledOnce();
-    expect(ctx.touched).not.toHaveBeenCalled();
-  });
+  it.each(publicFunctions)(
+    'rejects anonymous calls to $name before private state',
+    async ({ fn }) => {
+      const ctx = context(null);
+      await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
+      expect(ctx.auth.getUserIdentity).toHaveBeenCalledOnce();
+      expect(ctx.touched).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { issuer: 'https://attacker.example' },
@@ -89,26 +90,28 @@ describe('Convex service authorization', () => {
     { event_name: 'workflow_dispatch' },
     { run_attempt: '2' },
     { run_attempt: 1 },
-  ])('rejects a verified token with the wrong trust claim %j across all functions', async (claims) => {
-    for (const { fn } of publicFunctions) {
-      const ctx = context({ ...serviceIdentity, ...claims });
-      await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
-      expect(ctx.touched).not.toHaveBeenCalled();
-    }
-  });
+  ])(
+    'rejects a verified token with the wrong trust claim %j across all functions',
+    async (claims) => {
+      for (const { fn } of publicFunctions) {
+        const ctx = context({ ...serviceIdentity, ...claims });
+        await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
+        expect(ctx.touched).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it.each([
-    'SANDY_AUTH_REPOSITORY_ID',
-    'SANDY_AUTH_WORKFLOW_REF',
-    'SANDY_AUTH_ENVIRONMENT',
-  ])('fails closed without deployment configuration %s', async (key) => {
-    vi.stubEnv(key, '');
-    for (const { fn } of publicFunctions) {
-      const ctx = context(serviceIdentity);
-      await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
-      expect(ctx.touched).not.toHaveBeenCalled();
-    }
-  });
+  it.each(['SANDY_AUTH_REPOSITORY_ID', 'SANDY_AUTH_WORKFLOW_REF', 'SANDY_AUTH_ENVIRONMENT'])(
+    'fails closed without deployment configuration %s',
+    async (key) => {
+      vi.stubEnv(key, '');
+      for (const { fn } of publicFunctions) {
+        const ctx = context(serviceIdentity);
+        await expect(fn._handler(ctx, {})).rejects.toThrow('Unauthorized');
+        expect(ctx.touched).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('lets the trusted service reach the existing Repo bootstrap transaction', async () => {
     const unique = vi.fn(async () => ({ _id: 'repo-id' }));

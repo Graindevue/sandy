@@ -20,18 +20,18 @@ describe('selectAgentsForReview', () => {
   it.each([
     { paths: ['apps/web/page.tsx'], expected: ['logic'] },
     { paths: ['packages/backend/convex/bookings.ts'], expected: ['logic', 'convex'] },
-  ])('runs the Convex Agent only when its backend is changed: $paths', async ({
-    paths,
-    expected,
-  }) => {
-    const selected = await selectAgentsForReview({
-      agents: [agent('logic', true), agent('convex', true)],
-      reviewRepoFullName: 'acme/api',
-      productRepos: [],
-      changedPaths: paths,
-    });
-    expect(selected.map((entry) => entry.key)).toEqual(expected);
-  });
+  ])(
+    'runs the Convex Agent only when its backend is changed: $paths',
+    async ({ paths, expected }) => {
+      const selected = await selectAgentsForReview({
+        agents: [agent('logic', true), agent('convex', true)],
+        reviewRepoFullName: 'acme/api',
+        productRepos: [],
+        changedPaths: paths,
+      });
+      expect(selected.map((entry) => entry.key)).toEqual(expected);
+    },
+  );
   it('honors defaultEnabled, Product-wide framework auto-detection, and reviewed Repo overrides', async () => {
     const apiRoot = join(root, 'api');
     const webRoot = join(root, 'web');
