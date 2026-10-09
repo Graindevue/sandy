@@ -62,8 +62,9 @@ CodeRabbit has no Greptile-style 5/5 confidence gate. The gate is a completed
 review of the current head, no remaining actionable CodeRabbit findings, and
 passing required CI. With `request_changes_workflow` enabled, also verify the
 bot's current review decision. Maintainer review remains required before merge.
-Skipped, failed, pending, rate-limited, or partially covered reviews leave the
-gate incomplete.
+Skipped, failed, pending, rate-limited, or file-limit-truncated reviews leave
+the gate incomplete. Check excluded paths against the repository configuration;
+intentional generated-file exclusions are distinct from a provider limit.
 
 When the user requests fixes or ongoing monitoring, continue with
 [babysit-pr](../babysit-pr/SKILL.md). Verify findings against source before fixing
