@@ -7,3 +7,5 @@
 # Identical benchmark blob after the performance branch was rebased.
 ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:236
 ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:287
+# The credential-free preparation probe reuses the first reviewed cache identifier.
+280a0ecf2b62b75fc87077ae9460fee9f8409ee1:scripts/review-preparation-probe.mjs:generic-api-key:125
