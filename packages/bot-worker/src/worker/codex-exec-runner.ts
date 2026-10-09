@@ -22,6 +22,7 @@ import {
 } from './dependency-install.js';
 import { readReviewDiff } from './review-diff.js';
 import { buildReviewPrompt } from './review-prompt.js';
+import { minimalSandboxDenials } from './sandbox-denials.js';
 
 export interface RunnerPullRequest {
   owner: string;
@@ -721,15 +722,28 @@ export class CodexExecRunner {
         ...(this.#options.protectedPaths ?? []).map((path) => resolvePath(path)),
       ]),
     ];
-    const filesystem = denied.map((path) => `${JSON.stringify(path)}="deny"`);
+    const grants = [
+      resolvePath(worktreePath),
+      ...siblings.map((sibling) => resolvePath(sibling.hostPath)),
+      this.#toolHome,
+      ...writablePaths.map((path) => resolvePath(path)),
+    ];
+    if (this.#options.temporaryDirectory === undefined) {
+      grants.push('/tmp');
+      const temporary = this.#options.env?.TMPDIR ?? process.env.TMPDIR;
+      if (temporary) grants.push(resolvePath(temporary));
+    }
+    const filesystem: string[] = [];
     for (const sibling of siblings)
       filesystem.push(`${JSON.stringify(resolvePath(sibling.hostPath))}="read"`);
     filesystem.push(`${JSON.stringify(this.#toolHome)}="write"`);
     for (const path of writablePaths)
       filesystem.push(`${JSON.stringify(resolvePath(path))}="write"`);
     const opensrcHome = this.#options.env?.OPENSRC_HOME ?? process.env.OPENSRC_HOME;
-    if (opensrcHome !== undefined)
+    if (opensrcHome !== undefined) {
+      grants.push(resolvePath(opensrcHome));
       filesystem.push(`${JSON.stringify(resolvePath(opensrcHome))}="write"`);
+    }
     if (process.platform === 'linux') {
       // A host-root bind exposes unmapped root ownership inside the user
       // namespace. Scoped reads retain a fresh root and cache ancestors owned
@@ -742,9 +756,11 @@ export class CodexExecRunner {
           : []),
         '"/opt"="read"',
       );
+      grants.push('/opt');
       // Linux resolvers can symlink into /run, outside :minimal's /etc mount.
       const resolver = await realpath('/etc/resolv.conf');
       if (!(await stat(resolver)).isFile()) throw new Error('DNS resolver must be a regular file');
+      grants.push(resolver);
       filesystem.push(`${JSON.stringify(resolver)}="read"`);
       const commonDirectories = new Set<string>();
       for (const path of new Set([worktreePath, ...siblings.map((sibling) => sibling.hostPath)])) {
@@ -763,7 +779,10 @@ export class CodexExecRunner {
         if (commonDirectory === '/') throw new Error('Git metadata must have a scoped directory');
         commonDirectories.add(commonDirectory);
       }
-      for (const path of commonDirectories) filesystem.push(`${JSON.stringify(path)}="read"`);
+      for (const path of commonDirectories) {
+        grants.push(path);
+        filesystem.push(`${JSON.stringify(path)}="read"`);
+      }
       // These patterns only match /proc/<pid>/<file>. Unbounded expansion also
       // enters other users' fd/ns/task directories, which makes Linux sandbox
       // construction fail before the reviewed command starts.
@@ -790,6 +809,11 @@ export class CodexExecRunner {
       npm_config_manage_package_manager_versions: 'false',
       ...(opensrcHome !== undefined ? { OPENSRC_HOME: opensrcHome } : {}),
     };
+    filesystem.unshift(
+      ...(await minimalSandboxDenials(denied, grants)).map(
+        (path) => `${JSON.stringify(path)}="deny"`,
+      ),
+    );
     return [
       '-c',
       'default_permissions="sandy"',

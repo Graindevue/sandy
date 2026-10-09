@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentRunUsage } from '@sandy/shared-types';
 import { type CodexAppServer, protocolObject, runtimeEnvironment } from './codex-app-server.js';
@@ -11,6 +11,7 @@ import { readReviewDiff } from './review-diff.js';
 import { AgentRunError } from './review-errors.js';
 import type { ReviewAgentRunner, ReviewAgentRuntime } from './review-executor.js';
 import { buildReviewPrompt } from './review-prompt.js';
+import { minimalSandboxDenials } from './sandbox-denials.js';
 
 const exec = promisify(execFile);
 type ReviewRuntimeInput = Parameters<NonNullable<ReviewAgentRunner['openReview']>>[0];
@@ -415,6 +416,17 @@ async function permissionConfig(
     }
   }
   filesystem[':workspace_roots'] = 'write';
+  const denied = Object.entries(filesystem)
+    .filter(([, access]) => access === 'deny')
+    .map(([path]) => path);
+  const grants = [
+    cwd,
+    ...Object.entries(filesystem)
+      .filter(([path, access]) => isAbsolute(path) && (access === 'read' || access === 'write'))
+      .map(([path]) => path),
+  ];
+  const retained = new Set(await minimalSandboxDenials(denied, grants));
+  for (const path of denied) if (!retained.has(path)) delete filesystem[path];
   return {
     'permissions.sandy': { filesystem, network: { enabled: true } },
     projects: { [cwd]: { trust_level: 'untrusted' } },

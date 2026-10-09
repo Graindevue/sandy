@@ -16,62 +16,97 @@ const { CodexAppServerRunner } = await import(
   join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
 );
 
-async function denyMaskCases(executable, root, environment) {
+/** Reviewed lifecycle checks disposable canaries through the actual preparation adapter. */
+async function preparationCanary(executable, root, codexHome, environment) {
+  const parent = join(root, 'canary-workspaces');
+  const workspace = join(parent, 'repo');
   const directory = join(root, 'command-files');
-  const child = join(directory, 'environment');
+  const commandFile = join(directory, 'environment');
+  const privateFile = join(workspace, 'private.key');
+  const marker = join(workspace, 'canary-result.json');
+  await mkdir(workspace, { recursive: true });
   await mkdir(directory);
-  await writeFile(child, 'DISPOSABLE_COMMAND_CANARY');
-  const script = `
+  await writeFile(commandFile, 'DISPOSABLE_COMMAND_CANARY');
+  await writeFile(privateFile, 'DISPOSABLE_PRIVATE_CANARY');
+  const operations = [
+    ['list-command-directory', `fs.readdirSync(${JSON.stringify(directory)})`],
+    ['read-command-file', `fs.readFileSync(${JSON.stringify(commandFile)})`],
+    ['overwrite-command-file', `fs.writeFileSync(${JSON.stringify(commandFile)}, 'changed')`],
+    [
+      'create-command-file',
+      `fs.writeFileSync(${JSON.stringify(join(directory, 'created'))}, 'created')`,
+    ],
+    ['read-private-file', `fs.readFileSync(${JSON.stringify(privateFile)})`],
+    ['overwrite-private-file', `fs.writeFileSync(${JSON.stringify(privateFile)}, 'changed')`],
+  ];
+  await writeFile(
+    join(workspace, 'check-denials.cjs'),
+    `
     const fs = require('node:fs');
-    for (const operation of [() => fs.readFileSync(process.argv[1]), () => fs.writeFileSync(process.argv[1], 'changed')]) {
+    const checks = [];
+    ${operations
+      .map(
+        ([name, operation]) => `{
       let denied = false;
-      try { operation(); } catch { denied = true; }
-      if (!denied) throw new Error('Command canary exposed');
-    }
-  `;
-  const cases = [];
-  for (const [name, paths] of [
-    ['parent-and-child', [directory, child]],
-    ['parent-only', [directory]],
-    ['child-only', [child]],
-  ]) {
-    const filesystem = [
-      ...(process.platform === 'linux'
-        ? ['":minimal"="read"', '"/opt"="read"']
-        : ['":root"="read"']),
-      `${JSON.stringify(root)}="write"`,
-      ...paths.map((path) => `${JSON.stringify(path)}="deny"`),
-    ];
-    try {
-      await exec(
-        executable,
-        [
-          'sandbox',
-          '--permission-profile',
-          'sandy',
-          '--cd',
-          root,
-          '-c',
-          `permissions.sandy={filesystem={${filesystem.join(',')}},network={enabled=false}}`,
-          '--',
-          'node',
-          '-e',
-          script,
-          child,
-        ],
-        { env: environment, timeout: 10_000, maxBuffer: 16_000 },
-      );
-      cases.push({ name, status: 'launched-and-denied' });
-    } catch (error) {
-      cases.push({
-        name,
-        status: 'failed',
-        error: String(error.stderr ?? error.message).slice(0, 2000),
-      });
-    }
-    assert.equal(await readFile(child, 'utf8'), 'DISPOSABLE_COMMAND_CANARY');
-  }
-  return cases;
+      try { ${operation}; } catch { denied = true; }
+      if (!denied) throw new Error('Protected canary operation succeeded: ${name}');
+      checks.push(${JSON.stringify(name)});
+    }`,
+      )
+      .join('\n')}
+    if (fs.existsSync('canary-result.json')) throw new Error('Lifecycle ran more than once');
+    fs.writeFileSync('canary-result.json', JSON.stringify({checks, lifecycleCount: 1}));
+  `,
+  );
+  const npmVersion = (
+    await exec('npm', ['--version'], { env: environment, timeout: 10_000 })
+  ).stdout.trim();
+  const metadata = { name: 'sandy-preparation-canary', version: '1.0.0', private: true };
+  await writeFile(
+    join(workspace, 'package.json'),
+    JSON.stringify({
+      ...metadata,
+      packageManager: `npm@${npmVersion}`,
+      scripts: { install: 'node check-denials.cjs' },
+    }),
+  );
+  await writeFile(
+    join(workspace, 'package-lock.json'),
+    JSON.stringify({
+      ...metadata,
+      lockfileVersion: 3,
+      requires: true,
+      packages: { '': metadata },
+    }),
+  );
+  await exec('git', ['init', '--quiet', workspace], { env: environment, timeout: 10_000 });
+  const runner = new CodexAppServerRunner({
+    executable,
+    codexHome,
+    toolHome: join(workspace, '.installer-home'),
+    protectedPaths: [
+      directory,
+      commandFile,
+      privateFile,
+      // Linux reconstructs the granted descendant after masking its parent.
+      // Darwin rejects Node's realpath ancestor traversal for this shape.
+      ...(process.platform === 'linux' ? [parent] : []),
+    ],
+    logger: { info() {} },
+    installTimeoutMs: 30_000,
+  });
+  const result = await runner.installDependencies({ worktreePath: workspace });
+  const report = {
+    status: result.status,
+    error: result.status === 'failed' ? result.error.slice(0, 2000) : undefined,
+    unchangedBytes:
+      (await readFile(commandFile, 'utf8')) === 'DISPOSABLE_COMMAND_CANARY' &&
+      (await readFile(privateFile, 'utf8')) === 'DISPOSABLE_PRIVATE_CANARY',
+    checks: [],
+  };
+  if (result.status === 'installed')
+    Object.assign(report, JSON.parse(await readFile(marker, 'utf8')));
+  return report;
 }
 
 /** Reproduce benchmark priming through the shipped adapter, without login or model requests. */
@@ -95,7 +130,19 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
       await exec(executable, ['--version'], { env: environment, timeout: 10_000 })
     ).stdout.trim();
     assert.equal(version, 'codex-cli 0.162.0', 'Use the exact deployed Codex pin');
-    const denyCases = await denyMaskCases(executable, authRoot, environment);
+    const canary = await preparationCanary(executable, root, codexHome, environment);
+    const canaryReport = {
+      platform: process.platform,
+      node: process.version,
+      codexVersion: version,
+      canary,
+    };
+    if (outputPath) await writeFile(outputPath, `${JSON.stringify(canaryReport, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(canaryReport)}\n`);
+    assert.equal(canary.status, 'installed', 'Protected preparation canary did not complete');
+    assert.equal(canary.unchangedBytes, true);
+    assert.equal(canary.checks.length, 6);
+    assert.equal(canary.lifecycleCount, 1);
     suite = await prepareBenchmarkFixtures(root);
     const fixture = suite.fixtures.find((fixture) => fixture.id === 'defects');
     assert.ok(fixture);
@@ -197,7 +244,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
         node: process.version,
         codexVersion: version,
         packageManager: fixture.packageManager,
-        denyCases,
+        canary,
         outcomes,
         phases,
       };

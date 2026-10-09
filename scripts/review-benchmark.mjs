@@ -236,15 +236,23 @@ async function liveBenchmark(options) {
         cacheKey: 'evaluation/producer',
         signal,
       });
-      priming.push({
+      const failure =
+        primeResult.status !== 'installed' || backing.size === 0
+          ? preparationFailure(primeResult)
+          : undefined;
+      const primed = {
         fixtureId: fixture.id,
         elapsedMs: Date.now() - primeStart,
         status: primeResult.status,
         downloads: suite.downloads(),
-      });
+        cache: primeResult.cache ?? null,
+        ...(failure ? { failure } : {}),
+      };
+      priming.push(primed);
+      await appendFile(journal, `${JSON.stringify({ priming: primed })}\n`);
       await cloneManager.removeWorktree(prime);
-      if (primeResult.status !== 'installed' || backing.size === 0)
-        throw new Error('Controlled warm-cache priming failed');
+      if (failure)
+        throw new Error(`Controlled warm-cache priming failed: ${failure.stage} (${failure.code})`);
       const configurationDigest = createHash('sha256')
         .update(
           JSON.stringify({
@@ -273,6 +281,8 @@ async function liveBenchmark(options) {
           for (const mode of modes) {
             signal.throwIfAborted();
             const id = `${runId}-${fixture.id}-${repetition}-${cacheState}-${mode}`;
+            const cell = `${fixture.id}/${cacheState}/${mode}/repetition-${repetition + 1}`;
+            process.stderr.write(`Sandy benchmark ${cell}: preparing.\n`);
             const start = Date.now();
             const seed = await cloneManager.createWorktree(fixture.repo, {
               reviewJobId: `benchmark-${id}`,
@@ -293,6 +303,7 @@ async function liveBenchmark(options) {
               throw new Error(
                 'Fixture installation failed; no valid matched benchmark can be reported',
               );
+            process.stderr.write(`Sandy benchmark ${cell}: preparation complete.\n`);
             const seedDisk = await measureTree(seed.path);
             const materializationStart = Date.now();
             const privateWorkspaces = [];
@@ -335,6 +346,7 @@ async function liveBenchmark(options) {
                 'Requested parallel runtime fell back; benchmark will retain completed samples without inventing parallel measurements',
               );
             const investigation = Date.now();
+            process.stderr.write(`Sandy benchmark ${cell}: investigating.\n`);
             let next = 0;
             const outcomes = new Array(agents.length);
             const agentOutputs = new Array(agents.length);
@@ -509,6 +521,18 @@ async function liveBenchmark(options) {
     process.off('SIGTERM', abortOnTermination);
     process.off('SIGINT', abortOnTermination);
   }
+}
+
+/** Persist only fixed classifications; reviewed command output never enters live logs. */
+function preparationFailure(result) {
+  if (result.status === 'installed')
+    return { stage: 'download-publication', code: 'NO_SAFE_SNAPSHOT' };
+  if (result.status === 'skipped') return { stage: 'installation', code: 'SKIPPED' };
+  const output = String(result.error);
+  const code =
+    /\b(EROFS|EACCES|EPERM|EINTEGRITY|ECONNREFUSED|ETIMEDOUT)\b/.exec(output)?.[1] ??
+    (output.includes('Read-only file system') ? 'EROFS' : 'UNKNOWN');
+  return { stage: output.startsWith('bwrap:') ? 'sandbox-startup' : 'installation', code };
 }
 
 async function measureTree(path) {
