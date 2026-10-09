@@ -89,9 +89,10 @@ Copy [.github/workflow-templates/sandy-review.yml](../../.github/workflow-templa
 into the caller as `.github/workflows/sandy-review.yml`, and merge its PR.
 The default branch supplies both the workflow and any trusted Product config.
 
-The template's global `sandy-codex-session` concurrency group serializes Reviews
+The review job's `sandy-codex-session` concurrency group serializes Reviews
 with queueing and `cancel-in-progress: false`. Its review job selects the
 `sandy-codex` environment so the current auth is read after the lock is acquired.
+Skipped jobs for unrelated events do not acquire this lock.
 Agent Runs are also serial. Keep those settings together.
 
 The action validates a human requester with repository write access, an open PR,

@@ -58,10 +58,10 @@ an API billing path.
 
 Following [OpenAI's CI/CD auth procedure](https://learn.chatgpt.com/docs/auth/ci-cd-auth),
 the runner seeds a missing `auth.json`, lets Codex refresh it, and persists the
-updated file after the job, including failed reviews. One global concurrency
-group serializes Reviews, and Agents within a Review also run serially because
-they share the same rotating refresh token. Running reviews are not cancelled
-by later requests.
+updated file after the job, including failed reviews. One concurrency group on
+the eligible review job serializes Reviews, and Agents within a Review run
+serially because they share the same rotating refresh token. Running reviews
+are not cancelled by later requests.
 
 `CODEX_AUTH_JSON` is an **environment secret** in `sandy-codex`, rather than a
 repository secret. GitHub reads repository secrets when a workflow is queued,

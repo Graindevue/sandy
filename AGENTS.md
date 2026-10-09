@@ -25,7 +25,7 @@ For runtime, auth, or trigger changes, read
 `docs/adr/0018-github-actions-codex-runtime.md` and `docs/setup/README.md`.
 Reviews and Codex Agent Runs are serialized around one dedicated CI auth stream.
 `CODEX_AUTH_JSON` belongs to the `sandy-codex` environment, whose latest secret
-is loaded after the workflow's concurrency lock. Embeddings remain disabled.
+is loaded after the review job's concurrency lock. Embeddings remain disabled.
 
 ## Commits
 
