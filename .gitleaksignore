@@ -4,3 +4,6 @@
 # suppress a credential added to the same file or line in a later commit.
 80e4ed10ae0084544b610c0a1e918a367ca314cf:scripts/review-benchmark.mjs:generic-api-key:236
 80e4ed10ae0084544b610c0a1e918a367ca314cf:scripts/review-benchmark.mjs:generic-api-key:287
+# Identical benchmark blob after the performance branch was rebased.
+ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:236
+ff34305f7b2a7abdb5e02a49dcea27f865f6dbc8:scripts/review-benchmark.mjs:generic-api-key:287
