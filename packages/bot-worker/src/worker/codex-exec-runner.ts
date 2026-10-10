@@ -20,6 +20,7 @@ import {
   installWithoutHookOnlyPrepare,
   readPackageJson,
 } from './dependency-install.js';
+import { preparationDiagnostic } from './preparation-diagnostics.js';
 import { readReviewDiff } from './review-diff.js';
 import { buildReviewPrompt } from './review-prompt.js';
 import { minimalSandboxDenials } from './sandbox-denials.js';
@@ -146,6 +147,7 @@ export class CodexExecRunner {
   }): Promise<DependencyInstallResult> {
     input.signal?.throwIfAborted();
     let command: string | undefined;
+    let cache: DependencyDownloadCacheMetrics | undefined;
     try {
       const detected = await detectDependencyInstall(input.worktreePath);
       if (detected === null)
@@ -158,7 +160,6 @@ export class CodexExecRunner {
       this.#logger.info('Sandy dependency install started.');
       let installed: { exitCode: number; output: string };
       let installationDurationMs = 0;
-      let cache: DependencyDownloadCacheMetrics | undefined;
       const deadline = startedAt + (this.#options.installTimeoutMs ?? 15 * 60 * 1000);
       const remaining = () => {
         input.signal?.throwIfAborted();
@@ -176,12 +177,19 @@ export class CodexExecRunner {
       const publishedStore = join(this.#dependencyCacheDirectory, detected.packageManager);
       const publishedDownloads =
         detected.packageManager === 'npm' ? join(publishedStore, '_cacache') : publishedStore;
+      // Outside the reviewed parent grant; disposable registry metadata is not a download snapshot.
+      const metadataCachePath =
+        detected.packageManager === 'pnpm'
+          ? resolvePath(this.#options.codexHome, '..', 'sandy-dependency-metadata')
+          : undefined;
+      const preparationInput = { ...input, ...(metadataCachePath ? { metadataCachePath } : {}) };
       const service = this.#options.dependencyDownloadCache;
       let key: string | undefined;
       let restored = false;
       let publicationReady = false;
       let installCommand = detected.command;
       try {
+        if (metadataCachePath !== undefined) await resetDownloadStore(metadataCachePath);
         if (service !== undefined) {
           cache = {
             restore: 'unverified',
@@ -230,8 +238,9 @@ export class CodexExecRunner {
                 await snapshotDownloadStore(publishedDownloads, downloads, detected.packageManager);
                 restored = restoredKey === key;
                 cache.restore = restored ? 'hit' : 'miss';
-              } catch {
+              } catch (error) {
                 input.signal?.throwIfAborted();
+                cache.diagnostics = { ...cache.diagnostics, restore: preparationDiagnostic(error) };
                 cache.restore = 'unavailable';
                 await resetDownloadStore(store);
                 await mkdir(downloads, { recursive: true });
@@ -243,7 +252,7 @@ export class CodexExecRunner {
                   ? `npm_config_cache=${shellQuote(store)} ${detected.command}`
                   : `${detected.command} --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`;
               this.#logger.info(
-                `Sandy dependency download cache ${cache.restore} after ${cache.restoreMs}ms.`,
+                `Sandy dependency download cache ${cache.restore} after ${cache.restoreMs}ms.${cache.diagnostics?.restore ? ` ${cache.diagnostics.restore}` : ''}`,
               );
             }
           }
@@ -255,7 +264,9 @@ export class CodexExecRunner {
         const install = () =>
           installWithoutHookOnlyPrepare(input.worktreePath, () =>
             this.#sandboxCommand(
-              key !== undefined ? { ...input, downloadStorePath: store } : input,
+              key !== undefined
+                ? { ...preparationInput, downloadStorePath: store }
+                : preparationInput,
               installCommand,
               service === undefined
                 ? (this.#options.installTimeoutMs ?? 15 * 60 * 1000)
@@ -266,19 +277,25 @@ export class CodexExecRunner {
           const fetchStartedAt = Date.now();
           try {
             const fetched = await this.#sandboxCommand(
-              { ...input, downloadStorePath: store },
+              { ...preparationInput, downloadStorePath: store },
               detected.packageManager === 'npm'
                 ? `${installCommand} --ignore-scripts`
-                : `CI=true LEFTHOOK=0 HUSKY=0 ${detected.packageManagerCommand ?? 'pnpm'} fetch --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`,
+                : `${detected.platformPolicy === undefined ? '' : `${detected.platformPolicy.environment} `}CI=true LEFTHOOK=0 HUSKY=0 ${detected.packageManagerCommand ?? 'pnpm'} fetch --ignore-scripts --ignore-pnpmfile --store-dir ${shellQuote(store)} --verify-store-integrity=true --side-effects-cache=false --package-import-method=copy`,
               remaining(),
             );
-            if (fetched.exitCode !== 0) throw new Error('Download-only preparation failed');
+            if (fetched.exitCode !== 0)
+              throw new Error(
+                `Download-only preparation exited ${fetched.exitCode}: ${fetched.output}`,
+              );
             await discardMutableStoreState(downloads, detected.packageManager);
             await snapshotDownloadStore(downloads, publishedDownloads, detected.packageManager);
             publicationReady = true;
-          } catch {
+            cache.fetch = 'completed';
+          } catch (error) {
             input.signal?.throwIfAborted();
-            cache.restore = restored ? 'discarded' : 'unavailable';
+            cache.fetch = 'unavailable';
+            cache.diagnostics = { ...cache.diagnostics, fetch: preparationDiagnostic(error) };
+            if (restored) cache.restore = 'discarded';
             cache.coldRetry = restored;
             restored = false;
             await resetDownloadStore(store);
@@ -286,7 +303,7 @@ export class CodexExecRunner {
           }
           cache.fetchMs = Date.now() - fetchStartedAt;
           this.#logger.info(
-            `Sandy dependency download preparation ${publicationReady ? 'completed' : 'unavailable'} after ${cache.fetchMs}ms.`,
+            `Sandy dependency download preparation ${publicationReady ? 'completed' : 'unavailable'} after ${cache.fetchMs}ms.${cache.diagnostics?.fetch ? ` ${cache.diagnostics.fetch}` : ''}`,
           );
         }
         const installationStartedAt = Date.now();
@@ -329,19 +346,22 @@ export class CodexExecRunner {
               ]),
             });
             cache.save = 'saved';
-          } catch {
+          } catch (error) {
             input.signal?.throwIfAborted();
+            cache.diagnostics = { ...cache.diagnostics, save: preparationDiagnostic(error) };
             cache.save = 'unavailable';
           }
           cache.saveMs = Date.now() - saveStartedAt;
           this.#logger.info(
-            `Sandy dependency download cache save ${cache.save} after ${cache.saveMs}ms.`,
+            `Sandy dependency download cache save ${cache.save} after ${cache.saveMs}ms.${cache.diagnostics?.save ? ` ${cache.diagnostics.save}` : ''}`,
           );
         }
       } catch (error) {
         this.#logger.info(`Sandy dependency install failed after ${Date.now() - startedAt}ms.`);
         throw error;
       } finally {
+        if (metadataCachePath !== undefined)
+          await rm(metadataCachePath, { recursive: true, force: true });
         if (key !== undefined) {
           await rm(store, { recursive: true, force: true });
           await rm(publishedStore, { recursive: true, force: true });
@@ -360,7 +380,8 @@ export class CodexExecRunner {
         return {
           status: 'failed',
           command,
-          error: installed.output || `install exited ${installed.exitCode}`,
+          error: preparationDiagnostic(installed.output || `install exited ${installed.exitCode}`),
+          ...(cache !== undefined ? { cache } : {}),
         };
       if ((this.#options.testMode ?? 'targeted') === 'targeted') {
         this.#logger.info('Sandy project tests deferred to CI; reviewers can run focused tests.');
@@ -371,6 +392,9 @@ export class CodexExecRunner {
           durationMs,
           ...(service !== undefined ? { preparationDurationMs } : {}),
           ...(cache !== undefined ? { cache } : {}),
+          ...(detected.platformPolicy !== undefined
+            ? { platformPolicy: detected.platformPolicy }
+            : {}),
           testStatus: 'deferred',
           testResult:
             'Full project test suite deferred to CI. Reviewers may run focused tests to verify concrete findings.',
@@ -409,6 +433,9 @@ export class CodexExecRunner {
         durationMs,
         ...(service !== undefined ? { preparationDurationMs } : {}),
         ...(cache !== undefined ? { cache } : {}),
+        ...(detected.platformPolicy !== undefined
+          ? { platformPolicy: detected.platformPolicy }
+          : {}),
         testStatus,
         testResult,
       };
@@ -417,13 +444,19 @@ export class CodexExecRunner {
       return {
         status: 'failed',
         ...(command !== undefined ? { command } : {}),
-        error: error instanceof Error ? error.message : String(error),
+        error: preparationDiagnostic(error),
+        ...(cache !== undefined ? { cache } : {}),
       };
     }
   }
 
   async #sandboxCommand(
-    input: { worktreePath: string; signal?: AbortSignal; downloadStorePath?: string },
+    input: {
+      worktreePath: string;
+      signal?: AbortSignal;
+      downloadStorePath?: string;
+      metadataCachePath?: string;
+    },
     command: string,
     timeoutMs: number,
   ): Promise<{ exitCode: number; output: string }> {
@@ -441,7 +474,11 @@ export class CodexExecRunner {
         input.worktreePath,
         [],
         input.signal,
-        input.downloadStorePath ? [input.downloadStorePath] : [],
+        [
+          ...(input.downloadStorePath ? [input.downloadStorePath] : []),
+          ...(input.metadataCachePath ? [input.metadataCachePath] : []),
+        ],
+        input.metadataCachePath ? { pnpm_config_cache_dir: input.metadataCachePath } : {},
       )),
       '--',
       '/bin/sh',
@@ -453,6 +490,7 @@ export class CodexExecRunner {
         cwd: input.worktreePath,
         env: {
           ...safeEnvironment({ ...process.env, ...this.#options.env }),
+          ...(input.metadataCachePath ? { pnpm_config_cache_dir: input.metadataCachePath } : {}),
           HOME: this.#toolHome,
           CODEX_HOME: sandboxHome,
           TURBO_CACHE_DIR: join(resolvePath(input.worktreePath), '.turbo', 'cache'),
@@ -710,6 +748,7 @@ export class CodexExecRunner {
     siblings: readonly RunnerSiblingWorktree[] = [],
     signal?: AbortSignal,
     writablePaths: readonly string[] = [],
+    preparationEnvironment: Record<string, string> = {},
   ): Promise<string[]> {
     const denied = [
       ...new Set([
@@ -791,6 +830,7 @@ export class CodexExecRunner {
       filesystem.push('":root"="read"', '":workspace_roots"="write"');
     }
     const shellEnvironment = {
+      ...preparationEnvironment,
       HOME: this.#toolHome,
       ...(this.#options.temporaryDirectory === undefined
         ? {}

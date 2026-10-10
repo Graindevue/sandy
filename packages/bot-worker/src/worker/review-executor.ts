@@ -23,6 +23,7 @@ import type {
   RunnerPullRequest,
   RunnerSiblingWorktree,
 } from './codex-exec-runner.js';
+import type { DependencyDownloadCacheMetrics } from './dependency-download-cache.js';
 import type { DependencyInstallResult } from './dependency-install.js';
 import { parseFindingsPayload } from './findings-parser.js';
 import type {
@@ -32,6 +33,7 @@ import type {
   PostScopeDeclinedInput,
   PullRequestTarget,
 } from './poster.js';
+import { preparationDiagnostic, preparationDiagnosticMarkdown } from './preparation-diagnostics.js';
 import { AgentRunError, isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
 import type {
   ArchetypeAssignedFinding,
@@ -217,6 +219,7 @@ interface SelectedAgentReviewResults {
   outputs: AgentReviewOutput[];
   failedAgentCount: number;
   selectedAgentCount: number;
+  executionSummary: string;
   teardownError?: unknown;
 }
 
@@ -479,6 +482,8 @@ export class ReviewExecutor {
         worktrees,
       });
       failedAgentCount = agentResults.failedAgentCount;
+      const preparationSummary = `${testSummary}\n\n${reviewDependencySummary(dependencyInstall)}\n\n${agentResults.executionSummary}`;
+      this.#logger.info?.(agentResults.executionSummary);
       let postedReview: PostedReviewResult | null = null;
       if (agentResults.outputs.length > 0) {
         postedReview = await this.#runPhase(jobId, 'Synthesis and posting', () =>
@@ -491,10 +496,10 @@ export class ReviewExecutor {
             cancellationSignal,
             testSummary:
               agentResults.teardownError !== undefined
-                ? `Review runtime shutdown failed. Successful findings are retained; this Review did not finish reliably.\n\n${testSummary}`
+                ? `Review runtime shutdown failed. Successful findings are retained; this Review did not finish reliably.\n\n${preparationSummary}`
                 : failedAgentCount === 0
-                  ? testSummary
-                  : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${testSummary}`,
+                  ? preparationSummary
+                  : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${preparationSummary}`,
           }),
         );
       }
@@ -646,7 +651,46 @@ export class ReviewExecutor {
         : AbortSignal.any([input.cancellationSignal, cancellation.signal]);
     const results: SelectedAgentReviewResult[] = [];
     const privateWorkspaces = new Map<number, ReviewWorktree>();
+    const stagedWorkspaces =
+      this.#cloneManager.reserveAgentWorkspace !== undefined &&
+      this.#cloneManager.populateAgentWorkspace !== undefined &&
+      this.#cloneManager.releaseAgentWorkspace !== undefined;
+    const populated = new Set<number>();
     let maxConcurrency = this.#maxAgentConcurrency;
+    let fallbackReason: string | undefined;
+    let storageSummary = '';
+    if (
+      maxConcurrency > 1 &&
+      this.#runner.openReview !== undefined &&
+      this.#cloneManager.materializeAgentWorkspace !== undefined &&
+      this.#cloneManager.checkAgentWorkspaceCapacity !== undefined
+    ) {
+      try {
+        const capacity = await this.#cloneManager.checkAgentWorkspaceCapacity(
+          input.workspace.prWorktree,
+          Math.max(
+            1,
+            stagedWorkspaces ? Math.min(maxConcurrency, input.agents.length) : input.agents.length,
+          ),
+        );
+        const gib = (bytes: number) => (bytes / 1024 ** 3).toFixed(2);
+        storageSummary = `Private workspace storage: ${stagedWorkspaces ? Math.min(maxConcurrency, input.agents.length) : input.agents.length} resident copies of ${gib(capacity.seedBytes)} GiB; ${gib(capacity.requiredBytes)} GiB required including ${gib(capacity.reserveBytes)} GiB build reserve; ${gib(capacity.availableBytes)} GiB available.`;
+        this.#logProgress(input.context.job.id, storageSummary);
+        if (!capacity.fits) {
+          const affordable = Math.floor(capacity.availableBytes / (capacity.seedBytes + 1024 ** 3));
+          maxConcurrency =
+            stagedWorkspaces && affordable >= 2 ? Math.min(maxConcurrency, affordable) : 1;
+          fallbackReason =
+            maxConcurrency === 1
+              ? 'insufficient disk capacity for private workspaces and build reserve'
+              : `disk capacity reduced parallel concurrency to ${maxConcurrency}; ${((maxConcurrency * (capacity.seedBytes + 1024 ** 3)) / 1024 ** 3).toFixed(2)} GiB required including build reserve`;
+        }
+      } catch (error) {
+        await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+        maxConcurrency = 1;
+        fallbackReason = `storage preflight unavailable: ${preparationDiagnostic(error)}`;
+      }
+    }
     const failBeforeStart = async (index: number, agent: AgentDefinition, error: string) => {
       const timestamp = this.#now();
       await this.#store.recordAgentRun({
@@ -665,21 +709,33 @@ export class ReviewExecutor {
     if (
       this.#runner.openReview !== undefined &&
       this.#cloneManager.materializeAgentWorkspace !== undefined &&
-      this.#maxAgentConcurrency > 1
+      maxConcurrency > 1
     ) {
       for (const [index, agent] of input.agents.entries()) {
         await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
         const startedAt = Date.now();
         try {
-          const worktree = await this.#cloneManager.materializeAgentWorkspace(
-            input.workspace.prWorktree,
-            agent.key,
-          );
+          const worktree =
+            stagedWorkspaces && this.#cloneManager.reserveAgentWorkspace
+              ? await this.#cloneManager.reserveAgentWorkspace(
+                  input.workspace.prWorktree,
+                  agent.key,
+                )
+              : await this.#cloneManager.materializeAgentWorkspace(
+                  input.workspace.prWorktree,
+                  agent.key,
+                );
           input.worktrees.push(worktree);
           privateWorkspaces.set(index, worktree);
+          if (stagedWorkspaces && this.#cloneManager.populateAgentWorkspace) {
+            if (populated.size < maxConcurrency) {
+              await this.#cloneManager.populateAgentWorkspace(input.workspace.prWorktree, worktree);
+              populated.add(index);
+            }
+          } else populated.add(index);
           this.#logProgress(
             input.context.job.id,
-            `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
+            `Agent ${JSON.stringify(agent.key)} workspace ${populated.has(index) ? 'materialized' : 'reserved'} in ${Date.now() - startedAt}ms.`,
           );
         } catch (error) {
           await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
@@ -696,7 +752,9 @@ export class ReviewExecutor {
               input.worktrees.splice(input.worktrees.indexOf(worktree), 1);
             }
             privateWorkspaces.clear();
+            populated.clear();
             maxConcurrency = 1;
+            fallbackReason = `private workspace storage exhausted (${capacityError})`;
             break;
           }
           await failBeforeStart(
@@ -715,6 +773,9 @@ export class ReviewExecutor {
       signal,
     });
     const cap = runtime === undefined ? 1 : Math.min(maxConcurrency, runtime.maxConcurrency);
+    if (this.#maxAgentConcurrency > 1 && cap === 1 && fallbackReason === undefined)
+      fallbackReason = 'the runtime did not enable parallel execution';
+    const executionSummary = `Review execution: requested ${this.#maxAgentConcurrency === 1 ? 'serial' : 'parallel'} (maximum ${this.#maxAgentConcurrency} ${this.#maxAgentConcurrency === 1 ? 'Agent' : 'Agents'}); effective ${cap === 1 ? 'serial' : 'parallel'} (maximum ${cap} ${cap === 1 ? 'Agent' : 'Agents'}).${fallbackReason === undefined ? '' : ` Fallback: ${preparationDiagnosticMarkdown(fallbackReason)}.`}${storageSummary ? ` ${storageSummary}` : ''}`;
     let next = 0;
     let teardownError: unknown;
     let checking: Promise<void> | undefined;
@@ -761,6 +822,30 @@ export class ReviewExecutor {
               );
               continue;
             }
+            const privateWorktree = privateWorkspaces.get(index);
+            if (stagedWorkspaces && privateWorktree !== undefined && !populated.has(index)) {
+              const startedAt = Date.now();
+              try {
+                await this.#cloneManager.populateAgentWorkspace?.(
+                  input.workspace.prWorktree,
+                  privateWorktree,
+                );
+                populated.add(index);
+                this.#logProgress(
+                  input.context.job.id,
+                  `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
+                );
+              } catch (error) {
+                await this.#throwIfCancelledOrSuperseded(input.context.job.id, signal);
+                await failBeforeStart(
+                  index,
+                  agent,
+                  `Agent workspace could not be prepared: ${preparationDiagnostic(error)}`,
+                );
+                await this.#cloneManager.releaseAgentWorkspace?.(privateWorktree);
+                continue;
+              }
+            }
             const workspace = {
               ...input.workspace,
               prWorktree: privateWorkspaces.get(index) ?? input.workspace.prWorktree,
@@ -772,6 +857,10 @@ export class ReviewExecutor {
               workspace,
               ...(runtime === undefined ? {} : { runtime }),
             });
+            if (stagedWorkspaces && privateWorktree !== undefined) {
+              await this.#cloneManager.releaseAgentWorkspace?.(privateWorktree);
+              populated.delete(index);
+            }
           }
         } catch (error) {
           cancellation.abort(error);
@@ -796,6 +885,7 @@ export class ReviewExecutor {
       outputs: results.flatMap((result) => (result.status === 'completed' ? [result.output] : [])),
       failedAgentCount: results.filter((result) => result.status === 'failed').length,
       selectedAgentCount: input.agents.length,
+      executionSummary,
       ...(teardownError === undefined ? {} : { teardownError }),
     };
   }
@@ -1123,6 +1213,31 @@ function describeError(error: unknown): string {
 function workspaceCapacityErrorCode(error: unknown): 'ENOSPC' | 'EDQUOT' | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
   return error.code === 'ENOSPC' || error.code === 'EDQUOT' ? error.code : undefined;
+}
+
+function reviewDependencySummary(result: DependencyInstallResult | undefined): string {
+  if (result?.status === 'failed')
+    return `Dependency preparation failed: ${preparationDiagnosticMarkdown(result.error)}${result.cache === undefined ? '' : ` ${reviewCacheSummary(result.cache)}`}`;
+  if (result?.status !== 'installed') return 'Dependency preparation: no installation recorded.';
+  const parts = [
+    `Dependencies installed in ${Math.round(result.durationMs / 1000)}s${result.preparationDurationMs === undefined ? '' : `; preparation ${Math.round(result.preparationDurationMs / 1000)}s`}.`,
+    ...(result.platformPolicy === undefined ? [] : [result.platformPolicy.description]),
+  ];
+  parts.push(reviewCacheSummary(result.cache));
+  return parts.join(' ');
+}
+
+function reviewCacheSummary(cache: DependencyDownloadCacheMetrics | undefined): string {
+  const parts: string[] = [];
+  if (cache === undefined) parts.push('Dependency download cache: disabled.');
+  else {
+    parts.push(
+      `Dependency download cache: restore ${cache.restore} (${cache.restoreMs}ms); fetch ${cache.fetch ?? 'not attempted'} (${cache.fetchMs}ms); save ${cache.save} (${cache.saveMs}ms); cold retry ${cache.coldRetry ? 'yes' : 'no'}.`,
+    );
+    for (const [phase, error] of Object.entries(cache.diagnostics ?? {}))
+      if (error) parts.push(`${phase} diagnostic: ${preparationDiagnosticMarkdown(error)}`);
+  }
+  return parts.join(' ');
 }
 
 function reviewTestSummary(result: DependencyInstallResult | undefined): string {

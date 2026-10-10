@@ -23,7 +23,8 @@ Set these **repository secrets** on the caller:
 
 | Secret | Value |
 |--------|-------|
-| `SANDY_APP_ID` | GitHub App ID. |
+| `SANDY_APP_ID` | Numeric GitHub App ID used by Sandy. |
+| `SANDY_APP_CLIENT_ID` | Optional GitHub App Client ID for token minting; the numeric ID remains a compatible JWT issuer fallback. |
 | `SANDY_APP_PRIVATE_KEY` | Full PEM private key. |
 | `CONVEX_URL` | Sandy's deployed Convex URL. |
 | `SANDY_SOURCE_TOKEN` | Optional PAT override with read-only Contents access to private `Graindevue/sandy`. |
@@ -138,14 +139,31 @@ receive neither those variables nor access to the runner environment-command
 files. CI verifies the shipped adapter against the real Linux cache provider with
 a harmless save/remove/restore fixture, without a Codex login or model request.
 
+The hardened caller template grants `cache-mode: write` on its authorized review
+job. `issue_comment` otherwise defaults to read-only caches; `actions: write`
+does not change that policy. Keep the existing human collaborator, private
+repository, same-repository PR, default-branch and first-attempt gates. Reviewed
+commands receive no cache credentials and cannot access the publication snapshot.
+The mutable framework-source cache is restore-only and is never saved after review.
+Existing callers must update their workflow from the template and advance the
+audited `SANDY_REF`; updating Sandy alone does not change caller cache policy.
+
 pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
+`fetch` already freezes the lockfile internally; Sandy does not pass the unsupported
+`--frozen-lockfile` fetch option. Frozen installation still uses that flag.
+Pinned pnpm 12 uses a native-platform JSON environment override for both stages,
+retaining dev and optional dependencies while omitting foreign OS, CPU and libc
+artifacts. Reviewed manifests, workspace configuration and lockfiles remain intact.
+Other pnpm majors retain their repository architecture policy. Agent prompts and
+PR summaries disclose that cross-platform installation was not exercised.
+Registry metadata uses a separate disposable cache, removed before workspace copies.
 npm stages its frozen graph with `ci --ignore-scripts`, then performs the normal
 fresh `ci` installation. Sandy snapshots validated downloads before reviewed
 hooks and lifecycles run; each ordinary lifecycle still runs once. The
 publication snapshot is denied to reviewed commands, and pnpm package imports
 use copies to keep installation writes out of it. Only successful normal
-preparation publishes that snapshot. The v2 namespace excludes earlier
-post-lifecycle npm snapshots. npm retains its lockfile tarball integrity checks
+preparation publishes that snapshot. The v3 namespace excludes earlier snapshots and distinguishes native platform
+selection from the repository architecture policy, including Linux libc family. npm retains its lockfile tarball integrity checks
 when reading cached content. Both stages share the preparation timeout budget.
 
 Download keys include the repository, operating system and architecture, Node
@@ -178,8 +196,22 @@ Copy time and disk overhead count toward benchmark costs.
 The action accepts `agent-execution-mode: serial|parallel` and
 `max-agent-concurrency` (a positive integer; parallel default three, one selects
 serial). Environment equivalents for the entry point are
-`SANDY_REVIEW_EXECUTION_MODE` and `SANDY_REVIEW_AGENT_CONCURRENCY`. The effective
-mode/cap appears in phase logs. An incompatible pinned runtime falls back before
+`SANDY_REVIEW_EXECUTION_MODE` and `SANDY_REVIEW_AGENT_CONCURRENCY`. The
+requested and effective modes/caps appear in phase logs and the posted summary,
+along with cache restore/fetch/save outcomes and bounded, sanitized errors.
+Before copying, Sandy budgets ordinary copies for **admitted Agents**, plus
+1 GiB per admitted Agent for focused builds and test output. Unique empty roots
+for all selected Agents are reserved before opening the runtime.
+Only the first concurrency window is populated up front; subsequent copies are
+created on admission and released after completion, while roots remain until
+runtime shutdown so peer deny rules remain valid. Lowering concurrency therefore
+reduces resident copies without sharing writable workspaces. Insufficient disk
+capacity reduces the effective parallel cap when two copies
+still fit; otherwise it selects serial mode. An unavailable preflight selects
+serial mode before copying; ENOSPC/EDQUOT before admission still cleans partial
+copies and falls back safely. The summary includes the storage
+estimate and fallback reason. This reserve is a guard, not a guarantee for every
+repository's build footprint. An incompatible pinned runtime falls back before
 any Agent starts; runtime failure during execution retains completed outcomes
 and fails affected work rather than starting another investigation.
 
@@ -188,7 +220,9 @@ copy exhausts disk space (`ENOSPC`) or a storage quota (`EDQUOT`). Sandy removes
 the prepared private copies, opens a serial runtime, and runs the selected
 roster against the existing installation. Cleanup must succeed before Agents
 start. Ordinary preparation failures and errors after Agent execution starts
-retain their failure semantics. The fallback appears in phase logs.
+retain their failure semantics. The fallback appears in phase logs and the
+posted summary. Later copy failures
+after Agent admission retain partial-review failure semantics.
 
 For callers encountering this while pinned to an earlier Sandy revision,
 `SANDY_AGENT_EXECUTION_MODE=serial` avoids private installation copies. See the

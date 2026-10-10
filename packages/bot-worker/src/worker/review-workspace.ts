@@ -1,4 +1,5 @@
 import type { ApiSurfaceRepoInput, SiblingShas } from '@sandy/shared-types';
+import type { WorkspaceCapacity } from '../git/workspace-capacity.js';
 import type { RunnerSiblingWorktree } from './codex-exec-runner.js';
 
 export interface ProductRepoForReview {
@@ -32,6 +33,13 @@ export interface ReviewCloneManager {
   resolveDefaultBranchSha(repo: RepoForWorktree): Promise<string>;
   createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree>;
   materializeAgentWorkspace?(seed: ReviewWorktree, agentKey: string): Promise<ReviewWorktree>;
+  checkAgentWorkspaceCapacity?(
+    seed: ReviewWorktree,
+    workspaceCount: number,
+  ): Promise<WorkspaceCapacity>;
+  reserveAgentWorkspace?(seed: ReviewWorktree, agentKey: string): Promise<ReviewWorktree>;
+  populateAgentWorkspace?(seed: ReviewWorktree, workspace: ReviewWorktree): Promise<void>;
+  releaseAgentWorkspace?(workspace: ReviewWorktree): Promise<void>;
   removeWorktree(worktree: ReviewWorktree): Promise<void>;
 }
 

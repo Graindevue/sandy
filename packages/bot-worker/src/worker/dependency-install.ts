@@ -3,6 +3,10 @@ import { constants } from 'node:fs';
 import { type FileHandle, lstat, open, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { DependencyDownloadCacheMetrics } from './dependency-download-cache.js';
+import {
+  type DependencyPlatformPolicy,
+  dependencyPlatformPolicy,
+} from './dependency-platform-policy.js';
 
 /** JS package managers the review install step knows how to drive. */
 export type DetectedPackageManager = 'pnpm' | 'npm' | 'yarn' | 'bun';
@@ -15,6 +19,7 @@ export interface DetectedDependencyInstall {
   packageManagerCommand?: string;
   /** Reviewed lockfile, when present; download caches still require a verified manager pin. */
   lockfile?: string;
+  platformPolicy?: DependencyPlatformPolicy;
 }
 
 /**
@@ -30,13 +35,14 @@ export type DependencyInstallResult =
       durationMs: number;
       preparationDurationMs?: number;
       cache?: DependencyDownloadCacheMetrics;
+      platformPolicy?: DependencyPlatformPolicy;
       /** Structured outcome; never inferred from reviewed stdout/stderr. */
       testStatus?: 'passed' | 'failed' | 'skipped' | 'deferred';
       /** Optional suite verification or an explicit deferral to CI and focused Agent tests. */
       testResult?: string;
     }
   | { status: 'skipped'; reason: string }
-  | { status: 'failed'; error: string; command?: string };
+  | { status: 'failed'; error: string; command?: string; cache?: DependencyDownloadCacheMetrics };
 
 /** Trusted-parent reads must never follow a reviewed manifest into credentials. */
 export async function readPackageJson(
@@ -132,12 +138,13 @@ export async function detectDependencyInstall(
       ? fromLockfile.lockfile
       : null;
   const runtimeCommand = await packageManagerCommand(packageManager, worktreePath);
+  const platformPolicy = dependencyPlatformPolicy(runtimeCommand);
   return {
     packageManager,
-    command: (await installCommand(packageManager, worktreePath)).replace(
-      `${packageManager} `,
-      `${runtimeCommand} `,
-    ),
+    command: `${platformPolicy === undefined ? '' : `${platformPolicy.environment} `}${(
+      await installCommand(packageManager, worktreePath)
+    ).replace(`${packageManager} `, `${runtimeCommand} `)}`,
+    ...(platformPolicy === undefined ? {} : { platformPolicy }),
     ...(runtimeCommand !== packageManager ? { packageManagerCommand: runtimeCommand } : {}),
     ...(lockfile !== null ? { lockfile } : {}),
   };

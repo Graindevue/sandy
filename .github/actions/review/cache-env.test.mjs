@@ -91,3 +91,21 @@ test('Linux CI exercises the shipped cache adapter after the same credential exp
   assert.ok(job.steps.indexOf(step) < job.steps.indexOf(probe));
   assert.ok(job.steps.some((entry) => entry.run?.includes('--filter @sandy/bot-worker build')));
 });
+
+test('mutable framework sources are restore-only when the caller grants cache writes', () => {
+  const step = action.runs.steps.find((entry) => entry.name === 'Restore framework source cache');
+  assert.equal(step.uses, 'actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25');
+  assert.ok(!action.runs.steps.some((entry) => entry.uses?.startsWith('actions/cache@')));
+});
+
+test('GitHub App token actions use the client-id input with a legacy issuer fallback', () => {
+  const steps = action.runs.steps.filter((entry) =>
+    entry.uses?.startsWith('actions/create-github-app-token@'),
+  );
+  assert.equal(steps.length, 2);
+  for (const step of steps) {
+    assert.equal(step.with['app-id'], undefined);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression is literal test data.
+    assert.equal(step.with['client-id'], '${{ inputs.app-client-id || inputs.app-id }}');
+  }
+});

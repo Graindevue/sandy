@@ -13,7 +13,11 @@ const exec = promisify(execFile);
 const sandyRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Native turns against anonymous or synthetic ChatGPT loopback fixtures; no live login/model. */
-export async function runManagedRuntimeProbe(executable = 'codex', workspaceRouting = false) {
+export async function runManagedRuntimeProbe(
+  executable = 'codex',
+  workspaceRouting = false,
+  stagedInventory = false,
+) {
   const { CodexAppServerRunner } = await import(
     join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
   );
@@ -25,6 +29,9 @@ export async function runManagedRuntimeProbe(executable = 'codex', workspaceRout
   const seed = join(root, 'seed');
   const keys = ['logic', 'security', 'framework'];
   const pending = [];
+  const responded = new Set();
+  let clones;
+  let workspaces;
   let runtime;
   let providerFailure;
   let backendOrigin;
@@ -123,8 +130,10 @@ export async function runManagedRuntimeProbe(executable = 'codex', workspaceRout
         );
       }
       pending.push({ response, index });
-      if (pending.length === keys.length)
+      if (pending.length >= (stagedInventory ? 2 : keys.length))
         for (const entry of [...pending].reverse()) {
+          if (responded.has(entry.index)) continue;
+          responded.add(entry.index);
           const id = `fixture-${entry.index}`;
           const events = [
             { type: 'response.created', response: { id } },
@@ -312,32 +321,57 @@ supports_websockets=false
     await writeFile(join(seed, 'source.cjs'), 'exports.value=2;\n');
     await git(['-c', 'commit.gpgsign=false', 'commit', '-am', 'change']);
     const sha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    paths = await Promise.all(
-      keys.map(async (key) => {
-        const path = join(root, 'agents', key);
-        await cp(seed, path, { recursive: true });
-        return path;
-      }),
-    );
-    if (workspaceRouting)
+    if (stagedInventory) {
+      const { CloneManager } = await import(
+        join(sandyRoot, 'packages/bot-worker/dist/git/clone-manager.js')
+      );
+      clones = new CloneManager({ baseDir: join(root, 'clones'), cloneUrl: () => seed });
+      const seedWorktree = {
+        path: seed,
+        repo: { owner: 'evaluation', name: 'producer', defaultBranch: 'main' },
+        reviewJobId: 'native-probe',
+        sha,
+      };
+      workspaces = await Promise.all(
+        keys.map((key) => clones.reserveAgentWorkspace(seedWorktree, key)),
+      );
+      paths = workspaces.map((workspace) => workspace.path);
       await Promise.all(
-        paths.map((path, index) =>
-          writeFile(
-            join(path, 'routing-tool-probe.cjs'),
-            `const assert=require('node:assert/strict');
+        workspaces
+          .slice(0, 2)
+          .map((workspace) => clones.populateAgentWorkspace(seedWorktree, workspace)),
+      );
+    } else {
+      paths = await Promise.all(
+        keys.map(async (key) => {
+          const path = join(root, 'agents', key);
+          await cp(seed, path, { recursive: true });
+          return path;
+        }),
+      );
+    }
+    const writeProbe = async (index) => {
+      if (!workspaceRouting) return;
+      const path = paths[index];
+      await writeFile(
+        join(path, 'routing-tool-probe.cjs'),
+        `const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {join}=require('node:path');
 for(const path of [process.cwd(),process.env.HOME,process.env.TMPDIR]) fs.writeFileSync(join(path,'own-artifact.txt'),'fixture');
 assert.equal(fs.readFileSync(${JSON.stringify(join(seed, 'source.cjs'))},'utf8'),'exports.value=2;\\n');
 assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(seed, 'source.cjs'))},'BAD'));
 assert.throws(()=>fs.readFileSync(${JSON.stringify(join(auth, 'auth.json'))}));
+assert.throws(()=>fs.readdirSync(${JSON.stringify(paths[(index + 1) % paths.length])}));
 assert.throws(()=>fs.readFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))}));
 assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))},'BAD'));
 console.log('ROUTING_SANDBOX_OK:${keys[index]}');
 `,
-          ),
-        ),
       );
+    };
+    await Promise.all(
+      paths.slice(0, stagedInventory ? 2 : paths.length).map((_, index) => writeProbe(index)),
+    );
     const runner = new CodexAppServerRunner({
       codexHome: auth,
       executable: nativeExecutable,
@@ -347,7 +381,7 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
     runtime = await runner.openReview({
       worktreePath: seed,
       privateWorkspacePaths: paths,
-      maxConcurrency: 3,
+      maxConcurrency: stagedInventory ? 2 : 3,
       signal: AbortSignal.timeout(30_000),
     });
     stopped = false;
@@ -356,32 +390,46 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
       'parallel',
       'Native public adapter must pass its managed compatibility gate',
     );
-    const outcomes = await Promise.allSettled(
-      paths.map((worktreePath, index) =>
-        runtime.runAgent({
-          worktreePath,
-          agent: {
-            key: keys[index],
-            name: keys[index],
-            vendor: 'codex',
-            model: 'mock-model',
-            effort: 'high',
-            completionSignal: '</findings>',
-            systemPrompt: `NATIVE_PROBE_${keys[index]}`,
-            tools: [],
-          },
-          pullRequest: {
-            owner: 'evaluation',
-            repo: 'producer',
-            number: 1,
-            headSha: sha,
-            baseRef: 'main',
-            title: 'Anonymous native fixture',
-            url: 'https://example.invalid/fixture',
-          },
-        }),
-      ),
-    );
+    const run = (index) =>
+      runtime.runAgent({
+        worktreePath: paths[index],
+        agent: {
+          key: keys[index],
+          name: keys[index],
+          vendor: 'codex',
+          model: 'mock-model',
+          effort: 'high',
+          completionSignal: '</findings>',
+          systemPrompt: `NATIVE_PROBE_${keys[index]}`,
+          tools: [],
+        },
+        pullRequest: {
+          owner: 'evaluation',
+          repo: 'producer',
+          number: 1,
+          headSha: sha,
+          baseRef: 'main',
+          title: 'Anonymous native fixture',
+          url: 'https://example.invalid/fixture',
+        },
+      });
+    const outcomes = stagedInventory
+      ? await Promise.allSettled([run(0), run(1)])
+      : await Promise.allSettled(paths.map((_, index) => run(index)));
+    if (stagedInventory) {
+      await Promise.all(
+        workspaces.slice(0, 2).map((workspace) => clones.releaseAgentWorkspace(workspace)),
+      );
+      const seedWorktree = {
+        path: seed,
+        repo: { owner: 'evaluation', name: 'producer', defaultBranch: 'main' },
+        reviewJobId: 'native-probe',
+        sha,
+      };
+      await clones.populateAgentWorkspace(seedWorktree, workspaces[2]);
+      await writeProbe(2);
+      outcomes.push(...(await Promise.allSettled([run(2)])));
+    }
     if (providerFailure) throw providerFailure;
     for (const [index, outcome] of outcomes.entries()) {
       if (outcome.status !== 'fulfilled')
@@ -399,7 +447,7 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
         outputTokens: 15 * (index + 1),
       });
     }
-    assert.equal(pending.length, 3, 'All native requests must overlap before responses');
+    assert.equal(pending.length, 3, 'All native requests must complete');
     if (workspaceRouting) assert.ok(routingRequests > 0, 'Native workspace discovery required');
     return {
       platform: process.platform,
@@ -407,7 +455,8 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
       codexVersion: version,
       provider: workspaceRouting ? 'synthetic-loopback-chatgpt' : 'anonymous-loopback-fixture',
       ...(workspaceRouting ? { routingRequests, retainedSandboxVerified: true } : {}),
-      concurrentAgents: 3,
+      concurrentAgents: stagedInventory ? 2 : 3,
+      ...(stagedInventory ? { stagedInventory: true, retiredPeerRootsVerified: true } : {}),
       completedAgents: 3,
       authoritativeUsage: true,
     };
@@ -551,5 +600,5 @@ process.exit(result.status??1);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   process.stdout.write(
-    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), workspaceRouting: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
+    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), workspaceRouting: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true), stagedInventory: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true, true), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
   );

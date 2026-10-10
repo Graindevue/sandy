@@ -22,6 +22,126 @@ import {
 } from './review-executor.test-support.js';
 
 describe('claimed ReviewJob concurrency', () => {
+  it('reserves every peer root but bounds resident copies and adapts concurrency to disk capacity', async () => {
+    const agents = [logicAgent, securityAgent, { ...logicAgent, key: 'framework' }];
+    const resident = new Set<string>();
+    const reserved: string[] = [];
+    let maximumResident = 0;
+    let starts = 0;
+    const firstWindow = deferred<void>();
+    const fixture = managedReview({
+      agents,
+      cap: 3,
+      onOpen: (paths, cap) => {
+        expect(paths).toEqual(reserved);
+        expect(paths).toHaveLength(3);
+        expect(cap).toBe(2);
+        expect(resident.size).toBe(2);
+      },
+      runAgent: async ({ worktreePath }) => {
+        expect(resident.has(worktreePath)).toBe(true);
+        if (++starts === 2) firstWindow.resolve();
+        await firstWindow.promise;
+        return runnerOutput(findingsOutput([]));
+      },
+    });
+    Object.assign(fixture.clones, {
+      checkAgentWorkspaceCapacity: async () => ({
+        seedBytes: 2 * 1024 ** 3,
+        availableBytes: 6 * 1024 ** 3,
+        requiredBytes: 9 * 1024 ** 3,
+        reserveBytes: 3 * 1024 ** 3,
+        fits: false,
+      }),
+      reserveAgentWorkspace: async (seed: { path: string }, key: string) => {
+        const path = `${seed.path}-${key}`;
+        reserved.push(path);
+        return { ...seed, path };
+      },
+      populateAgentWorkspace: async (_seed: unknown, workspace: { path: string }) => {
+        resident.add(workspace.path);
+        maximumResident = Math.max(maximumResident, resident.size);
+      },
+      releaseAgentWorkspace: async (workspace: { path: string }) => {
+        resident.delete(workspace.path);
+      },
+    });
+    expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 0 });
+    expect(maximumResident).toBe(2);
+    expect(resident.size).toBe(0);
+    expect(fixture.store.agentRuns).toHaveLength(3);
+    expect(fixture.poster.results[0]?.summary).toContain(
+      'requested parallel (maximum 3 Agents); effective parallel (maximum 2 Agents)',
+    );
+    expect(fixture.poster.results[0]?.summary).toContain(
+      'disk capacity reduced parallel concurrency',
+    );
+  });
+
+  it('retains healthy findings when a queued copy fails after admission', async () => {
+    const fixture = managedReview({
+      agents: [logicAgent, securityAgent, { ...logicAgent, key: 'framework' }],
+      runAgent: async () => runnerOutput(findingsOutput([])),
+    });
+    Object.assign(fixture.clones, {
+      reserveAgentWorkspace: async (seed: { path: string }, key: string) => ({
+        ...seed,
+        path: `${seed.path}-${key}`,
+      }),
+      populateAgentWorkspace: async (_seed: unknown, workspace: { path: string }) => {
+        if (workspace.path.endsWith('framework'))
+          throw Object.assign(new Error('copy exhausted disk'), { code: 'ENOSPC' });
+      },
+      releaseAgentWorkspace: async () => {},
+    });
+    expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 1 });
+    expect(fixture.store.agentRuns.map((run) => run.status)).toEqual([
+      'completed',
+      'completed',
+      'failed',
+    ]);
+    expect(fixture.poster.results[0]?.summary).toContain('Partial Review: 1 of 3');
+    expect(fixture.poster.results[0]?.summary).toContain('effective parallel');
+  });
+
+  it('falls back before any copies when the complete private inventory exceeds disk capacity', async () => {
+    const fixture = managedReview({ runAgent: async () => runnerOutput(findingsOutput([])) });
+    const materialize = vi.spyOn(fixture.clones, 'materializeAgentWorkspace');
+    const check = vi.fn(async () => ({
+      seedBytes: 4 * 1024 ** 3,
+      availableBytes: 7 * 1024 ** 3,
+      requiredBytes: 10 * 1024 ** 3,
+      reserveBytes: 2 * 1024 ** 3,
+      fits: false,
+    }));
+    Object.assign(fixture.clones, { checkAgentWorkspaceCapacity: check });
+    expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 0 });
+    expect(check).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/tmp/worktree/acme/widget/job-1' }),
+      2,
+    );
+    expect(materialize).not.toHaveBeenCalled();
+    expect(fixture.store.agentRuns).toHaveLength(2);
+    expect(fixture.poster.results[0]?.summary).toContain('insufficient disk capacity');
+    expect(fixture.poster.results[0]?.summary).toContain('10.00 GiB required');
+    expect(fixture.poster.results[0]?.summary).toContain('effective serial');
+  });
+
+  it('continues serially and reports an unavailable storage preflight', async () => {
+    const fixture = managedReview({ runAgent: async () => runnerOutput(findingsOutput([])) });
+    Object.assign(fixture.clones, {
+      checkAgentWorkspaceCapacity: async () => {
+        throw new Error('statfs unavailable');
+      },
+    });
+    const materialize = vi.spyOn(fixture.clones, 'materializeAgentWorkspace');
+    expect(await fixture.executor.executeClaimedJob('job-1')).toEqual({ failedAgentCount: 0 });
+    expect(materialize).not.toHaveBeenCalled();
+    expect(fixture.poster.results[0]?.summary).toContain(
+      'storage preflight unavailable: statfs unavailable',
+    );
+  });
+
   it.each([
     { code: 'ENOSPC', agentKey: 'logic' },
     { code: 'ENOSPC', agentKey: 'security' },
@@ -73,6 +193,10 @@ describe('claimed ReviewJob concurrency', () => {
       );
       expect(fixture.clones.removed).toHaveLength(agentKey === 'logic' ? 1 : 2);
       expect(fixture.poster.results[0]?.summary).not.toContain('Partial Review');
+      expect(fixture.poster.results[0]?.summary).toContain(
+        'requested parallel (maximum 2 Agents); effective serial (maximum 1 Agent)',
+      );
+      expect(fixture.poster.results[0]?.summary).toContain(`storage exhausted (${code})`);
       expect(fixture.store.status).toBe('completed');
       expect(info.mock.calls.flat().join('\n')).toContain('using serial mode');
     },

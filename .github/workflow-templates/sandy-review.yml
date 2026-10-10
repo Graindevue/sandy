@@ -30,6 +30,9 @@ jobs:
       group: sandy-codex-session
       queue: max
       cancel-in-progress: false
+    # Only the authorized job may publish validated download snapshots.
+    # issue_comment otherwise defaults to restore-only; actions: write does not change it.
+    cache-mode: write
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: sandy-codex
@@ -43,7 +46,7 @@ jobs:
       # A read-only GITHUB_TOKEN can check repository metadata and actor access.
       - name: Authorize a human collaborator and resolve the PR
         id: request
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const payload = context.payload;
@@ -104,21 +107,21 @@ jobs:
         id: source-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.SANDY_APP_ID }}
+          client-id: ${{ secrets.SANDY_APP_CLIENT_ID || secrets.SANDY_APP_ID }}
           private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
           owner: ${{ steps.source.outputs.owner }}
           repositories: ${{ steps.source.outputs.repository }}
           permission-contents: read
 
       - name: Checkout trusted repository configuration
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           path: repository
           persist-credentials: false
 
       - name: Checkout pinned private Sandy source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ vars.SANDY_SOURCE_REPOSITORY || 'Graindevue/sandy' }}
           ref: ${{ vars.SANDY_REF }}
@@ -138,6 +141,7 @@ jobs:
         with:
           pr-number: ${{ steps.request.outputs.pr-number }}
           app-id: ${{ secrets.SANDY_APP_ID }}
+          app-client-id: ${{ secrets.SANDY_APP_CLIENT_ID }}
           app-private-key: ${{ secrets.SANDY_APP_PRIVATE_KEY }}
           convex-url: ${{ secrets.CONVEX_URL }}
           codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}

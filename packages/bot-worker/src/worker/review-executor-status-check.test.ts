@@ -102,7 +102,7 @@ describe('ReviewExecutor Review Status Check', () => {
       completedAt: 400,
     });
     expect(poster.results[0]?.summary).toMatch(
-      /^Full project test suite deferred to CI; reviewers may run focused verification\.\n\nConfidence score: 5\/5/,
+      /^Full project test suite deferred to CI; reviewers may run focused verification\./,
     );
     expect(poster.results[0]?.summary).not.toContain('Tests passed');
   });

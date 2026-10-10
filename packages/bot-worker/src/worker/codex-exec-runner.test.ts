@@ -599,10 +599,14 @@ describe('CodexExecRunner through ReviewAgentRunner.installDependencies', () => 
         testStatus: 'deferred',
         testResult: expect.stringContaining('deferred to CI'),
       });
-      expect((await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8')).trim()).toBe(
-        JSON.stringify(
-          'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@12.10.1 install --frozen-lockfile --prefer-offline',
-        ),
+      const command = JSON.parse(
+        (await readFile(join(f.input.worktreePath, 'commands.jsonl'), 'utf8')).trim(),
+      ) as string;
+      expect(command).toContain(
+        'pnpm_config_supported_architectures=\'{"os":["current"],"cpu":["current"],"libc":["current"]}\'',
+      );
+      expect(command).toContain(
+        'CI=true LEFTHOOK=0 HUSKY=0 npx --yes pnpm@12.10.1 install --frozen-lockfile --prefer-offline',
       );
       expect((await stat(join(f.input.worktreePath, 'node_modules'))).isDirectory()).toBe(true);
       expect(messages).toEqual([

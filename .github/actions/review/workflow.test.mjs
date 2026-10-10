@@ -64,6 +64,9 @@ test('the caller workflow subscribes only to new comments and keeps the auth job
   assert.equal(workflow.jobs.review.environment, 'sandy-codex');
   assert.equal(workflow.jobs.review.permissions['id-token'], 'write');
   assert.equal(workflow.jobs.review.permissions.contents, 'read');
+  assert.equal(workflow['cache-mode'], undefined);
+  assert.equal(workflow.jobs.review['cache-mode'], 'write');
+  assert.equal(workflow.jobs.review.permissions.actions, undefined);
 });
 
 test('the exact caller authorization script accepts @sandy and rejects old or unauthorized requests', async () => {

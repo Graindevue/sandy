@@ -15,6 +15,7 @@ import {
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { agentWorkspaceCapacity, type WorkspaceCapacity } from './workspace-capacity.js';
 
 const exec = promisify(execFile);
 
@@ -168,13 +169,17 @@ export class CloneManager {
     return { repo, path, sha: request.sha, reviewJobId: request.reviewJobId };
   }
 
-  /**
-   * Snapshot a quiescent prepared seed without repeating its installation. Git's
-   * worktree pointer is retained for pinned reads; the runner must grant shared
-   * Git metadata, the seed and sibling sources read-only access. File copies use
-   * copy-on-write when supported, with regular copies as the fallback.
-   */
-  async materializeAgentWorkspace(seed: Worktree, agentKey: string): Promise<Worktree> {
+  async checkAgentWorkspaceCapacity(
+    seed: Worktree,
+    workspaceCount: number,
+  ): Promise<WorkspaceCapacity> {
+    const parent = join(this.#baseDir, '.agent-workspaces');
+    await mkdir(parent, { recursive: true });
+    return agentWorkspaceCapacity(seed.path, parent, workspaceCount, this.#signal);
+  }
+
+  /** Reserve every distinct peer root before the runtime constructs deny rules. */
+  async reserveAgentWorkspace(seed: Worktree, agentKey: string): Promise<Worktree> {
     this.#signal?.throwIfAborted();
     const parent = join(
       this.#baseDir,
@@ -186,8 +191,17 @@ export class CloneManager {
     await mkdir(parent, { recursive: true });
     const key = createHash('sha256').update(agentKey).digest('hex').slice(0, 12);
     const path = await mkdtemp(join(parent, `${key}-`));
+    this.#agentWorkspaces.add(path);
+    return { ...seed, path };
+  }
+
+  /** Copy the quiescent seed on admission; preserve private links and Git read boundaries. */
+  async populateAgentWorkspace(seed: Worktree, workspace: Worktree): Promise<void> {
+    this.#signal?.throwIfAborted();
+    if (!this.#agentWorkspaces.has(workspace.path) || (await readdir(workspace.path)).length !== 0)
+      throw new Error('Agent workspace must be an empty reserved directory');
     try {
-      await cp(seed.path, path, {
+      await cp(seed.path, workspace.path, {
         recursive: true,
         dereference: false,
         verbatimSymlinks: true,
@@ -197,12 +211,33 @@ export class CloneManager {
           return true;
         },
       });
-      await rebaseWorkspaceLinks(path, resolve(seed.path), await realpath(seed.path), this.#signal);
+      await rebaseWorkspaceLinks(
+        workspace.path,
+        resolve(seed.path),
+        await realpath(seed.path),
+        this.#signal,
+      );
       this.#signal?.throwIfAborted();
-      this.#agentWorkspaces.add(path);
-      return { ...seed, path };
     } catch (error) {
-      await rm(path, { recursive: true, force: true });
+      await this.releaseAgentWorkspace(workspace);
+      throw error;
+    }
+  }
+
+  /** Keep the reserved root alive for every peer's canonical permission rules. */
+  async releaseAgentWorkspace(workspace: Worktree): Promise<void> {
+    if (!this.#agentWorkspaces.has(workspace.path)) throw new Error('Unknown Agent workspace');
+    for (const name of await readdir(workspace.path))
+      await rm(join(workspace.path, name), { recursive: true, force: true });
+  }
+
+  async materializeAgentWorkspace(seed: Worktree, agentKey: string): Promise<Worktree> {
+    const workspace = await this.reserveAgentWorkspace(seed, agentKey);
+    try {
+      await this.populateAgentWorkspace(seed, workspace);
+      return workspace;
+    } catch (error) {
+      await this.removeWorktree(workspace);
       throw error;
     }
   }
