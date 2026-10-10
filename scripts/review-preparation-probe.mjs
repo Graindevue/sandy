@@ -118,6 +118,80 @@ async function preparationCanary(executable, root, codexHome, environment, denyA
   return report;
 }
 
+/** Verify the disposable pnpm metadata grant through the actual native sandbox. */
+async function pnpmMetadataCanary(executable, root, codexHome) {
+  const workspace = join(root, 'pnpm-metadata-canary');
+  await mkdir(workspace);
+  await exec('git', ['init', '--quiet', workspace], { timeout: 10_000 });
+  await writeFile(
+    join(workspace, 'package.json'),
+    JSON.stringify({
+      name: 'sandy-pnpm-metadata-canary',
+      private: true,
+      packageManager: 'pnpm@12.10.1',
+      scripts: { install: 'node verify-metadata.cjs' },
+    }),
+  );
+  const generatorHome = join(root, 'pnpm-lock-generator');
+  await mkdir(generatorHome);
+  await exec(
+    'npx',
+    [
+      '--yes',
+      'pnpm@12.10.1',
+      'install',
+      '--lockfile-only',
+      '--no-frozen-lockfile',
+      '--ignore-scripts',
+      '--store-dir',
+      join(root, 'pnpm-lock-store'),
+    ],
+    {
+      cwd: workspace,
+      timeout: 60_000,
+      env: {
+        PATH: process.env.PATH,
+        HOME: generatorHome,
+        CI: 'true',
+        pnpm_config_manage_package_manager_versions: 'false',
+      },
+    },
+  );
+  await writeFile(
+    join(workspace, 'verify-metadata.cjs'),
+    `
+    const fs = require('node:fs'), path = require('node:path');
+    const cache = process.env.pnpm_config_cache_dir;
+    if (!cache || !fs.statSync(cache).isDirectory()) throw new Error('Disposable metadata cache is unavailable');
+    fs.writeFileSync(path.join(cache, 'lifecycle-canary'), 'disposable');
+    fs.writeFileSync('metadata-result.json', JSON.stringify({ cache, home: process.env.HOME }));
+  `,
+  );
+  const runner = new CodexAppServerRunner({
+    executable,
+    codexHome,
+    toolHome: join(root, 'pnpm-installer-home'),
+    logger: { info() {} },
+    installTimeoutMs: 60_000,
+  });
+  const result = await runner.installDependencies({ worktreePath: workspace });
+  assert.equal(
+    result.status,
+    'installed',
+    result.status === 'failed' ? result.error : 'pnpm canary failed',
+  );
+  const marker = JSON.parse(await readFile(join(workspace, 'metadata-result.json'), 'utf8'));
+  assert.equal(marker.cache, join(dirname(codexHome), 'sandy-dependency-metadata'));
+  await assert.rejects(stat(marker.cache), { code: 'ENOENT' });
+  await assert.rejects(stat(join(marker.home, '.cache', 'pnpm')), { code: 'ENOENT' });
+  return {
+    status: result.status,
+    pnpmVersion: '12.10.1',
+    disposableMetadataVerified: true,
+    nativePolicy: result.platformPolicy?.description,
+  };
+}
+
 /** Reproduce benchmark priming through the shipped adapter, without login or model requests. */
 export async function runPreparationProbe(executable = 'codex', outputPath) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'sandy-primer-probe-')));
@@ -128,7 +202,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
   const snapshots = join(root, 'download-snapshots');
   const journal = join(root, 'results.json.jsonl');
   const fixtureEvidence = join(root, 'results.json.fixtures');
-  const signal = AbortSignal.timeout(90_000);
+  const signal = AbortSignal.timeout(180_000);
   const phases = [];
   let suite;
   const outcomes = [];
@@ -144,11 +218,13 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
       process.platform === 'linux'
         ? await preparationCanary(executable, root, codexHome, environment, true)
         : undefined;
+    const pnpmMetadata = await pnpmMetadataCanary(executable, root, codexHome);
     const canaryReport = {
       platform: process.platform,
       node: process.version,
       codexVersion: version,
       canary,
+      pnpmMetadata,
       ...(protectedAncestor ? { protectedAncestor } : {}),
     };
     if (outputPath) await writeFile(outputPath, `${JSON.stringify(canaryReport, null, 2)}\n`);
@@ -267,6 +343,7 @@ export async function runPreparationProbe(executable = 'codex', outputPath) {
         codexVersion: version,
         packageManager: fixture.packageManager,
         canary,
+        pnpmMetadata,
         ...(protectedAncestor ? { protectedAncestor } : {}),
         outcomes,
         phases,

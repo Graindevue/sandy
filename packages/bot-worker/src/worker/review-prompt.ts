@@ -148,7 +148,7 @@ Review toolchain:
 - Do NOT run root or whole-monorepo test suites; full-suite validation belongs to repository CI.
 - Do NOT re-run a dependency install; it already happened.
 - In a monorepo, a test that fails to resolve a workspace package's entry needs that package built first — build only what the test imports, never the whole Repo.
-${testStatusContext}
+${result.platformPolicy === undefined ? '' : `- Dependency platform policy: ${result.platformPolicy.description}\n`}${testStatusContext}
 ${result.testResult !== undefined ? `\nTest-suite context:\n${result.testResult}\n` : ''}
 `;
     }

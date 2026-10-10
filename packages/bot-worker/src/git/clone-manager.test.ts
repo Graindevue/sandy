@@ -177,6 +177,37 @@ describe('CloneManager', () => {
     expect(existsSync(join(b.path, 'feature.ts'))).toBe(true);
   });
 
+  it('keeps distinct reserved roots while populating and releasing prepared copies', async () => {
+    const origin = await makeOrigin();
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+    });
+    await manager.ensureCloned(REPO);
+    const seed = await manager.createWorktree(REPO, { reviewJobId: 'reserved', sha });
+    await installWorkspaceFixture(seed.path);
+    const first = await manager.reserveAgentWorkspace(seed, 'logic');
+    const second = await manager.reserveAgentWorkspace(seed, 'security');
+    expect(first.path).not.toBe(second.path);
+    expect(await readdir(second.path)).toEqual([]);
+    await manager.populateAgentWorkspace(seed, first);
+    await exec(process.execPath, ['probe.cjs', 'logic'], { cwd: first.path });
+    await manager.releaseAgentWorkspace(first);
+    expect((await lstat(first.path)).isDirectory()).toBe(true);
+    expect(await readdir(first.path)).toEqual([]);
+    await manager.populateAgentWorkspace(seed, second);
+    await exec(process.execPath, ['probe.cjs', 'security'], { cwd: second.path });
+    expect(JSON.parse(await readFile(join(second.path, 'dist/result.json'), 'utf8'))).toEqual({
+      agent: 'security',
+      shared: 'workspace dependency',
+    });
+    await manager.removeWorktree(first);
+    await manager.removeWorktree(second);
+    expect(existsSync(first.path)).toBe(false);
+    expect(existsSync(second.path)).toBe(false);
+  });
+
   it('gives Agents private prepared installations with working workspace dependencies', async () => {
     const origin = await makeOrigin();
     const headSha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');

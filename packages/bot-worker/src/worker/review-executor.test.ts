@@ -31,6 +31,47 @@ import {
 import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
+  it('posts cache outcomes and sanitized preparation diagnostics with execution mode', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic'] }));
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store,
+      poster,
+      cloneManager: new FakeCloneManager(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      runner: {
+        installDependencies: async () => ({
+          status: 'installed',
+          packageManager: 'pnpm',
+          command: 'pnpm install',
+          durationMs: 1000,
+          testStatus: 'deferred',
+          cache: {
+            restore: 'miss',
+            restoreMs: 1,
+            fetch: 'unavailable',
+            fetchMs: 2,
+            save: 'skipped',
+            saveMs: 0,
+            coldRetry: false,
+            diagnostics: { fetch: 'Unknown option: frozen-lockfile; Bearer private-cache-token' },
+          },
+        }),
+        runAgent: async () => runnerOutput(findingsOutput([])),
+      },
+      resolveAgent: () => logicAgent,
+    });
+    await executor.executeClaimedJob('job-1');
+    const summary = poster.results[0]?.summary;
+    expect(summary).toContain('restore miss (1ms); fetch unavailable (2ms); save skipped (0ms)');
+    expect(summary).toContain('Unknown option: frozen-lockfile');
+    expect(summary).not.toContain('private-cache-token');
+    expect(summary).toContain('requested serial');
+    expect(summary).toContain('effective serial');
+  });
+
   it.each([
     { name: 'no repo context', repos: undefined, expected: ['logic'] },
     { name: 'empty repo context', repos: [], expected: ['logic'] },
@@ -424,6 +465,7 @@ describe('ReviewExecutor', () => {
       'Sandy ReviewJob job-1: Agent "logic" completed in 100ms (1 finding).',
       'Sandy ReviewJob job-1: Agent "security" started.',
       'Sandy ReviewJob job-1: Agent "security" failed in 50ms.',
+      'Review execution: requested serial (maximum 1 Agent); effective serial (maximum 1 Agent).',
       'Sandy ReviewJob job-1: Synthesis and posting started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Synthesis and posting finished in \d+ms\.$/),
     ]);
@@ -480,9 +522,11 @@ describe('ReviewExecutor', () => {
     const testSummary =
       'Tests unavailable: dependency installation failed. Review used static analysis.';
     expect(poster.results[0]?.summary).toMatch(
-      /^Tests unavailable: dependency installation failed\. Review used static analysis\.\n\nConfidence score: 5\/5/,
+      /^Tests unavailable: dependency installation failed\. Review used static analysis\./,
     );
-    expect(poster.results[0]?.summary).not.toContain('container failed to start');
+    expect(poster.results[0]?.summary).toContain(
+      'Dependency preparation failed: container failed to start',
+    );
     expect(statusLines).toContain(testSummary);
     expect(completedChecks[0]).toMatchObject({
       conclusion: 'neutral',

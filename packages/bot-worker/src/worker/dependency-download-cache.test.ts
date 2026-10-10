@@ -1,12 +1,24 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { CodexExecRunner } from './codex-exec-runner.js';
+import { dependencyDownloadCacheKey } from './dependency-download-cache.js';
+import { detectDependencyInstall } from './dependency-install.js';
 import { createGitHubDependencyDownloadCache } from './github-dependency-download-cache.js';
 
 const exec = promisify(execFile);
@@ -15,7 +27,7 @@ afterEach(async () => {
   for (const remove of cleanup.splice(0).reverse()) await remove();
 });
 
-async function preparationFixture() {
+async function preparationFixture(platforms = false) {
   const root = await mkdtemp(join(tmpdir(), 'sandy-download-test-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const repo = join(root, 'repo');
@@ -24,16 +36,41 @@ async function preparationFixture() {
   await mkdir(pkg);
   await writeFile(
     join(pkg, 'package.json'),
-    JSON.stringify({ name: 'download-fixture', version: '1.0.0', main: 'index.js' }),
+    JSON.stringify({
+      name: 'download-fixture',
+      version: '1.0.0',
+      main: 'index.js',
+      ...(platforms ? { os: [process.platform], cpu: [process.arch] } : {}),
+    }),
   );
   await writeFile(join(pkg, 'index.js'), 'module.exports = "downloaded dependency";');
   await exec('tar', ['-czf', join(root, 'dependency.tgz'), 'package'], { cwd: root });
   const tarball = await readFile(join(root, 'dependency.tgz'));
+  let foreignTarball: Buffer | undefined;
+  if (platforms) {
+    const foreign = join(root, 'foreign', 'package');
+    await mkdir(foreign, { recursive: true });
+    await writeFile(
+      join(foreign, 'package.json'),
+      JSON.stringify({
+        name: 'foreign-fixture',
+        version: '1.0.0',
+        os: [process.platform === 'linux' ? 'darwin' : 'linux'],
+        cpu: [process.arch],
+      }),
+    );
+    await exec('tar', ['-czf', join(root, 'foreign.tgz'), 'package'], {
+      cwd: join(root, 'foreign'),
+    });
+    foreignTarball = await readFile(join(root, 'foreign.tgz'));
+  }
   let downloads = 0;
-  const server = createServer((_, response) => {
+  let foreignDownloads = 0;
+  const server = createServer((request, response) => {
     downloads++;
+    if (request.url === '/foreign.tgz') foreignDownloads++;
     response.writeHead(200, { 'content-type': 'application/octet-stream' });
-    response.end(tarball);
+    response.end(request.url === '/foreign.tgz' ? foreignTarball : tarball);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   cleanup.push(
@@ -118,9 +155,12 @@ async function preparationFixture() {
     manifest,
     lockfile,
     executable,
+    foreignUrl: `http://127.0.0.1:${address.port}/foreign.tgz`,
+    foreignDownloads: () => foreignDownloads,
     downloads: () => downloads,
     resetDownloads: () => {
       downloads = 0;
+      foreignDownloads = 0;
     },
   };
 }
@@ -370,7 +410,7 @@ it('retains dependency failure and publishes no cache when a cold install fails'
   expect(fixture.saved).toHaveLength(0);
 }, 20_000);
 
-it.each(['10.34.1', 'current'])(
+it.each(['10.34.1', '12.10.1', 'current'])(
   'uses pinned pnpm %s downloads without sharing installed dependencies or side effects',
   async (pin) => {
     const fixture = await preparationFixture();
@@ -409,7 +449,7 @@ it.each(['10.34.1', 'current'])(
     const input = { worktreePath: fixture.repo, cacheKey: 'acme/pnpm-fixture' };
     expect(await fixture.runner.installDependencies(input)).toMatchObject({
       status: 'installed',
-      cache: { save: 'saved' },
+      cache: { fetch: 'completed', save: 'saved' },
     });
     expect(fixture.downloads()).toBe(1);
     await rm(join(fixture.repo, 'node_modules'), { recursive: true });
@@ -422,8 +462,11 @@ it.each(['10.34.1', 'current'])(
       cwd: fixture.repo,
     });
     expect(resolved.stdout.trim()).toBe('downloaded dependency');
+    await expect(stat(join(fixture.root, 'sandy-dependency-metadata'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     expect(fixture.saved.flat().join('\n')).not.toMatch(
-      /node_modules|projects|side_effects|auth\.json|\.npmrc/,
+      /node_modules|projects|side_effects|auth\.json|\.npmrc|metadata-full/,
     );
   },
   60_000,
@@ -574,4 +617,113 @@ it('reuses the same provider path across Reviews with distinct temporary Codex h
   expect(fixture.downloads()).toBe(1);
   expect(fixture.saved).toHaveLength(1);
   expect(fixture.saved.flat().join('\n')).not.toMatch(/node_modules|auth\.json|\.npmrc/);
+}, 20_000);
+
+it('separates native download keys from repository architecture policy and other libc families', async () => {
+  const fixture = await preparationFixture();
+  await writeFile(
+    join(fixture.repo, 'package.json'),
+    JSON.stringify({ packageManager: 'pnpm@12.10.1' }),
+  );
+  await writeFile(join(fixture.repo, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0');
+  const detected = await detectDependencyInstall(fixture.repo);
+  if (!detected?.platformPolicy) throw new Error('Missing native platform policy');
+  const input = { worktreePath: fixture.repo, repository: 'acme/fixture', detected };
+  const native = await dependencyDownloadCacheKey(input);
+  const { platformPolicy, ...repositoryPolicy } = detected;
+  const full = await dependencyDownloadCacheKey({ ...input, detected: repositoryPolicy });
+  const otherLibc = await dependencyDownloadCacheKey({
+    ...input,
+    detected: {
+      ...detected,
+      platformPolicy: { ...platformPolicy, key: 'native-linux-x64-other-libc' },
+    },
+  });
+  expect(native?.key).toMatch(/^sandy-downloads-v3-/);
+  expect(native?.key).not.toBe(full?.key);
+  expect(native?.key).not.toBe(otherLibc?.key);
+});
+
+it('pnpm 12 fetch and install retain host-native optional packages without foreign-platform downloads', async () => {
+  const fixture = await preparationFixture(true);
+  const lock = JSON.parse(fixture.lockfile) as { packages: Record<string, { resolved?: string }> };
+  const url = lock.packages['node_modules/download-fixture']?.resolved;
+  if (!url) throw new Error('Missing host tarball');
+  const manifest = JSON.stringify({
+    packageManager: 'pnpm@12.10.1',
+    optionalDependencies: {
+      'download-fixture': url,
+      'foreign-fixture': fixture.foreignUrl,
+    },
+  });
+  const workspace = `supportedArchitectures:\n  os: [${process.platform}, ${process.platform === 'linux' ? 'darwin' : 'linux'}]\n  cpu: [current]\n  libc: [current]\n`;
+  await writeFile(join(fixture.repo, 'package.json'), manifest);
+  await writeFile(join(fixture.repo, 'pnpm-workspace.yaml'), workspace);
+  await rm(join(fixture.repo, 'package-lock.json'));
+  const baselineStore = join(fixture.root, 'baseline-platform-store');
+  await exec(
+    'npx',
+    ['--yes', 'pnpm@12.10.1', 'install', '--ignore-scripts', '--store-dir', baselineStore],
+    { cwd: fixture.repo },
+  );
+  await expect(
+    stat(join(fixture.repo, 'node_modules/foreign-fixture/package.json')),
+  ).resolves.toBeDefined();
+  const frozen = await readFile(join(fixture.repo, 'pnpm-lock.yaml'));
+  await rm(join(fixture.repo, 'node_modules'), { recursive: true });
+  await rm(baselineStore, { recursive: true });
+  fixture.resetDownloads();
+  const input = { worktreePath: fixture.repo, cacheKey: 'acme/native-platforms' };
+  expect(await fixture.runner.installDependencies(input)).toMatchObject({
+    status: 'installed',
+    cache: { fetch: 'completed', save: 'saved' },
+    platformPolicy: { description: expect.stringContaining('Native platform only') },
+  });
+  expect(fixture.foreignDownloads()).toBe(0);
+  await expect(stat(join(fixture.repo, 'node_modules/foreign-fixture'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  await expect(
+    stat(join(fixture.repo, 'node_modules/download-fixture/package.json')),
+  ).resolves.toBeDefined();
+  expect(await readFile(join(fixture.repo, 'package.json'), 'utf8')).toBe(manifest);
+  expect(await readFile(join(fixture.repo, 'pnpm-workspace.yaml'), 'utf8')).toBe(workspace);
+  expect(await readFile(join(fixture.repo, 'pnpm-lock.yaml'))).toEqual(frozen);
+  await rm(join(fixture.repo, 'node_modules'), { recursive: true });
+  fixture.resetDownloads();
+  expect(await fixture.runner.installDependencies(input)).toMatchObject({
+    status: 'installed',
+    cache: { restore: 'hit' },
+  });
+  expect(fixture.downloads()).toBe(0);
+}, 60_000);
+
+it('retains sanitized download-only failure details without hiding a successful ordinary install', async () => {
+  const fixture = await preparationFixture();
+  await writeFile(
+    fixture.executable,
+    `#!/usr/bin/env node
+    if (process.argv.at(-1).includes('--ignore-scripts')) {
+      process.stderr.write('Unknown option: frozen-lockfile; Bearer private-fixture-value');
+      process.exit(1);
+    }
+    const { spawn } = await import('node:child_process');
+    spawn('/bin/sh', ['-c', process.argv.at(-1)], { stdio: 'inherit', env: process.env }).on('close', code => process.exit(code ?? 1));
+  `,
+  );
+  const result = await fixture.runner.installDependencies({
+    worktreePath: fixture.repo,
+    cacheKey: 'acme/fetch-failure',
+  });
+  expect(result).toMatchObject({
+    status: 'installed',
+    cache: {
+      restore: 'miss',
+      fetch: 'unavailable',
+      save: 'skipped',
+      diagnostics: { fetch: expect.stringContaining('Unknown option: frozen-lockfile') },
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain('private-fixture-value');
+  expect(fixture.saved).toHaveLength(0);
 }, 20_000);

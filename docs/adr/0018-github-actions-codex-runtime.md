@@ -65,7 +65,17 @@ Review outputs are excluded.
 The key is derived from the actual reviewed head's files, rather than the
 caller's default branch. Revisions with identical installation inputs can
 reuse downloads; source revisions are not themselves cache-key components.
-Restoration uses the exact key without fallback keys.
+Restoration uses the exact key without fallback keys. The v3 namespace includes
+installation platform policy and libc. Pinned pnpm 12 prepares only native
+platform artifacts through its JSON environment override, preserving all dependency
+categories and frozen inputs; other versions retain repository policy. Both fetch
+and install use the same policy. Registry metadata is disposable, and reviewers
+are told that cross-platform installation is deferred to repository CI.
+
+The hardened issue-comment caller grants `cache-mode: write` on its authorized
+review job, rather than relying on `actions: write` or trusted-trigger defaults.
+Only validated, pre-lifecycle download snapshots are published. Mutable framework
+sources are restore-only. Updating the caller template is part of rollout.
 
 The optional parallel adapter owns one Codex app-server for a Review. Sandy
 admits selected Agents up to a positive cap (three initially in parallel mode),
@@ -80,6 +90,22 @@ the private copy; files are independent or copied on write, never hardlinked
 for mutable sharing. Seed source, pinned sibling source and Git metadata remain
 read-only. Tool homes, temporary files and writable caches are private. A
 timeout starts on admission rather than while waiting in the queue.
+
+Before populating the private workspace inventory, Sandy measures seed
+file sizes without following links, budgets ordinary copies (including duplicated
+hardlinks), and reserves 1 GiB per admitted Agent for builds and outputs. Every
+selected Agent gets a distinct reserved root before runtime startup for
+peer deny rules, but only the admitted window receives copies. Completed copies
+are released while their empty roots survive until shutdown. A lower cap reduces
+resident copies without reusing a writable root. Insufficient capacity reduces
+the parallel cap when at least two copies fit, otherwise selects serial mode;
+unavailable preflight selects serial mode before copying. ENOSPC/EDQUOT before
+admission remains a cleanup-and-serial fallback for races. Later copy failures
+retain partial-review failure semantics. A release failure does not abort active
+peers: their Findings are synthesized, new admissions stop to preserve the disk
+budget, and the Review reports an operational cleanup failure.
+Posted summaries disclose requested and effective concurrency, fallback reasons,
+storage estimates, cache outcomes and bounded sanitized preparation errors.
 
 Completed outcomes are persisted independently and synthesis reconstructs the
 selected-Agent order. Agent failures retain healthy peers and completed

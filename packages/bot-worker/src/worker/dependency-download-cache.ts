@@ -22,9 +22,11 @@ export interface DependencyDownloadCacheMetrics {
   restore: 'hit' | 'miss' | 'unavailable' | 'unverified' | 'discarded';
   restoreMs: number;
   fetchMs: number;
+  fetch?: 'completed' | 'unavailable';
   save: 'saved' | 'skipped' | 'unavailable';
   saveMs: number;
   coldRetry: boolean;
+  diagnostics?: { restore?: string; fetch?: string; save?: string };
 }
 
 export async function dependencyDownloadCacheKey(input: {
@@ -45,6 +47,7 @@ export async function dependencyDownloadCacheKey(input: {
       );
     if (!pin?.[2] || pin[1] !== input.detected.packageManager) return undefined;
     const digest = createHash('sha256');
+    digest.update(input.detected.platformPolicy?.key ?? 'repository-platforms').update('\0');
     digest.update(manifestBytes);
     for (const name of [
       input.detected.lockfile,
@@ -68,7 +71,7 @@ export async function dependencyDownloadCacheKey(input: {
     }
     const repository = createHash('sha256').update(input.repository.toLowerCase()).digest('hex');
     return {
-      key: `sandy-downloads-v2-${repository}-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-${manifest.packageManager}-${digest.digest('hex')}`,
+      key: `sandy-downloads-v3-${repository}-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}-${manifest.packageManager}-${digest.digest('hex')}`,
       version: pin[2],
     };
   } catch {
