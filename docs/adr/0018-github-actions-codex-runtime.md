@@ -101,7 +101,9 @@ resident copies without reusing a writable root. Insufficient capacity reduces
 the parallel cap when at least two copies fit, otherwise selects serial mode;
 unavailable preflight selects serial mode before copying. ENOSPC/EDQUOT before
 admission remains a cleanup-and-serial fallback for races. Later copy failures
-retain partial-review failure semantics.
+retain partial-review failure semantics. A release failure does not abort active
+peers: their Findings are synthesized, new admissions stop to preserve the disk
+budget, and the Review reports an operational cleanup failure.
 Posted summaries disclose requested and effective concurrency, fallback reasons,
 storage estimates, cache outcomes and bounded sanitized preparation errors.
 

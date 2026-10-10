@@ -22,6 +22,119 @@ import {
 } from './review-executor.test-support.js';
 
 describe('claimed ReviewJob concurrency', () => {
+  it.each(['completed Agent', 'queued population'])(
+    'retains active peers and Findings when release fails after %s',
+    async (failurePath) => {
+      const secondStarted = deferred<void>();
+      const releaseFailed = deferred<void>();
+      const warn = vi.fn();
+      const populated: string[] = [];
+      const fixture = managedReview({
+        agents: [logicAgent, securityAgent, { ...logicAgent, key: 'framework' }],
+        logger: { warn },
+        runAgent: async ({ agent, signal }) => {
+          if (agent.key === 'security') {
+            secondStarted.resolve();
+            await releaseFailed.promise;
+            await new Promise((resolve) => setImmediate(resolve));
+            expect(signal?.aborted).toBe(false);
+            return runnerOutput(findingsOutput([]));
+          }
+          await secondStarted.promise;
+          return runnerOutput(findingsOutput([finding]));
+        },
+      });
+      Object.assign(fixture.clones, {
+        reserveAgentWorkspace: async (seed: { path: string }, key: string) => ({
+          ...seed,
+          path: `${seed.path}-${key}`,
+        }),
+        populateAgentWorkspace: async (_seed: unknown, workspace: { path: string }) => {
+          populated.push(workspace.path);
+          if (failurePath === 'queued population' && workspace.path.endsWith('framework'))
+            throw new Error('copy failed');
+        },
+        releaseAgentWorkspace: async (workspace: { path: string }) => {
+          if (workspace.path.endsWith(failurePath === 'completed Agent' ? 'logic' : 'framework')) {
+            releaseFailed.resolve();
+            throw new Error('rm denied; Bearer private-release-token');
+          }
+        },
+      });
+      expect(await withTimeout(fixture.executor.executeClaimedJob('job-1'), 2000)).toEqual({
+        failedAgentCount: 1,
+      });
+      expect(fixture.store.agentRuns.find((run) => run.agentKey === 'security')?.status).toBe(
+        'completed',
+      );
+      expect(fixture.store.agentRuns.find((run) => run.agentKey === 'framework')?.status).toBe(
+        'failed',
+      );
+      if (failurePath === 'completed Agent')
+        expect(populated.some((path) => path.endsWith('framework'))).toBe(false);
+      expect(fixture.store.recordedFindings).toHaveLength(1);
+      expect(fixture.poster.results[0]?.summary).toContain('Review workspace cleanup failed');
+      expect(fixture.poster.results[0]?.summary).toContain('Partial Review: 1 of 3');
+      expect(fixture.store.status).toBe('failed');
+      expect(warn).toHaveBeenCalled();
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('private-release-token');
+      expect(fixture.poster.results[0]?.summary).not.toContain('private-release-token');
+    },
+  );
+
+  it('starts no Agents when an initial failed copy cannot be reclaimed', async () => {
+    const run = vi.fn(async () => runnerOutput(findingsOutput([])));
+    const fixture = managedReview({ runAgent: run, logger: { warn: vi.fn() } });
+    Object.assign(fixture.clones, {
+      reserveAgentWorkspace: async (seed: { path: string }, key: string) => ({
+        ...seed,
+        path: `${seed.path}-${key}`,
+      }),
+      populateAgentWorkspace: async () => {
+        throw new Error('copy failed');
+      },
+      releaseAgentWorkspace: async () => {
+        throw new Error('rm denied');
+      },
+    });
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(run).not.toHaveBeenCalled();
+    expect(fixture.store.status).toBe('failed');
+    expect(fixture.store.failed[0]?.error).toContain('cleanup failed before admission');
+  });
+
+  it('reports runtime serial fallback even when disk already reduced the requested parallel cap', async () => {
+    const fixture = managedReview({
+      agents: [logicAgent, securityAgent, { ...logicAgent, key: 'framework' }],
+      cap: 3,
+      runtimeCap: 1,
+      runAgent: async () => runnerOutput(findingsOutput([])),
+    });
+    Object.assign(fixture.clones, {
+      checkAgentWorkspaceCapacity: async () => ({
+        seedBytes: 2 * 1024 ** 3,
+        availableBytes: 6 * 1024 ** 3,
+        requiredBytes: 9 * 1024 ** 3,
+        reserveBytes: 3 * 1024 ** 3,
+        fits: false,
+      }),
+      reserveAgentWorkspace: async (seed: { path: string }, key: string) => ({
+        ...seed,
+        path: `${seed.path}-${key}`,
+      }),
+      populateAgentWorkspace: async () => {},
+      releaseAgentWorkspace: async () => {},
+    });
+    await fixture.executor.executeClaimedJob('job-1');
+    expect(fixture.poster.results[0]?.summary).toContain('effective serial');
+    expect(fixture.poster.results[0]?.summary).toContain(
+      'disk capacity reduced parallel concurrency',
+    );
+    expect(fixture.poster.results[0]?.summary).toContain(
+      'the runtime did not enable parallel execution',
+    );
+  });
+
   it('reserves every peer root but bounds resident copies and adapts concurrency to disk capacity', async () => {
     const agents = [logicAgent, securityAgent, { ...logicAgent, key: 'framework' }];
     const resident = new Set<string>();
@@ -688,6 +801,7 @@ function managedReview(options: {
   close?: () => Promise<void>;
   runAgent: ReviewAgentRuntime['runAgent'];
   agentTimeoutMs?: number;
+  runtimeCap?: number;
   onOpen?: (paths: readonly string[] | undefined, cap: number) => void;
   logger?: ConstructorParameters<typeof ReviewExecutor>[0]['logger'];
 }) {
@@ -721,7 +835,7 @@ function managedReview(options: {
         options.onOpen?.(privateWorkspacePaths, maxConcurrency);
         return {
           mode: maxConcurrency === 1 ? 'serial' : 'parallel',
-          maxConcurrency,
+          maxConcurrency: options.runtimeCap ?? maxConcurrency,
           ...(options.failureSignal === undefined ? {} : { failureSignal: options.failureSignal }),
           runAgent: options.runAgent,
           close: options.close ?? (async () => {}),

@@ -222,7 +222,9 @@ roster against the existing installation. Cleanup must succeed before Agents
 start. Ordinary preparation failures and errors after Agent execution starts
 retain their failure semantics. The fallback appears in phase logs and the
 posted summary. Later copy failures
-after Agent admission retain partial-review failure semantics.
+after Agent admission retain partial-review failure semantics. A workspace
+release failure lets active peers finish and retains their Findings, but stops
+new admissions and reports an operational cleanup failure.
 
 For callers encountering this while pinned to an earlier Sandy revision,
 `SANDY_AGENT_EXECUTION_MODE=serial` avoids private installation copies. See the

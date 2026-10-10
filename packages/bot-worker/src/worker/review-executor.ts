@@ -220,6 +220,7 @@ interface SelectedAgentReviewResults {
   failedAgentCount: number;
   selectedAgentCount: number;
   executionSummary: string;
+  workspaceReleaseError?: string;
   teardownError?: unknown;
 }
 
@@ -484,6 +485,19 @@ export class ReviewExecutor {
       failedAgentCount = agentResults.failedAgentCount;
       const preparationSummary = `${testSummary}\n\n${reviewDependencySummary(dependencyInstall)}\n\n${agentResults.executionSummary}`;
       this.#logger.info?.(agentResults.executionSummary);
+      const reliabilityWarnings: string[] = [];
+      if (agentResults.teardownError !== undefined)
+        reliabilityWarnings.push(
+          'Review runtime shutdown failed. Successful findings are retained; this Review did not finish reliably.',
+        );
+      if (agentResults.workspaceReleaseError !== undefined)
+        reliabilityWarnings.push(
+          `Review workspace cleanup failed: ${preparationDiagnosticMarkdown(agentResults.workspaceReleaseError)}. Successful findings are retained; this Review did not finish reliably.`,
+        );
+      if (failedAgentCount > 0)
+        reliabilityWarnings.push(
+          `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.`,
+        );
       let postedReview: PostedReviewResult | null = null;
       if (agentResults.outputs.length > 0) {
         postedReview = await this.#runPhase(jobId, 'Synthesis and posting', () =>
@@ -494,12 +508,7 @@ export class ReviewExecutor {
             changedLineCount: changedLines,
             siblingShas: workspace.siblingShas,
             cancellationSignal,
-            testSummary:
-              agentResults.teardownError !== undefined
-                ? `Review runtime shutdown failed. Successful findings are retained; this Review did not finish reliably.\n\n${preparationSummary}`
-                : failedAgentCount === 0
-                  ? preparationSummary
-                  : `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.\n\n${preparationSummary}`,
+            testSummary: [...reliabilityWarnings, preparationSummary].join('\n\n'),
           }),
         );
       }
@@ -510,6 +519,8 @@ export class ReviewExecutor {
           `Review runtime shutdown failed: ${describeError(agentResults.teardownError)}`,
         );
       }
+      if (agentResults.workspaceReleaseError !== undefined)
+        throw new Error(`Review workspace cleanup failed: ${agentResults.workspaceReleaseError}`);
       await this.#markCompletedOrThrowIfSuperseded(jobId, cancellationSignal);
       const outcome = completedReviewStatusCheckOutcome({
         selectedAgentCount: agentResults.selectedAgentCount,
@@ -656,6 +667,23 @@ export class ReviewExecutor {
       this.#cloneManager.populateAgentWorkspace !== undefined &&
       this.#cloneManager.releaseAgentWorkspace !== undefined;
     const populated = new Set<number>();
+    let workspaceReleaseError: string | undefined;
+    const releaseWorkspace = async (
+      index: number,
+      agent: AgentDefinition,
+      worktree: ReviewWorktree,
+    ) => {
+      try {
+        await this.#cloneManager.releaseAgentWorkspace?.(worktree);
+        populated.delete(index);
+        return true;
+      } catch (error) {
+        const diagnostic = `Agent ${JSON.stringify(agent.key)} workspace release failed: ${preparationDiagnostic(error)}`;
+        workspaceReleaseError ??= diagnostic;
+        this.#logger.warn(`Sandy ReviewJob ${input.context.job.id}: ${diagnostic}`);
+        return false;
+      }
+    };
     let maxConcurrency = this.#maxAgentConcurrency;
     let fallbackReason: string | undefined;
     let storageSummary = '';
@@ -674,7 +702,7 @@ export class ReviewExecutor {
           ),
         );
         const gib = (bytes: number) => (bytes / 1024 ** 3).toFixed(2);
-        storageSummary = `Private workspace storage: ${stagedWorkspaces ? Math.min(maxConcurrency, input.agents.length) : input.agents.length} resident copies of ${gib(capacity.seedBytes)} GiB; ${gib(capacity.requiredBytes)} GiB required including ${gib(capacity.reserveBytes)} GiB build reserve; ${gib(capacity.availableBytes)} GiB available.`;
+        storageSummary = `Requested private workspace storage budget: ${stagedWorkspaces ? Math.min(maxConcurrency, input.agents.length) : input.agents.length} resident copies of ${gib(capacity.seedBytes)} GiB; ${gib(capacity.requiredBytes)} GiB required including ${gib(capacity.reserveBytes)} GiB build reserve; ${gib(capacity.availableBytes)} GiB available.`;
         this.#logProgress(input.context.job.id, storageSummary);
         if (!capacity.fits) {
           const affordable = Math.floor(capacity.availableBytes / (capacity.seedBytes + 1024 ** 3));
@@ -729,8 +757,8 @@ export class ReviewExecutor {
           privateWorkspaces.set(index, worktree);
           if (stagedWorkspaces && this.#cloneManager.populateAgentWorkspace) {
             if (populated.size < maxConcurrency) {
-              await this.#cloneManager.populateAgentWorkspace(input.workspace.prWorktree, worktree);
               populated.add(index);
+              await this.#cloneManager.populateAgentWorkspace(input.workspace.prWorktree, worktree);
             }
           } else populated.add(index);
           this.#logProgress(
@@ -760,8 +788,17 @@ export class ReviewExecutor {
           await failBeforeStart(
             index,
             agent,
-            `Agent workspace could not be prepared: ${describeError(error)}`,
+            `Agent workspace could not be prepared: ${preparationDiagnostic(error)}`,
           );
+          const worktree = privateWorkspaces.get(index);
+          if (
+            stagedWorkspaces &&
+            worktree !== undefined &&
+            !(await releaseWorkspace(index, agent, worktree))
+          )
+            throw new Error(
+              `Review workspace cleanup failed before admission: ${workspaceReleaseError}`,
+            );
         }
       }
     }
@@ -773,8 +810,14 @@ export class ReviewExecutor {
       signal,
     });
     const cap = runtime === undefined ? 1 : Math.min(maxConcurrency, runtime.maxConcurrency);
-    if (this.#maxAgentConcurrency > 1 && cap === 1 && fallbackReason === undefined)
-      fallbackReason = 'the runtime did not enable parallel execution';
+    if (cap < maxConcurrency) {
+      const runtimeReason =
+        cap === 1
+          ? 'the runtime did not enable parallel execution'
+          : `the runtime limited concurrency to ${cap}`;
+      fallbackReason =
+        fallbackReason === undefined ? runtimeReason : `${fallbackReason}; ${runtimeReason}`;
+    }
     const executionSummary = `Review execution: requested ${this.#maxAgentConcurrency === 1 ? 'serial' : 'parallel'} (maximum ${this.#maxAgentConcurrency} ${this.#maxAgentConcurrency === 1 ? 'Agent' : 'Agents'}); effective ${cap === 1 ? 'serial' : 'parallel'} (maximum ${cap} ${cap === 1 ? 'Agent' : 'Agents'}).${fallbackReason === undefined ? '' : ` Fallback: ${preparationDiagnosticMarkdown(fallbackReason)}.`}${storageSummary ? ` ${storageSummary}` : ''}`;
     let next = 0;
     let teardownError: unknown;
@@ -822,15 +865,23 @@ export class ReviewExecutor {
               );
               continue;
             }
+            if (workspaceReleaseError !== undefined) {
+              await failBeforeStart(
+                index,
+                agent,
+                `Agent was not started because private workspace storage could not be reclaimed: ${workspaceReleaseError}`,
+              );
+              continue;
+            }
             const privateWorktree = privateWorkspaces.get(index);
             if (stagedWorkspaces && privateWorktree !== undefined && !populated.has(index)) {
               const startedAt = Date.now();
               try {
+                populated.add(index);
                 await this.#cloneManager.populateAgentWorkspace?.(
                   input.workspace.prWorktree,
                   privateWorktree,
                 );
-                populated.add(index);
                 this.#logProgress(
                   input.context.job.id,
                   `Agent ${JSON.stringify(agent.key)} workspace materialized in ${Date.now() - startedAt}ms.`,
@@ -842,7 +893,7 @@ export class ReviewExecutor {
                   agent,
                   `Agent workspace could not be prepared: ${preparationDiagnostic(error)}`,
                 );
-                await this.#cloneManager.releaseAgentWorkspace?.(privateWorktree);
+                await releaseWorkspace(index, agent, privateWorktree);
                 continue;
               }
             }
@@ -858,8 +909,7 @@ export class ReviewExecutor {
               ...(runtime === undefined ? {} : { runtime }),
             });
             if (stagedWorkspaces && privateWorktree !== undefined) {
-              await this.#cloneManager.releaseAgentWorkspace?.(privateWorktree);
-              populated.delete(index);
+              await releaseWorkspace(index, agent, privateWorktree);
             }
           }
         } catch (error) {
@@ -886,6 +936,7 @@ export class ReviewExecutor {
       failedAgentCount: results.filter((result) => result.status === 'failed').length,
       selectedAgentCount: input.agents.length,
       executionSummary,
+      ...(workspaceReleaseError === undefined ? {} : { workspaceReleaseError }),
       ...(teardownError === undefined ? {} : { teardownError }),
     };
   }
