@@ -464,7 +464,7 @@ describe('ReviewExecutor', () => {
       'Sandy ReviewJob job-1: Agent "logic" started.',
       'Sandy ReviewJob job-1: Agent "logic" completed in 100ms (1 finding).',
       'Sandy ReviewJob job-1: Agent "security" started.',
-      'Sandy ReviewJob job-1: Agent "security" failed in 50ms.',
+      'Sandy ReviewJob job-1: Agent "security" failed in 50ms (runtime/unknown; error recorded on the AgentRun).',
       'Review execution: requested serial (maximum 1 Agent); effective serial (maximum 1 Agent).',
       'Sandy ReviewJob job-1: Synthesis and posting started.',
       expect.stringMatching(/^Sandy ReviewJob job-1: Synthesis and posting finished in \d+ms\.$/),
@@ -639,13 +639,17 @@ describe('ReviewExecutor', () => {
       expect.objectContaining({
         reviewJobId: 'job-1',
         pullRequestId: 'pr-1',
-        finding: duplicateSecurityFinding,
+        finding: { ...duplicateSecurityFinding, alsoReportedBy: ['logic'] },
       }),
     ]);
     expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: 0 }]);
     expect(poster.results).toHaveLength(1);
     expect(poster.results[0]?.findings).toEqual([
-      { id: 'finding-1', archetypeId: 'archetype-1', finding: duplicateSecurityFinding },
+      {
+        id: 'finding-1',
+        archetypeId: 'archetype-1',
+        finding: { ...duplicateSecurityFinding, alsoReportedBy: ['logic'] },
+      },
     ]);
     expect(poster.results[0]?.summary).toContain(
       'Synthesized 2 raw findings into 1 posted finding.',
@@ -733,6 +737,120 @@ describe('ReviewExecutor', () => {
     expect(store.recordedFindings).toEqual([expect.objectContaining({ finding: securityFinding })]);
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
+  });
+
+  it('gives every Agent the PR history and still reviews when history cannot load', async () => {
+    const history = {
+      body: 'Closes #12.',
+      linkedIssues: [{ number: 12, title: 'Webhook deliveries are dropped on timeout' }],
+      priorFindings: [],
+    };
+    const targets: unknown[] = [];
+    const run = async (loadPullRequestHistory: () => Promise<typeof history>) => {
+      const runner = new FakeRunner(findingsOutput([]));
+      const poster = new FakePoster();
+      const warnings: string[] = [];
+      const executor = new ReviewExecutor({
+        ...fixtureExecutorOptions,
+        store: new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] })),
+        cloneManager: new FakeCloneManager(),
+        poster,
+        archetypeAssigner: new FakeArchetypeAssigner(),
+        diffInspector: new FakeDiffInspector(42),
+        runner,
+        resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+        resolveAgents: () => [logicAgent, securityAgent],
+        pullRequestHistory: {
+          loadPullRequestHistory: async (target) => {
+            targets.push(target);
+            return loadPullRequestHistory();
+          },
+        },
+        logger: { info: () => {}, warn: (message: string) => warnings.push(message) },
+      });
+      await executor.executeClaimedJob('job-1');
+      return { runner, poster, warnings };
+    };
+
+    const loaded = await run(async () => history);
+    expect(loaded.runner.calls.map((call) => call.pullRequestHistory)).toEqual([history, history]);
+    expect(targets).toHaveLength(1);
+
+    const failed = await run(async () => {
+      throw new Error('GitHub API 502');
+    });
+    expect(failed.runner.calls.map((call) => call.pullRequestHistory)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(failed.poster.results).toHaveLength(1);
+    expect(failed.warnings).toContain(
+      'PR history could not be loaded; Agents will review without earlier findings or the PR description.',
+    );
+  });
+
+  it('posts an unscored, incomplete summary when a selected Agent fails', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async ({ agent }) => {
+          if (agent.key === 'logic') {
+            throw new Error('container exited with status 1');
+          }
+          return runnerOutput(findingsOutput([], 'Nothing to flag.'));
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    const summary = poster.results[0]?.summary ?? '';
+    expect(summary).toContain('Confidence score: not scored (review incomplete)');
+    expect(summary).toContain(
+      'Review incomplete: 1 of 2 Agents failed (logic). Findings below come only from security.',
+    );
+    expect(summary).not.toContain('5/5');
+    expect(summary).not.toContain('found no issues');
+    expect(store.confidenceScores).toEqual([{ jobId: 'job-1', confidenceScore: null }]);
+  });
+
+  it('still posts a summary when every selected Agent fails', async () => {
+    const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+    const poster = new FakePoster();
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store,
+      cloneManager: new FakeCloneManager(),
+      poster,
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: { changedLineCount: async () => 42 },
+      runner: {
+        runAgent: async () => {
+          throw new Error('container exited with status 1');
+        },
+      },
+      resolveAgent: (_repo, agentKey) => (agentKey === 'logic' ? logicAgent : securityAgent),
+      resolveAgents: () => [logicAgent, securityAgent],
+      now: nextNow([100, 110, 200, 210, 300]),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(poster.results).toHaveLength(1);
+    expect(poster.results[0]?.summary).toContain(
+      'Review incomplete: 2 of 2 Agents failed (logic, security).',
+    );
+    expect(poster.results[0]?.findings).toEqual([]);
   });
 
   it('records timed_out when one Agent exceeds its execution cap', async () => {
@@ -912,7 +1030,12 @@ describe('ReviewExecutor', () => {
 
     await executor.executeClaimedJob('job-1');
 
-    expect(poster.results).toEqual([]);
+    expect(poster.results).toEqual([
+      expect.objectContaining({
+        findings: [],
+        summary: expect.stringContaining('Review incomplete: 1 of 1 Agents failed (logic).'),
+      }),
+    ]);
     expect(store.agentRuns[0]).toMatchObject({
       reviewJobId: 'job-1',
       agentKey: 'logic',

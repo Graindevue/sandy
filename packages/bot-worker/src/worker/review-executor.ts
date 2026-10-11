@@ -34,7 +34,13 @@ import type {
   PullRequestTarget,
 } from './poster.js';
 import { preparationDiagnostic, preparationDiagnosticMarkdown } from './preparation-diagnostics.js';
-import { AgentRunError, isReviewSupersededError, ReviewSupersededError } from './review-errors.js';
+import type { PullRequestHistory, PullRequestHistorySource } from './pull-request-history.js';
+import {
+  AgentRunError,
+  agentRunFailure,
+  isReviewSupersededError,
+  ReviewSupersededError,
+} from './review-errors.js';
 import type {
   ArchetypeAssignedFinding,
   PersistedFinding,
@@ -47,6 +53,7 @@ import {
   type ReviewStatusCheckLogger,
   type ReviewStatusCheckReporter,
   type ReviewStatusCheckRun,
+  reviewFailedOutcome,
   startReviewStatusCheck,
 } from './review-status-check.js';
 import {
@@ -101,7 +108,8 @@ export interface ReviewJobContext {
 export interface RecordSynthesizedReviewInput {
   reviewJobId: string;
   pullRequestId: string;
-  confidenceScore: Confidence;
+  /** `null` for an incomplete Review, which is not scored. */
+  confidenceScore: Confidence | null;
   findings: readonly Finding[];
 }
 
@@ -168,6 +176,7 @@ export interface ReviewAgentRunner {
     siblingWorktrees?: readonly RunnerSiblingWorktree[];
     botConfig?: ReviewBotContext;
     dependencyInstall?: DependencyInstallResult;
+    pullRequestHistory?: PullRequestHistory;
     signal?: AbortSignal;
   }): Promise<AgentRunResult>;
   /**
@@ -208,16 +217,19 @@ type AgentExecutionOutcome =
       startedAt: number;
       finishedAt: number;
       error: string;
+      /** Log-safe failure class: protocol enums only, never reviewed output. */
+      failureClass: string;
       usage?: AgentRunUsage;
     };
 
 type SelectedAgentReviewResult =
   | { status: 'completed'; output: AgentReviewOutput }
-  | { status: 'failed' };
+  | { status: 'failed'; agentKey: string };
 
 interface SelectedAgentReviewResults {
   outputs: AgentReviewOutput[];
   failedAgentCount: number;
+  failedAgentKeys: string[];
   selectedAgentCount: number;
   executionSummary: string;
   workspaceReleaseError?: string;
@@ -265,6 +277,7 @@ interface AgentExecutionInput {
   manifest: ApiSurfaceManifestBuildResult | undefined;
   reviewBotConfig: ReviewBotContext;
   dependencyInstall: DependencyInstallResult | undefined;
+  pullRequestHistory: PullRequestHistory | undefined;
   cancellationSignal: AbortSignal | undefined;
   runtime?: ReviewAgentRuntime;
 }
@@ -299,6 +312,7 @@ export interface ReviewExecutorOptions {
   runner: ReviewAgentRunner;
   poster: ReviewPoster;
   statusChecks?: ReviewStatusCheckReporter;
+  pullRequestHistory?: PullRequestHistorySource;
   archetypeAssigner: ReviewArchetypeAssigner;
   resolveAgent(repo: RepoForWorktree, agentKey: string): AgentDefinition | null;
   resolveAgents?: (repo: RepoForWorktree) => readonly AgentDefinition[];
@@ -327,6 +341,7 @@ export class ReviewExecutor {
   readonly #runner: ReviewAgentRunner;
   readonly #poster: ReviewPoster;
   readonly #statusChecks: ReviewStatusCheckReporter | null;
+  readonly #pullRequestHistory: PullRequestHistorySource | null;
   readonly #archetypeAssigner: ReviewArchetypeAssigner;
   readonly #resolveAgent: (repo: RepoForWorktree, agentKey: string) => AgentDefinition | null;
   readonly #resolveAgents: ((repo: RepoForWorktree) => readonly AgentDefinition[]) | null;
@@ -348,6 +363,7 @@ export class ReviewExecutor {
     this.#runner = options.runner;
     this.#poster = options.poster;
     this.#statusChecks = options.statusChecks ?? null;
+    this.#pullRequestHistory = options.pullRequestHistory ?? null;
     this.#archetypeAssigner = options.archetypeAssigner;
     this.#resolveAgent = options.resolveAgent;
     this.#resolveAgents = options.resolveAgents ?? null;
@@ -413,6 +429,7 @@ export class ReviewExecutor {
       // Capture all host-side context and Agent selection before running any
       // reviewed scripts. Scripts may replace the checkout's files/directories;
       // the context must remain tied to the pinned source, never those writes.
+      const pullRequestHistoryLoad = this.#loadPullRequestHistory(context);
       const [manifestSettled, botConfigSettled] = await Promise.allSettled([
         this.#manifestBuilder === null
           ? Promise.resolve(undefined)
@@ -479,6 +496,7 @@ export class ReviewExecutor {
         manifest,
         reviewBotConfig,
         dependencyInstall,
+        pullRequestHistory: await pullRequestHistoryLoad,
         cancellationSignal,
         worktrees,
       });
@@ -494,21 +512,20 @@ export class ReviewExecutor {
         reliabilityWarnings.push(
           `Review workspace cleanup failed: ${preparationDiagnosticMarkdown(agentResults.workspaceReleaseError)}. Successful findings are retained; this Review did not finish reliably.`,
         );
-      if (failedAgentCount > 0)
-        reliabilityWarnings.push(
-          `Partial Review: ${failedAgentCount} of ${agentResults.selectedAgentCount} selected Agents failed. Successful findings are retained; this is not an all-clear.`,
-        );
       let postedReview: PostedReviewResult | null = null;
-      if (agentResults.outputs.length > 0) {
+      // Post whenever an Agent was selected, so a failed run is still answered on the PR.
+      if (agentResults.outputs.length > 0 || agentResults.failedAgentKeys.length > 0) {
         postedReview = await this.#runPhase(jobId, 'Synthesis and posting', () =>
           this.#synthesizePersistAndPostReview({
             context,
             target,
             agentOutputs: agentResults.outputs,
+            failedAgentKeys: agentResults.failedAgentKeys,
             changedLineCount: changedLines,
             siblingShas: workspace.siblingShas,
             cancellationSignal,
             testSummary: [...reliabilityWarnings, preparationSummary].join('\n\n'),
+            checkRunUrl: statusCheck?.url ?? null,
           }),
         );
       }
@@ -527,9 +544,14 @@ export class ReviewExecutor {
         failedAgentCount: agentResults.failedAgentCount,
         postedFindingCount: postedReview?.postedFindings.length ?? 0,
       });
+      // A deferred full suite is the normal focused-review path, not a degraded run;
+      // only a failed or missing test run keeps a clean Review short of success.
       if (
         outcome.conclusion === 'success' &&
-        !(dependencyInstall?.status === 'installed' && dependencyInstall.testStatus === 'passed')
+        !(
+          dependencyInstall?.status === 'installed' &&
+          (dependencyInstall.testStatus === 'passed' || dependencyInstall.testStatus === 'deferred')
+        )
       ) {
         outcome.conclusion = 'neutral';
         outcome.verdict = 'Sandy completed review';
@@ -551,7 +573,7 @@ export class ReviewExecutor {
         await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.superseded });
         return { failedAgentCount };
       }
-      await statusCheck?.complete({ outcome: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed });
+      await statusCheck?.complete({ outcome: reviewFailedOutcome(error) });
     } finally {
       for (const worktree of worktrees.reverse()) {
         await this.#cloneManager.removeWorktree(worktree);
@@ -652,6 +674,7 @@ export class ReviewExecutor {
     manifest: ApiSurfaceManifestBuildResult | undefined;
     reviewBotConfig: ReviewBotContext;
     dependencyInstall: DependencyInstallResult | undefined;
+    pullRequestHistory: PullRequestHistory | undefined;
     cancellationSignal: AbortSignal | undefined;
     worktrees: ReviewWorktree[];
   }): Promise<SelectedAgentReviewResults> {
@@ -730,7 +753,7 @@ export class ReviewExecutor {
         finishedAt: timestamp,
         error,
       });
-      results[index] = { status: 'failed' };
+      results[index] = { status: 'failed', agentKey: agent.key };
     };
     // The runtime needs every peer root before it can construct safe deny rules.
     // Snapshot from the quiescent seed; investigation budgets start later.
@@ -934,6 +957,9 @@ export class ReviewExecutor {
     return {
       outputs: results.flatMap((result) => (result.status === 'completed' ? [result.output] : [])),
       failedAgentCount: results.filter((result) => result.status === 'failed').length,
+      failedAgentKeys: results.flatMap((result) =>
+        result.status === 'failed' ? [result.agentKey] : [],
+      ),
       selectedAgentCount: input.agents.length,
       executionSummary,
       ...(workspaceReleaseError === undefined ? {} : { workspaceReleaseError }),
@@ -941,21 +967,41 @@ export class ReviewExecutor {
     };
   }
 
+  /**
+   * PR history is context, not a precondition: a GitHub error here costs the
+   * Agents their memory of earlier rounds, never the Review itself.
+   */
+  async #loadPullRequestHistory(
+    context: ReviewJobContext,
+  ): Promise<PullRequestHistory | undefined> {
+    if (this.#pullRequestHistory === null) {
+      return undefined;
+    }
+    try {
+      return await this.#pullRequestHistory.loadPullRequestHistory(pullRequestTarget(context));
+    } catch {
+      this.#logger.warn(
+        'PR history could not be loaded; Agents will review without earlier findings or the PR description.',
+      );
+      return undefined;
+    }
+  }
+
   async #runSelectedAgent(input: AgentExecutionInput): Promise<SelectedAgentReviewResult> {
     const { context, agent } = input;
     this.#logProgress(context.job.id, `Agent ${JSON.stringify(agent.key)} started.`);
     const outcome = await this.#executeAgent(input);
     await this.#store.recordAgentRun(agentRunRecordInput(context.job.id, agent.key, outcome));
-    const findings =
+    const detail =
       outcome.status === 'completed'
         ? ` (${outcome.payload.findings.length} ${outcome.payload.findings.length === 1 ? 'finding' : 'findings'})`
-        : '';
+        : ` (${outcome.failureClass}; error recorded on the AgentRun)`;
     this.#logProgress(
       context.job.id,
-      `Agent ${JSON.stringify(agent.key)} ${outcome.status} in ${outcome.finishedAt - outcome.startedAt}ms${findings}.`,
+      `Agent ${JSON.stringify(agent.key)} ${outcome.status} in ${outcome.finishedAt - outcome.startedAt}ms${detail}.`,
     );
     if (outcome.status !== 'completed') {
-      return { status: 'failed' };
+      return { status: 'failed', agentKey: agent.key };
     }
 
     return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
@@ -966,6 +1012,7 @@ export class ReviewExecutor {
     const startedAt = this.#now();
     const runInput = agentRunInput(input);
     let usage: AgentRunUsage | undefined;
+    let parsingOutput = false;
 
     try {
       const result = await this.#runAgentWithTimeout(
@@ -976,6 +1023,7 @@ export class ReviewExecutor {
       );
       usage = result.usage;
       await this.#throwIfCancelledOrSuperseded(context.job.id, cancellationSignal);
+      parsingOutput = true;
       const payload = parseFindingsPayload(result.stdout);
       return {
         status: 'completed',
@@ -999,6 +1047,7 @@ export class ReviewExecutor {
         startedAt,
         finishedAt: this.#now(),
         error: describeError(error),
+        failureClass: parsingOutput ? 'malformed findings output' : agentFailureClass(error),
         ...(usage !== undefined ? { usage } : {}),
       };
     }
@@ -1130,13 +1179,16 @@ export class ReviewExecutor {
     context: ReviewJobContext;
     target: PullRequestTarget;
     agentOutputs: readonly AgentReviewOutput[];
+    failedAgentKeys: readonly string[];
     changedLineCount: number;
     siblingShas: SiblingShas;
     cancellationSignal: AbortSignal | undefined;
     testSummary: string;
+    checkRunUrl: string | null;
   }): Promise<PostedReviewResult> {
     const synthesized = synthesizeAgentOutputs({
       agentOutputs: input.agentOutputs,
+      failedAgentKeys: input.failedAgentKeys,
       changedLineCount: input.changedLineCount,
     });
     await this.#throwIfCancelledOrSuperseded(input.context.job.id, input.cancellationSignal);
@@ -1153,6 +1205,7 @@ export class ReviewExecutor {
     const postable = synthesizePostableReview({
       archetypeAssignedFindings,
       agentOutputs: input.agentOutputs,
+      failedAgentKeys: input.failedAgentKeys,
       changedLineCount: input.changedLineCount,
       rawFindingCount: synthesized.rawFindingCount,
     });
@@ -1160,7 +1213,11 @@ export class ReviewExecutor {
       input.target,
       postable.findings,
       input.siblingShas,
-      `${input.testSummary}\n\n${postable.summary}`,
+      [
+        input.testSummary,
+        postable.summary,
+        ...(input.checkRunUrl === null ? [] : [`Sandy check run: ${input.checkRunUrl}`]),
+      ].join('\n\n'),
     );
   }
 
@@ -1254,6 +1311,9 @@ function agentRunInput(input: AgentExecutionInput): ReviewAgentRunInput {
   if (input.dependencyInstall !== undefined) {
     runInput.dependencyInstall = input.dependencyInstall;
   }
+  if (input.pullRequestHistory !== undefined) {
+    runInput.pullRequestHistory = input.pullRequestHistory;
+  }
   return runInput;
 }
 
@@ -1334,6 +1394,14 @@ function repoAgentsYaml(config: ReviewBotContext, fullName: string): string | nu
     (entry) => entry.repo.fullName.toLowerCase() === fullName.toLowerCase(),
   );
   return repoConfig?.agentsYaml;
+}
+
+function agentFailureClass(error: unknown): string {
+  if (isAgentTimedOutError(error)) {
+    return 'timed out';
+  }
+  const failure = agentRunFailure(error);
+  return `${failure.stage}/${failure.code}`;
 }
 
 class AgentTimedOutError extends AgentRunError {

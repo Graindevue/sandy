@@ -8,6 +8,8 @@ is) and `CONTEXT.md` (domain glossary).
 - Branch feature work from **`main`** (default / production), using
   `phase-N/<slug>` names.
 - Open feature PRs against **`main`**.
+- Do not use `staging`: it is not part of the workflow, even though an old
+  branch of that name may still exist on the remote.
 
 ## Code review
 
@@ -22,6 +24,14 @@ Use [coderabbit-review](.agents/skills/coderabbit-review/SKILL.md) to request an
 verify a review. Public repositories with fewer than 10 stars require manual
 review requests, including after pushes. A successful status can mean the review
 was skipped; verify a completed review of the current head and its findings.
+
+## Private data
+
+Sandy is a public repository; the repositories it reviews may be private. Never
+commit their PR titles or bodies, findings, review comments, code, file paths,
+or run logs here, in docs, fixtures, tests, commit messages, or PR
+descriptions. Write synthetic fixtures, and keep analyses of a reviewed
+repository in that repository.
 
 ## Runtime
 

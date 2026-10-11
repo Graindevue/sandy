@@ -8,7 +8,6 @@ const SEVERITY_WEIGHT = {
 
 export interface ComputeConfidenceScoreInput {
   findings: readonly Finding[];
-  changedLineCount: number;
 }
 
 export function computeConfidenceScore(input: ComputeConfidenceScoreInput): Confidence {
@@ -24,20 +23,11 @@ export function computeConfidenceScore(input: ComputeConfidenceScoreInput): Conf
     (sum, finding) => sum + SEVERITY_WEIGHT[finding.severity] * finding.confidence,
     0,
   );
-  const blastRadiusPenalty =
-    changedLinePenalty(input.changedLineCount) + crossRepoReferencePenalty(input.findings);
+  // Diff size alone is not a penalty: on a large PR it turned a single P2 into
+  // 2/5. The summary prints the changed-line count beside the score instead.
+  const blastRadiusPenalty = crossRepoReferencePenalty(input.findings);
 
   return toConfidence(5 - Math.ceil(findingRisk / 6 + blastRadiusPenalty));
-}
-
-function changedLinePenalty(changedLineCount: number): number {
-  if (changedLineCount >= 1000) {
-    return 2;
-  }
-  if (changedLineCount >= 250) {
-    return 1;
-  }
-  return 0;
 }
 
 function crossRepoReferencePenalty(findings: readonly Finding[]): number {

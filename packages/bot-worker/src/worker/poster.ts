@@ -263,7 +263,10 @@ function formatFindingDetailSections(
   const parts: string[] = [];
 
   if (finding.suggestedFix !== undefined) {
-    parts.push(`Suggested fix:\n${finding.suggestedFix}`);
+    parts.push(`Possible direction (unverified):\n${finding.suggestedFix}`);
+  }
+  if (finding.alsoReportedBy !== undefined && finding.alsoReportedBy.length > 0) {
+    parts.push(`Also reported by: ${finding.alsoReportedBy.join(', ')}`);
   }
   if (finding.crossRepoReferences !== undefined && finding.crossRepoReferences.length > 0) {
     parts.push(formatCrossRepoReferences(finding.crossRepoReferences, siblingShas));

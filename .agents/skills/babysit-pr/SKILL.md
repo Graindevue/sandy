@@ -58,7 +58,7 @@ matching states and affected responsive variants. Keep assets out of commits.
 
 ## Base branch and completion
 
-Sandy feature PRs target `staging`; release PRs promote `staging` to `main`.
+Sandy feature PRs target `main`; there is no `staging` step.
 Watch changes to the actual PR base and
 integrate them when needed, following the repository's branch rules. If an
 overlapping PR makes this one obsolete, stop monitoring and report it; ask

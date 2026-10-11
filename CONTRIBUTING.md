@@ -16,21 +16,21 @@ Sandy is built primarily for one developer's daily use, but the runtime is gener
 
 ## Pull request workflow
 
-Branches: `main` (default / production) ← `staging` (integration) ← feature branches.
+Branches: `main` (default / production) ← feature branches. There is no
+`staging` branch in this workflow; do not branch from or target it.
 
-1. Branch from `staging` (name it `phase-N/<slug>`)
+1. Branch from `main` (name it `phase-N/<slug>`)
 2. Make focused changes; include tests where reasonable
 3. Run `pnpm lint:fix && pnpm type-check && pnpm test`
-4. Open a PR **against `staging`** and request a [CodeRabbit review](./.agents/skills/coderabbit-review/SKILL.md)
+4. Open a PR **against `main`** and request a [CodeRabbit review](./.agents/skills/coderabbit-review/SKILL.md)
 5. Address verified review findings and pass required CI; a maintainer reviews before merge
-
-Release PRs promote `staging` to `main` through a separate maintainer review.
 
 ## What we won't merge
 
 - Code that hard-codes paths, file names, or conventions specific to one project
 - Dependencies on a specific cloud SaaS unless gated behind a configuration flag
 - Tests using real-world product code (use synthetic fixtures)
+- Data from the private repositories Sandy reviews: PR titles or bodies, findings, review comments, code, file paths, run logs, or analyses derived from them. Sandy is public; keep that material in the reviewed repository and commit only synthetic examples and aggregate conclusions
 - Removal of the HTML comment trailer (`<!-- bot:finding=... archetype=... -->`) — load-bearing for the learning loop
 
 ## Releasing

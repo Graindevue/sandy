@@ -102,7 +102,7 @@ test('GitHub App token actions use the client-id input with a legacy issuer fall
   const steps = action.runs.steps.filter((entry) =>
     entry.uses?.startsWith('actions/create-github-app-token@'),
   );
-  assert.equal(steps.length, 2);
+  assert.equal(steps.length, 3);
   for (const step of steps) {
     assert.equal(step.with['app-id'], undefined);
     // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression is literal test data.

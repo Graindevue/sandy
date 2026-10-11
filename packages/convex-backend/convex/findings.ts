@@ -32,17 +32,23 @@ export const recordFinding = mutation({
   },
 });
 
-/** Atomically persist synthesized Findings and their ReviewJob confidence score. */
+/**
+ * Atomically persist synthesized Findings and their ReviewJob confidence score.
+ * An incomplete Review (a selected Agent failed) is not scored, so it omits
+ * `confidenceScore` and the ReviewJob keeps its existing value.
+ */
 export const recordSynthesizedReview = mutation({
   args: {
     reviewJobId: v.id('reviewJobs'),
     pullRequestId: v.id('pullRequests'),
-    confidenceScore: confidence,
+    confidenceScore: v.optional(confidence),
     findings: v.array(findingInput),
   },
   returns: v.array(v.id('findings')),
   handler: async (ctx, { reviewJobId, pullRequestId, confidenceScore, findings }) => {
-    await ctx.db.patch(reviewJobId, { confidenceScore });
+    if (confidenceScore !== undefined) {
+      await ctx.db.patch(reviewJobId, { confidenceScore });
+    }
 
     const findingIds: Array<Id<'findings'>> = [];
     for (const finding of findings) {

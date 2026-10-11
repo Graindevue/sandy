@@ -74,7 +74,9 @@ describe('claimed ReviewJob concurrency', () => {
         expect(populated.some((path) => path.endsWith('framework'))).toBe(false);
       expect(fixture.store.recordedFindings).toHaveLength(1);
       expect(fixture.poster.results[0]?.summary).toContain('Review workspace cleanup failed');
-      expect(fixture.poster.results[0]?.summary).toContain('Partial Review: 1 of 3');
+      expect(fixture.poster.results[0]?.summary).toContain(
+        'Review incomplete: 1 of 3 Agents failed',
+      );
       expect(fixture.store.status).toBe('failed');
       expect(warn).toHaveBeenCalled();
       expect(warn.mock.calls.flat().join(' ')).not.toContain('private-release-token');
@@ -213,7 +215,7 @@ describe('claimed ReviewJob concurrency', () => {
       'completed',
       'failed',
     ]);
-    expect(fixture.poster.results[0]?.summary).toContain('Partial Review: 1 of 3');
+    expect(fixture.poster.results[0]?.summary).toContain('Review incomplete: 1 of 3 Agents failed');
     expect(fixture.poster.results[0]?.summary).toContain('effective parallel');
   });
 
@@ -305,7 +307,7 @@ describe('claimed ReviewJob concurrency', () => {
         ],
       );
       expect(fixture.clones.removed).toHaveLength(agentKey === 'logic' ? 1 : 2);
-      expect(fixture.poster.results[0]?.summary).not.toContain('Partial Review');
+      expect(fixture.poster.results[0]?.summary).not.toContain('Review incomplete');
       expect(fixture.poster.results[0]?.summary).toContain(
         'requested parallel (maximum 2 Agents); effective serial (maximum 1 Agent)',
       );
@@ -364,7 +366,7 @@ describe('claimed ReviewJob concurrency', () => {
       status: 'failed',
       error: 'Agent workspace could not be prepared: access denied',
     });
-    expect(fixture.poster.results[0]?.summary).toContain('Partial Review');
+    expect(fixture.poster.results[0]?.summary).toContain('Review incomplete');
   });
 
   it('uses the shared prepared worktree in serial rollback without private copies', async () => {
@@ -495,9 +497,7 @@ describe('claimed ReviewJob concurrency', () => {
       { agentKey: 'custom', status: 'failed' },
     ]);
     expect(fixture.store.recordedFindings).toHaveLength(1);
-    expect(fixture.poster.results[0]?.summary).toContain(
-      'Partial Review: 2 of 3 selected Agents failed',
-    );
+    expect(fixture.poster.results[0]?.summary).toContain('Review incomplete: 2 of 3 Agents failed');
   });
 
   it('cancels active and queued work and waits for children and runtime shutdown before removing workspaces', async () => {

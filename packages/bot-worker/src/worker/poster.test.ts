@@ -236,6 +236,22 @@ describe('PullRequestPoster', () => {
     expect(body).toContain('- + 1 more in `acme/mobile`');
   });
 
+  it('credits the other Agents whose duplicate findings were merged', () => {
+    const body = formatFindingBody(
+      { id: 'finding-1', finding: { ...baseFinding, alsoReportedBy: ['convex', 'security'] } },
+      {},
+    );
+
+    expect(body).toContain('Also reported by: convex, security');
+  });
+
+  it('labels the suggested fix as an unverified direction rather than a patch', () => {
+    const body = formatFindingBody({ id: 'finding-1', finding: baseFinding }, {});
+
+    expect(body).toContain('Possible direction (unverified):\nInclude tenantId in the key.');
+    expect(body).not.toContain('Suggested fix:');
+  });
+
   it('omits archetype metadata from the trailer when learning assignment is unavailable', () => {
     const body = formatFindingBody(
       {

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { api } from '@sandy/convex-backend/api';
@@ -200,11 +200,18 @@ export async function runReviewAction(
           throw new Error(
             'Pull request changed during the review; request a review of the current head',
           );
-        return await poster.postReviewResult(input);
+        const posted = await poster.postReviewResult(input);
+        await recordRequestAnswered(process.env.GITHUB_OUTPUT);
+        return posted;
       },
-      postScopeDeclined: (input) => poster.postScopeDeclined(input),
+      postScopeDeclined: async (input) => {
+        const posted = await poster.postScopeDeclined(input);
+        await recordRequestAnswered(process.env.GITHUB_OUTPUT);
+        return posted;
+      },
     },
     statusChecks: github,
+    pullRequestHistory: github,
     archetypeAssigner: disabledArchetypeAssigner,
     ...(signal !== undefined ? { signal } : {}),
     maxChangedLines: config.maxChangedLines,
@@ -229,10 +236,24 @@ export async function runReviewAction(
   });
   const result = await executor.executeClaimedJob(jobId);
   const status = await store.getReviewJobStatus(jobId);
+  // A newer `@sandy` request took over this PR; its run answers on the PR.
+  if (status === 'superseded') await recordRequestAnswered(process.env.GITHUB_OUTPUT);
   if (status !== 'completed' || result.failedAgentCount > 0)
     throw new Error(
       `Sandy ReviewJob ${jobId} ended as ${status ?? 'missing'} with ${result.failedAgentCount} failed Agent Run(s)`,
     );
+}
+
+/**
+ * Marks the review step so the action's failure report stays quiet: a run
+ * that posted its summary (even an incomplete one), or was superseded by a
+ * newer request, has an answer on the PR that a failure comment would contradict.
+ */
+export async function recordRequestAnswered(outputPath: string | undefined): Promise<void> {
+  if (outputPath === undefined) {
+    return;
+  }
+  await appendFile(outputPath, 'request-answered=true\n');
 }
 
 function requiredEnv(env: NodeJS.ProcessEnv, key: string): string {

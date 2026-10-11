@@ -65,11 +65,13 @@ runs:
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
 
     - name: Install pnpm
+      id: pnpm
       uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       with:
         version: ${{ steps.prepare.outputs.pnpm-version }}
 
     - name: Set up Node
+      id: node
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 24
@@ -79,6 +81,7 @@ runs:
     # Only Sandy's pinned, trusted source is installed and built on the host.
     # Reviewed package scripts are handled by the runner's credential-free sandbox.
     - name: Install and build Sandy
+      id: build
       shell: bash
       working-directory: ${{ steps.prepare.outputs.sandy-root }}
       run: |
@@ -91,6 +94,7 @@ runs:
         opensrc --version
 
     - name: Prepare Linux sandbox prerequisites
+      id: sandbox
       if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' }}
       shell: bash
       run: |
@@ -105,6 +109,7 @@ runs:
         sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 
     - name: Restore framework source cache
+      id: opensrc-cache
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: ${{ runner.temp }}/sandy-opensrc
@@ -131,6 +136,7 @@ runs:
       run: node "$GITHUB_ACTION_PATH/auth.mjs" seed
 
     - name: Warm up Codex and allow its built-in session refresh
+      id: warm-up
       shell: bash
       env:
         SANDY_INPUT_MODEL: ${{ inputs.model }}
@@ -141,7 +147,7 @@ runs:
         --model "$SANDY_INPUT_MODEL"
         -c model_reasoning_effort='"xhigh"'
         -c cli_auth_credentials_store='"file"'
-        "Reply with the single word OK. Do not use tools." >/dev/null
+        "Reply with the single word OK. Do not use tools."
 
     # The runner supplies cache credentials to Node actions, not run: shell steps.
     - name: Expose the optional cache runtime to trusted review steps
@@ -163,6 +169,7 @@ runs:
           }
 
     - name: Review the pull request
+      id: review
       shell: bash
       working-directory: ${{ steps.prepare.outputs.sandy-root }}
       env:
@@ -184,6 +191,42 @@ runs:
         printf '::stop-commands::%s\n' "$sandy_log_guard"
         trap 'printf "::%s::\n" "$sandy_log_guard"' EXIT
         timeout --signal=TERM --kill-after=60s 90m pnpm review
+
+    # A run that fails before Sandy posts anything would otherwise leave the
+    # `@sandy` request unanswered on the PR. The review step sets
+    # request-answered once a summary is on the PR (even an incomplete one) or
+    # a newer request has superseded this run.
+    - name: Create a token to report a failed run
+      id: report-token
+      if: ${{ failure() && steps.review.outputs.request-answered != 'true' }}
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        client-id: ${{ inputs.app-client-id || inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        permission-pull-requests: write
+
+    - name: Tell the pull request that Sandy could not finish
+      id: report-failure
+      if: ${{ failure() && steps.report-token.outcome == 'success' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.report-token.outputs.token }}
+        SANDY_PR_NUMBER: ${{ inputs.pr-number }}
+        SANDY_STEP_OUTCOMES: >-
+          [
+          ["Validate the authorized request and prepare trusted configuration", "${{ steps.prepare.outcome }}"],
+          ["Install pnpm", "${{ steps.pnpm.outcome }}"],
+          ["Set up Node", "${{ steps.node.outcome }}"],
+          ["Install and build Sandy", "${{ steps.build.outcome }}"],
+          ["Prepare Linux sandbox prerequisites", "${{ steps.sandbox.outcome }}"],
+          ["Restore framework source cache", "${{ steps.opensrc-cache.outcome }}"],
+          ["Check permission to persist the rotating session", "${{ steps.auth-token.outcome }}"],
+          ["Restore the current session if missing", "${{ steps.auth.outcome }}"],
+          ["Warm up Codex and allow its built-in session refresh", "${{ steps.warm-up.outcome }}"],
+          ["Expose the optional cache runtime to trusted review steps", "${{ steps.cache-runtime.outcome }}"],
+          ["Review the pull request", "${{ steps.review.outcome }}"]
+          ]
+      run: node "$GITHUB_ACTION_PATH/report-failure.mjs"
 
     # Tokens last an hour. Mint another token after the review so a long review
     # never loses the auth write-back because its initial installation token expired.

@@ -126,6 +126,26 @@ describe('Phase 2 Convex schema handlers', () => {
     ]);
   });
 
+  it('leaves the ReviewJob confidence untouched when an incomplete Review is unscored', async () => {
+    const ctx = fakeCtx();
+    const reviewJobId = await invoke(enqueue, ctx, {
+      pullRequestId: 'pullRequests:1',
+      repoId: 'repos:1',
+      headSha: 'head-sha',
+      trigger: 'mention',
+      agentKeys: ['logic'],
+    });
+    const before = ctx.db.getDoc(reviewJobId);
+
+    await invoke(recordSynthesizedReview, ctx, {
+      reviewJobId,
+      pullRequestId: 'pullRequests:1',
+      findings: [],
+    });
+
+    expect(ctx.db.getDoc(reviewJobId)).toEqual(before);
+  });
+
   it('persists review job confidence, agent run references, and sibling SHAs', async () => {
     const ctx = fakeCtx();
 

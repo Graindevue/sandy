@@ -2,6 +2,17 @@ import type { Finding } from '@sandy/shared-types';
 
 export const DEFAULT_SUMMARY_COSINE_THRESHOLD = 0.85;
 export const DEFAULT_LINE_PROXIMITY = 2;
+// Cross-agent merge thresholds. Margins are thin: a true merge can share as
+// little as a quarter of its identifiers, while a distinct finding on the same
+// lines can share just under that. dedup.test.ts pins both boundaries.
+export const DEFAULT_CROSS_AGENT_ANCHOR_CONTAINMENT = 0.5;
+export const DEFAULT_CROSS_AGENT_IDENTIFIER_OVERLAP = 0.25;
+
+// Code identifiers: camelCase, PascalCase, snake_case, file names and
+// namespaced references such as `errors:not_found`.
+const IDENTIFIER_PATTERN =
+  /\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z]+[A-Z][A-Za-z0-9]*|[A-Za-z]+_[A-Za-z0-9_]+|[A-Za-z0-9_-]+\.(?:ts|tsx|js|mjs)|[a-z]+:[a-z0-9_]+)\b/g;
+const IGNORED_IDENTIFIERS = new Set(['node_modules']);
 
 const STOP_WORDS = new Set([
   'a',
@@ -38,6 +49,8 @@ const SEVERITY_RANK = {
 export interface DedupFindingsOptions {
   summaryCosineThreshold?: number;
   lineProximity?: number;
+  crossAgentAnchorContainment?: number;
+  crossAgentIdentifierOverlap?: number;
 }
 
 interface Candidate {
@@ -52,32 +65,63 @@ export function dedupeFindings(
   const dedupOptions = {
     summaryCosineThreshold: options.summaryCosineThreshold ?? DEFAULT_SUMMARY_COSINE_THRESHOLD,
     lineProximity: options.lineProximity ?? DEFAULT_LINE_PROXIMITY,
+    crossAgentAnchorContainment:
+      options.crossAgentAnchorContainment ?? DEFAULT_CROSS_AGENT_ANCHOR_CONTAINMENT,
+    crossAgentIdentifierOverlap:
+      options.crossAgentIdentifierOverlap ?? DEFAULT_CROSS_AGENT_IDENTIFIER_OVERLAP,
   };
   const clusters: Candidate[][] = [];
 
   for (const [index, finding] of findings.entries()) {
     const candidate = { finding, index };
-    const matchingClusters = clusters.filter((cluster) =>
-      cluster.some((member) => isDuplicateFinding(member.finding, finding, dedupOptions)),
+    // The same wording on nearby lines is one defect, so it chains: lines 22,
+    // 24 and 26 form one cluster and bridge clusters they touch.
+    const lexicalClusters = clusters.filter((cluster) =>
+      cluster.some((member) => isLexicalDuplicate(member.finding, finding, dedupOptions)),
     );
-
-    const firstCluster = matchingClusters[0];
-    if (firstCluster === undefined) {
-      clusters.push([candidate]);
+    const firstCluster = lexicalClusters[0];
+    if (firstCluster !== undefined) {
+      firstCluster.push(candidate);
+      for (const cluster of lexicalClusters.slice(1).reverse()) {
+        firstCluster.push(...cluster);
+        clusters.splice(clusters.indexOf(cluster), 1);
+      }
       continue;
     }
 
-    firstCluster.push(candidate);
-    for (const cluster of matchingClusters.slice(1).reverse()) {
-      firstCluster.push(...cluster);
-      clusters.splice(clusters.indexOf(cluster), 1);
+    // A cross-agent match must hold against every member, so A~B and B~C
+    // cannot pull two unrelated findings A and C into one comment.
+    const crossAgentCluster = clusters.find((cluster) =>
+      cluster.every((member) => isCrossAgentDuplicate(member.finding, finding, dedupOptions)),
+    );
+    if (crossAgentCluster === undefined) {
+      clusters.push([candidate]);
+    } else {
+      crossAgentCluster.push(candidate);
     }
   }
 
   return clusters
-    .map((cluster) => selectClusterRepresentative(cluster))
+    .map((cluster) => creditMergedAgents(selectClusterRepresentative(cluster), cluster))
     .sort(compareFindingsForPosting)
     .map((candidate) => candidate.finding);
+}
+
+function creditMergedAgents(representative: Candidate, cluster: readonly Candidate[]): Candidate {
+  const otherAgents = [
+    ...new Set(
+      cluster
+        .flatMap(({ finding }) => [finding.agentKey, ...(finding.alsoReportedBy ?? [])])
+        .filter((agentKey) => agentKey !== representative.finding.agentKey),
+    ),
+  ];
+  if (otherAgents.length === 0) {
+    return representative;
+  }
+  return {
+    ...representative,
+    finding: { ...representative.finding, alsoReportedBy: otherAgents },
+  };
 }
 
 export function summaryCosineSimilarity(left: string, right: string): number {
@@ -95,7 +139,7 @@ export function summaryCosineSimilarity(left: string, right: string): number {
   return dotProduct / (magnitude(leftVector) * magnitude(rightVector));
 }
 
-function isDuplicateFinding(
+function isLexicalDuplicate(
   left: Finding,
   right: Finding,
   options: Required<DedupFindingsOptions>,
@@ -103,6 +147,63 @@ function isDuplicateFinding(
   return (
     isNearbySamePath(left, right, options.lineProximity) &&
     summaryCosineSimilarity(left.summary, right.summary) >= options.summaryCosineThreshold
+  );
+}
+
+function isCrossAgentDuplicate(
+  left: Finding,
+  right: Finding,
+  options: Required<DedupFindingsOptions>,
+): boolean {
+  // Different Agents describe the same defect in different words, so summary
+  // wording is a poor signal. Require largely shared anchors and shared code
+  // identifiers across summary, evidence and fix instead.
+  return (
+    left.agentKey !== right.agentKey &&
+    anchorContainment(left, right) > options.crossAgentAnchorContainment &&
+    identifierOverlap(left, right) >= options.crossAgentIdentifierOverlap
+  );
+}
+
+/** Overlapping lines divided by the length of the shorter anchor range. */
+function anchorContainment(left: Finding, right: Finding): number {
+  if (left.anchor.repo !== right.anchor.repo || left.anchor.path !== right.anchor.path) {
+    return 0;
+  }
+  const overlap =
+    Math.min(left.anchor.lineEnd, right.anchor.lineEnd) -
+    Math.max(left.anchor.lineStart, right.anchor.lineStart) +
+    1;
+  const shorter = Math.min(
+    left.anchor.lineEnd - left.anchor.lineStart + 1,
+    right.anchor.lineEnd - right.anchor.lineStart + 1,
+  );
+  return Math.max(0, overlap) / shorter;
+}
+
+/** Shared code identifiers divided by the smaller identifier set. */
+function identifierOverlap(left: Finding, right: Finding): number {
+  const leftIdentifiers = codeIdentifiers(left);
+  const rightIdentifiers = codeIdentifiers(right);
+  const smaller = Math.min(leftIdentifiers.size, rightIdentifiers.size);
+  if (smaller === 0) {
+    return 0;
+  }
+  let shared = 0;
+  for (const identifier of leftIdentifiers) {
+    if (rightIdentifiers.has(identifier)) {
+      shared += 1;
+    }
+  }
+  return shared / smaller;
+}
+
+function codeIdentifiers(finding: Finding): Set<string> {
+  const text = [finding.summary, finding.evidence, finding.suggestedFix ?? ''].join(' ');
+  return new Set(
+    [...text.matchAll(IDENTIFIER_PATTERN)]
+      .map(([identifier]) => identifier.toLowerCase())
+      .filter((identifier) => !IGNORED_IDENTIFIERS.has(identifier)),
   );
 }
 

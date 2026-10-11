@@ -123,7 +123,7 @@ describe('synthesizeReview', () => {
     const result = synthesizeReview({
       findings: [baseFinding],
       changedLineCount: 80,
-      agentSummaries: ['One issue found.'],
+      agentSummaries: [{ agentKey: 'logic', summary: 'One issue found.' }],
     });
 
     expect(result.confidenceScore).toBe(3);
@@ -136,15 +136,21 @@ describe('synthesizeReview', () => {
     const result = synthesizeReview({
       findings: [],
       changedLineCount: 80,
-      agentSummaries: ['Nothing to flag.'],
+      agentSummaries: [
+        { agentKey: 'logic', summary: 'Nothing to flag.' },
+        { agentKey: 'convex', summary: 'Ran the focused query tests; nothing to flag.' },
+      ],
     });
 
     expect(result.confidenceScore).toBe(5);
     expect(result.summary).toContain('Confidence score: 5/5');
-    expect(result.summary).toContain('Sandy review: no findings posted.');
+    expect(result.summary).toContain(
+      'Sandy review found no issues. Agents that ran: logic, convex; 80 changed lines reviewed.',
+    );
+    expect(result.summary).not.toContain('no findings posted');
   });
 
-  it('lowers the confidence score for large cross-repo blast radius', () => {
+  it('lowers the confidence score for cross-repo blast radius', () => {
     const result = synthesizeReview({
       findings: [
         {
@@ -154,11 +160,93 @@ describe('synthesizeReview', () => {
           crossRepoReferences: [{ repo: 'acme/desktop', path: 'src/orders.ts', line: 31 }],
         },
       ],
-      changedLineCount: 1000,
+      changedLineCount: 80,
       agentSummaries: [],
     });
 
-    expect(result.confidenceScore).toBe(1);
+    expect(result.confidenceScore).toBe(3);
+  });
+
+  it('does not lower the score for diff size alone and prints what the score is made of', () => {
+    const result = synthesizeReview({
+      findings: [{ ...baseFinding, confidence: 5 }],
+      changedLineCount: 4991,
+      agentSummaries: [],
+    });
+
+    expect(result.confidenceScore).toBe(2);
+    expect(result.summary).toContain(
+      'Confidence score: 2/5 (5 = clean; 1 P1 finding across 4,991 changed lines)',
+    );
+  });
+
+  it('names the Agent behind every summary bullet and keeps Agents that returned none', () => {
+    const result = synthesizeAgentOutputs({
+      agentOutputs: [
+        {
+          agentKey: 'logic',
+          payload: {
+            summary: 'One issue found.',
+            crossRepoSearch: skippedCrossRepoSearch,
+            findings: [],
+          },
+        },
+        { agentKey: 'convex', payload: { crossRepoSearch: skippedCrossRepoSearch, findings: [] } },
+        {
+          agentKey: 'security',
+          payload: {
+            summary: 'One issue found.',
+            crossRepoSearch: skippedCrossRepoSearch,
+            findings: [],
+          },
+        },
+      ],
+      changedLineCount: 80,
+    });
+
+    expect(result.summary).toContain(
+      'Agent summaries:\n- logic: One issue found.\n- convex: (no summary returned)\n- security: One issue found.',
+    );
+  });
+
+  it('does not score or call a Review clean when a selected Agent failed', () => {
+    const result = synthesizeAgentOutputs({
+      agentOutputs: [
+        {
+          agentKey: 'logic',
+          payload: {
+            summary: 'Nothing to flag.',
+            crossRepoSearch: skippedCrossRepoSearch,
+            findings: [],
+          },
+        },
+      ],
+      failedAgentKeys: ['convex'],
+      changedLineCount: 80,
+    });
+
+    expect(result.confidenceScore).toBeNull();
+    expect(result.summary).toContain('Confidence score: not scored (review incomplete)');
+    expect(result.summary).toContain(
+      'Review incomplete: 1 of 2 Agents failed (convex). Findings below come only from logic.',
+    );
+    expect(result.summary).not.toContain('5/5');
+    expect(result.summary).not.toContain('found no issues');
+    expect(result.summary).toContain(
+      'Agent summaries:\n- logic: Nothing to flag.\n- convex: (failed; no findings returned)',
+    );
+  });
+
+  it('keeps the incomplete warning on the postable summary', () => {
+    const result = synthesizePostableReview({
+      archetypeAssignedFindings: [],
+      agentOutputs: [],
+      failedAgentKeys: ['logic', 'convex'],
+      changedLineCount: 80,
+      rawFindingCount: 0,
+    });
+
+    expect(result.summary).toContain('Review incomplete: 2 of 2 Agents failed (logic, convex).');
   });
 
   it('builds a postable review after applying Archetype suppression', () => {
