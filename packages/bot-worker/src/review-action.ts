@@ -10,7 +10,7 @@ import {
   resolveConfiguredAgents,
   resolveReviewBotConfig,
 } from './config/review-config.js';
-import { CloneManager } from './git/clone-manager.js';
+import { type AgentWorkspaceLayout, CloneManager } from './git/clone-manager.js';
 import { GitHubAppClient } from './github/app-client.js';
 import type { PullRequestFacts, RepoRef } from './github/types.js';
 import { disabledArchetypeAssigner } from './learning/archetype-assigner.js';
@@ -39,6 +39,7 @@ export interface ReviewActionConfig {
   testTimeoutMs: number;
   executionMode: 'serial' | 'parallel';
   maxAgentConcurrency: number;
+  agentWorkspaces: AgentWorkspaceLayout;
 }
 
 export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConfig {
@@ -57,6 +58,10 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     'SANDY_REVIEW_AGENT_CONCURRENCY',
   );
   const maxAgentConcurrency = requestedMode === 'serial' ? 1 : requestedCap;
+  const agentWorkspaces = env.SANDY_REVIEW_AGENT_WORKSPACES ?? 'copy';
+  if (agentWorkspaces !== 'copy' && agentWorkspaces !== 'overlay') {
+    throw new Error('SANDY_REVIEW_AGENT_WORKSPACES must be copy or overlay');
+  }
   return {
     root,
     repository: { owner, name },
@@ -76,6 +81,7 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     testTimeoutMs: suiteTestTimeout(env.SANDY_REVIEW_TEST_TIMEOUT_SECONDS ?? '120'),
     executionMode: maxAgentConcurrency === 1 ? 'serial' : 'parallel',
     maxAgentConcurrency,
+    agentWorkspaces,
   };
 }
 
@@ -158,6 +164,8 @@ export async function runReviewAction(
   const cloneManager = new CloneManager({
     baseDir: config.cloneDir,
     cloneUrl: (repo) => github.cloneUrlForRepo(repo),
+    agentWorkspaces: config.agentWorkspaces,
+    log: (message) => console.info(`Sandy ReviewJob ${jobId}: ${message}`),
     ...(signal !== undefined ? { signal } : {}),
   });
   const botConfigReader = new BotConfigReader({

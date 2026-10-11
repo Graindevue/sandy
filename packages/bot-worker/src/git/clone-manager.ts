@@ -70,6 +70,64 @@ export interface CloneManagerOptions {
    */
   cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
   signal?: AbortSignal;
+  /**
+   * `overlay` layers each Agent workspace over the read-only seed instead of
+   * copying it. Falls back to copies when overlay mounts are unavailable.
+   */
+  agentWorkspaces?: AgentWorkspaceLayout;
+  /** Privileged overlay operations; defaults to `sudo -n` mounts on Linux. */
+  workspaceLayers?: WorkspaceLayers;
+  log?: (message: string) => void;
+}
+
+export type AgentWorkspaceLayout = 'copy' | 'overlay';
+
+/** An overlay mount: `target` shows `lower` with writes landing in `upper`. */
+export interface WorkspaceLayer {
+  lower: string;
+  upper: string;
+  work: string;
+  target: string;
+}
+
+export interface WorkspaceLayers {
+  mount(layer: WorkspaceLayer): Promise<void>;
+  unmount(target: string): Promise<void>;
+  /** Overlay work directories hold kernel-owned entries an unprivileged `rm` cannot delete. */
+  remove(path: string): Promise<void>;
+}
+
+/** Kernel overlayfs through passwordless sudo, as on GitHub-hosted Linux runners. */
+export const sudoWorkspaceLayers: WorkspaceLayers = {
+  async mount({ lower, upper, work, target }) {
+    await exec(
+      'sudo',
+      [
+        '-n',
+        'mount',
+        '-t',
+        'overlay',
+        'overlay',
+        '-o',
+        `lowerdir=${lower},upperdir=${upper},workdir=${work}`,
+        target,
+      ],
+      { timeout: 30_000 },
+    );
+  },
+  async unmount(target) {
+    await exec('sudo', ['-n', 'umount', target], { timeout: 30_000 });
+  },
+  async remove(path) {
+    await exec('sudo', ['-n', 'rm', '-rf', '--', path], { timeout: 120_000 });
+  },
+};
+
+interface SeedLink {
+  /** Link path relative to the seed. */
+  path: string;
+  /** Absolute target rewritten relative to the seed. */
+  target: string;
 }
 
 export class CloneManager {
@@ -77,11 +135,22 @@ export class CloneManager {
   readonly #cloneUrl: (repo: RepoIdentity) => string | Promise<string>;
   readonly #signal: AbortSignal | undefined;
   readonly #agentWorkspaces = new Set<string>();
+  readonly #requestedLayout: AgentWorkspaceLayout;
+  readonly #layers: WorkspaceLayers | undefined;
+  readonly #log: ((message: string) => void) | undefined;
+  #layout: Promise<AgentWorkspaceLayout> | undefined;
+  /** Mounted Agent workspace -> its upper/work layer directory. */
+  readonly #layerMounts = new Map<string, string>();
+  readonly #seedLinks = new Map<string, Promise<SeedLink[]>>();
 
   constructor(options: CloneManagerOptions) {
     this.#baseDir = options.baseDir;
     this.#cloneUrl = options.cloneUrl;
     this.#signal = options.signal;
+    this.#requestedLayout = options.agentWorkspaces ?? 'copy';
+    this.#layers =
+      options.workspaceLayers ?? (process.platform === 'linux' ? sudoWorkspaceLayers : undefined);
+    this.#log = options.log;
   }
 
   /** Absolute path to a Repo's clone: `<baseDir>/<owner>/<name>`. */
@@ -175,7 +244,9 @@ export class CloneManager {
   ): Promise<WorkspaceCapacity> {
     const parent = join(this.#baseDir, '.agent-workspaces');
     await mkdir(parent, { recursive: true });
-    return agentWorkspaceCapacity(seed.path, parent, workspaceCount, this.#signal);
+    return agentWorkspaceCapacity(seed.path, parent, workspaceCount, this.#signal, {
+      layered: (await this.#agentWorkspaceLayout()) === 'overlay',
+    });
   }
 
   /** Reserve every distinct peer root before the runtime constructs deny rules. */
@@ -195,28 +266,35 @@ export class CloneManager {
     return { ...seed, path };
   }
 
-  /** Copy the quiescent seed on admission; preserve private links and Git read boundaries. */
+  /**
+   * Layer or copy the quiescent seed on admission; preserve private links and Git
+   * read boundaries. The seed must not change while layered workspaces are mounted.
+   */
   async populateAgentWorkspace(seed: Worktree, workspace: Worktree): Promise<void> {
     this.#signal?.throwIfAborted();
     if (!this.#agentWorkspaces.has(workspace.path) || (await readdir(workspace.path)).length !== 0)
       throw new Error('Agent workspace must be an empty reserved directory');
     try {
-      await cp(seed.path, workspace.path, {
-        recursive: true,
-        dereference: false,
-        verbatimSymlinks: true,
-        mode: constants.COPYFILE_FICLONE,
-        filter: () => {
-          this.#signal?.throwIfAborted();
-          return true;
-        },
-      });
-      await rebaseWorkspaceLinks(
-        workspace.path,
-        resolve(seed.path),
-        await realpath(seed.path),
-        this.#signal,
-      );
+      const links = await this.#internalSeedLinks(seed);
+      if ((await this.#agentWorkspaceLayout()) === 'overlay')
+        await this.#mountLayer(seed, workspace);
+      else
+        await cp(seed.path, workspace.path, {
+          recursive: true,
+          dereference: false,
+          verbatimSymlinks: true,
+          mode: constants.COPYFILE_FICLONE,
+          filter: () => {
+            this.#signal?.throwIfAborted();
+            return true;
+          },
+        });
+      for (const link of links) {
+        this.#signal?.throwIfAborted();
+        const path = join(workspace.path, link.path);
+        await rm(path);
+        await symlink(relative(dirname(path), join(workspace.path, link.target)) || '.', path);
+      }
       this.#signal?.throwIfAborted();
     } catch (error) {
       await this.releaseAgentWorkspace(workspace);
@@ -227,6 +305,13 @@ export class CloneManager {
   /** Keep the reserved root alive for every peer's canonical permission rules. */
   async releaseAgentWorkspace(workspace: Worktree): Promise<void> {
     if (!this.#agentWorkspaces.has(workspace.path)) throw new Error('Unknown Agent workspace');
+    const layer = this.#layerMounts.get(workspace.path);
+    if (layer !== undefined) {
+      const layers = this.#requireLayers();
+      await layers.unmount(workspace.path);
+      this.#layerMounts.delete(workspace.path);
+      await layers.remove(layer);
+    }
     for (const name of await readdir(workspace.path))
       await rm(join(workspace.path, name), { recursive: true, force: true });
   }
@@ -249,6 +334,7 @@ export class CloneManager {
    */
   async removeWorktree(worktree: Worktree): Promise<void> {
     if (this.#agentWorkspaces.has(worktree.path)) {
+      if (this.#layerMounts.has(worktree.path)) await this.releaseAgentWorkspace(worktree);
       await rm(worktree.path, { recursive: true, force: true });
       return;
     }
@@ -271,6 +357,96 @@ export class CloneManager {
     // Drop administrative leftovers (e.g. a stale entry whose dir is already
     // gone): `worktree add` refuses a path that is still registered.
     await this.#git(repoDir, ['worktree', 'prune']);
+  }
+
+  /** Resolve once per Review so the storage budget and every Agent agree on the layout. */
+  #agentWorkspaceLayout(): Promise<AgentWorkspaceLayout> {
+    this.#layout ??= this.#resolveAgentWorkspaceLayout();
+    return this.#layout;
+  }
+
+  async #resolveAgentWorkspaceLayout(): Promise<AgentWorkspaceLayout> {
+    if (this.#requestedLayout === 'copy') return 'copy';
+    const fallback = (reason: string): AgentWorkspaceLayout => {
+      this.#log?.(`Overlay Agent workspaces unavailable (${reason}); using private copies.`);
+      return 'copy';
+    };
+    const layers = this.#layers;
+    if (layers === undefined) return fallback('overlay mounts require Linux');
+    const parent = join(this.#baseDir, '.agent-layers');
+    await mkdir(parent, { recursive: true });
+    const probe = await mkdtemp(join(parent, 'probe-'));
+    const layer = {
+      lower: join(probe, 'lower'),
+      upper: join(probe, 'upper'),
+      work: join(probe, 'work'),
+      target: join(probe, 'target'),
+    };
+    try {
+      for (const path of Object.values(layer)) await mkdir(path);
+      await layers.mount(layer);
+      await layers.unmount(layer.target);
+    } catch (error) {
+      await layers.remove(probe).catch(() => undefined);
+      return fallback(error instanceof Error ? error.message : String(error));
+    }
+    await layers.remove(probe);
+    this.#log?.('Agent workspaces are overlay layers over the read-only seed.');
+    return 'overlay';
+  }
+
+  async #mountLayer(seed: Worktree, workspace: Worktree): Promise<void> {
+    const layers = this.#requireLayers();
+    const layer = join(
+      this.#baseDir,
+      '.agent-layers',
+      relative(join(this.#baseDir, '.agent-workspaces'), workspace.path),
+    );
+    const mount = {
+      lower: await realpath(seed.path),
+      upper: join(layer, 'upper'),
+      work: join(layer, 'work'),
+      target: workspace.path,
+    };
+    // Mount options separate layers with ':' and options with ','.
+    if ([mount.lower, mount.upper, mount.work].some((path) => /[,:\\]/.test(path)))
+      throw new Error('Overlay layer paths cannot contain commas, colons or backslashes');
+    await mkdir(mount.upper, { recursive: true });
+    await mkdir(mount.work, { recursive: true });
+    try {
+      await layers.mount(mount);
+    } catch (error) {
+      await layers.remove(layer);
+      throw error;
+    }
+    this.#layerMounts.set(workspace.path, layer);
+  }
+
+  #requireLayers(): WorkspaceLayers {
+    if (this.#layers === undefined) throw new Error('Overlay mounts are unavailable');
+    return this.#layers;
+  }
+
+  /** Scan the quiescent seed once per Review instead of walking every Agent workspace. */
+  #internalSeedLinks(seed: Worktree): Promise<SeedLink[]> {
+    let links = this.#seedLinks.get(seed.path);
+    if (links === undefined) {
+      links = (async () => {
+        const found = await internalAbsoluteLinks(
+          resolve(seed.path),
+          await realpath(seed.path),
+          this.#signal,
+        );
+        this.#log?.(
+          `Prepared seed has ${found.length} absolute internal link${found.length === 1 ? '' : 's'} to rebase per Agent workspace.`,
+        );
+        return found;
+      })();
+      // A canceled or failed scan must not poison later attempts.
+      links.catch(() => this.#seedLinks.delete(seed.path));
+      this.#seedLinks.set(seed.path, links);
+    }
+    return links;
   }
 
   /** Absolute path a Review's worktree is materialized at. */
@@ -325,12 +501,12 @@ export class CloneManager {
   }
 }
 
-async function rebaseWorkspaceLinks(
-  destination: string,
+async function internalAbsoluteLinks(
   source: string,
   canonicalSource: string,
   signal: AbortSignal | undefined,
-): Promise<void> {
+): Promise<SeedLink[]> {
+  const links: SeedLink[] = [];
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await readdir(directory)) {
       signal?.throwIfAborted();
@@ -345,12 +521,12 @@ async function rebaseWorkspaceLinks(
           .map((root) => relative(root, target))
           .find((value) => value !== '..' && !value.startsWith(`..${sep}`) && !isAbsolute(value));
         if (sourceRelative === undefined) continue;
-        await rm(path);
-        await symlink(relative(dirname(path), join(destination, sourceRelative)) || '.', path);
+        links.push({ path: relative(source, path), target: sourceRelative });
       }
     }
   };
-  await visit(destination);
+  await visit(source);
+  return links;
 }
 
 function redactCredentialsInText(value: string): string {
