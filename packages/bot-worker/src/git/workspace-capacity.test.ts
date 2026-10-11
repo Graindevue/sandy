@@ -25,3 +25,18 @@ it('budgets independent copies of hardlinks and never follows foreign symlinks',
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it('budgets only the build reserve for layered workspaces', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sandy-storage-'));
+  try {
+    const seed = join(root, 'seed');
+    await mkdir(seed);
+    await writeFile(join(seed, 'dependency'), Buffer.alloc(1024 * 1024));
+    const capacity = await agentWorkspaceCapacity(seed, root, 3, undefined, { layered: true });
+    expect(capacity.layered).toBe(true);
+    expect(capacity.seedBytes).toBe(0);
+    expect(capacity.requiredBytes).toBe(3 * 1024 ** 3);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

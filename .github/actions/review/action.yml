@@ -41,6 +41,9 @@ inputs:
   max-agent-concurrency:
     description: Positive Agent cap in parallel mode; one selects serial rollback.
     default: '3'
+  agent-workspaces:
+    description: copy (default) gives each parallel Agent a private copy of the prepared seed; overlay layers each Agent over the read-only seed and falls back to copy when mounts are unavailable.
+    default: copy
   test-mode:
     description: targeted lets reviewers verify findings with focused tests; suite runs the root test script once before review.
     default: targeted
@@ -180,6 +183,7 @@ runs:
         GITHUB_APP_ID: ${{ inputs.app-id }}
         SANDY_REVIEW_EXECUTION_MODE: ${{ inputs.agent-execution-mode }}
         SANDY_REVIEW_AGENT_CONCURRENCY: ${{ inputs.max-agent-concurrency }}
+        SANDY_REVIEW_AGENT_WORKSPACES: ${{ inputs.agent-workspaces }}
         SANDY_REVIEW_TEST_MODE: ${{ inputs.test-mode }}
         SANDY_REVIEW_TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
       # Finish this step before the caller's 120-minute job timeout so the

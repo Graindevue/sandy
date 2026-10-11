@@ -124,6 +124,38 @@ and adjudicated finding-quality gates. The
 [rollout report](../benchmarks/review-speed.md) records evidence and blockers.
 Changing prompts, models or coverage is not part of this comparison.
 
+### Amendment: overlay Agent workspaces
+
+Copying the prepared seed scales with the installation size and runs once per
+admitted Agent before its investigation starts. An opt-in layout
+(`agent-workspaces: overlay`) keeps the private-workspace contract while
+removing that copy. Sandy mounts kernel overlayfs at each Agent's reserved root.
+The quiescent seed is the read-only lower layer. The Agent's writes land in a
+private upper layer stored outside every reserved root. Reads fall through to
+the seed until a file is first written; that write then copies the file into
+the Agent's own layer. Peer roots, deny rules, tool homes and the
+admission/release lifecycle are unchanged. Release unmounts the layer and
+deletes it, leaving the empty root in place until shutdown.
+
+Mounting requires Linux and passwordless `sudo`, as on GitHub-hosted runners.
+Sandy test-mounts a probe layer once per Review. If that fails, Sandy logs the
+reason and every Agent uses private copies, so the storage budget and all
+Agents agree on the layout. Layered budgets count only the 1 GiB per-Agent
+build reserve. The seed must not change while layers are mounted, which Sandy
+already requires for consistent private copies.
+
+Overlays have known filesystem differences. Renaming a lower-layer directory
+can fail with `EXDEV`. Hardlinked files are copied separately on first write.
+Absolute links into the seed are found once per Review and rebased in each
+workspace (copy or overlay), replacing the old walk over each copy. The review
+log reports how many links were rebased.
+
+`copy` remains the default. The native CI probe proves that the shipped Codex
+sandbox works on overlay-mounted roots: own writes succeed, the seed stays
+unchanged and read-only, and peer roots and every upper layer stay
+inaccessible. Promotion still requires matched latency measurements on real
+Reviews.
+
 ## Authentication and serialization
 
 This private automation uses a dedicated ChatGPT-managed Codex login. The user

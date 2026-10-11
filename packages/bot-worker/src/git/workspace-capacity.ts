@@ -6,6 +6,8 @@ export interface WorkspaceCapacity {
   availableBytes: number;
   requiredBytes: number;
   reserveBytes: number;
+  /** Overlay workspaces share the seed, so only the build reserve is budgeted. */
+  layered?: boolean;
   fits: boolean;
 }
 
@@ -15,13 +17,15 @@ export async function agentWorkspaceCapacity(
   destinationParent: string,
   workspaceCount: number,
   signal?: AbortSignal,
+  options: { layered?: boolean } = {},
 ): Promise<WorkspaceCapacity> {
   if (!Number.isSafeInteger(workspaceCount) || workspaceCount < 1)
     throw new Error('Invalid private workspace count');
   const filesystem = await statfs(destinationParent);
   const block = filesystem.bsize;
+  const layered = options.layered ?? false;
   let seedBytes = 0;
-  const pending = [seedPath];
+  const pending = layered ? [] : [seedPath];
   while (pending.length > 0) {
     signal?.throwIfAborted();
     const path = pending.pop();
@@ -45,6 +49,7 @@ export async function agentWorkspaceCapacity(
     availableBytes,
     requiredBytes,
     reserveBytes,
+    layered,
     fits: requiredBytes <= availableBytes,
   };
 }

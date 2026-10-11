@@ -226,6 +226,16 @@ after Agent admission retain partial-review failure semantics. A workspace
 release failure lets active peers finish and retains their Findings, but stops
 new admissions and reports an operational cleanup failure.
 
+`agent-workspaces: overlay` (environment `SANDY_REVIEW_AGENT_WORKSPACES`)
+replaces each copy with a kernel overlay mounted at the Agent's reserved root:
+the prepared seed is the read-only lower layer, and the Agent's writes land in
+a private upper layer outside every reserved root. Population becomes a mount
+instead of a copy, and the storage budget counts only the build reserve. Sandy
+mounts through `sudo -n` and checks once per Review that a mount succeeds;
+without Linux or passwordless `sudo`, it logs the reason and uses copies. The
+seed must stay unchanged while layers are mounted. See
+[ADR 0018](../adr/0018-github-actions-codex-runtime.md#amendment-overlay-agent-workspaces).
+
 For callers encountering this while pinned to an earlier Sandy revision,
 `SANDY_AGENT_EXECUTION_MODE=serial` avoids private installation copies. See the
 [PR #743 diagnosis](../diagnostics/pr-743-workspace-disk.md) for the reproduction,
@@ -256,6 +266,7 @@ reports this deferral. Optional repository variables:
 | `SANDY_TEST_TIMEOUT_SECONDS` | Full-suite budget in `suite` mode: 1–600 seconds, default 120. |
 | `SANDY_AGENT_EXECUTION_MODE` | `serial` (default) or `parallel`, gated by runtime/authentication and quality evidence. |
 | `SANDY_AGENT_CONCURRENCY` | Positive maximum selected Agents in parallel mode; default three, one selects serial. |
+| `SANDY_AGENT_WORKSPACES` | `copy` (default) or `overlay`: layer parallel Agents over the read-only seed instead of copying it (Linux with passwordless `sudo`; falls back to `copy`). |
 
 The workflow template passes these test settings to the action's `test-mode`
 and `test-timeout-seconds` inputs. Existing callers that omit them use focused

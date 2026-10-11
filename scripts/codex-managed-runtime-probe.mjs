@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -17,7 +27,9 @@ export async function runManagedRuntimeProbe(
   executable = 'codex',
   workspaceRouting = false,
   stagedInventory = false,
+  agentWorkspaces = 'copy',
 ) {
+  const layered = agentWorkspaces === 'overlay';
   const { CodexAppServerRunner } = await import(
     join(sandyRoot, 'packages/bot-worker/dist/worker/codex-app-server-runner.js')
   );
@@ -31,7 +43,8 @@ export async function runManagedRuntimeProbe(
   const pending = [];
   const responded = new Set();
   let clones;
-  let workspaces;
+  let workspaces = [];
+  const cloneMessages = [];
   let runtime;
   let providerFailure;
   let backendOrigin;
@@ -319,13 +332,23 @@ supports_websockets=false
     await git(['remote', 'add', 'origin', seed]);
     await git(['fetch', 'origin']);
     await writeFile(join(seed, 'source.cjs'), 'exports.value=2;\n');
+    // Prepared installations can contain absolute links into the seed; workspaces must rebase them.
+    if (stagedInventory) {
+      await symlink(join(seed, 'source.cjs'), join(seed, 'linked-source.cjs'));
+      await git(['add', 'linked-source.cjs']);
+    }
     await git(['-c', 'commit.gpgsign=false', 'commit', '-am', 'change']);
     const sha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
     if (stagedInventory) {
       const { CloneManager } = await import(
         join(sandyRoot, 'packages/bot-worker/dist/git/clone-manager.js')
       );
-      clones = new CloneManager({ baseDir: join(root, 'clones'), cloneUrl: () => seed });
+      clones = new CloneManager({
+        baseDir: join(root, 'clones'),
+        cloneUrl: () => seed,
+        agentWorkspaces,
+        log: (message) => cloneMessages.push(message),
+      });
       const seedWorktree = {
         path: seed,
         repo: { owner: 'evaluation', name: 'producer', defaultBranch: 'main' },
@@ -341,6 +364,20 @@ supports_websockets=false
           .slice(0, 2)
           .map((workspace) => clones.populateAgentWorkspace(seedWorktree, workspace)),
       );
+      if (layered) {
+        assert.ok(
+          cloneMessages.includes('Agent workspaces are overlay layers over the read-only seed.'),
+          `Overlay workspaces fell back: ${cloneMessages.join(' ')}`,
+        );
+        const mounts = await readFile('/proc/self/mounts', 'utf8');
+        for (const workspace of workspaces.slice(0, 2))
+          assert.ok(
+            mounts
+              .split('\n')
+              .some((line) => line.startsWith(`overlay ${workspace.path} overlay `)),
+            'Admitted Agent workspaces must be overlay mounts',
+          );
+      }
     } else {
       paths = await Promise.all(
         keys.map(async (key) => {
@@ -365,7 +402,15 @@ assert.throws(()=>fs.readFileSync(${JSON.stringify(join(auth, 'auth.json'))}));
 assert.throws(()=>fs.readdirSync(${JSON.stringify(paths[(index + 1) % paths.length])}));
 assert.throws(()=>fs.readFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))}));
 assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(paths[(index + 1) % paths.length], 'source.cjs'))},'BAD'));
-console.log('ROUTING_SANDBOX_OK:${keys[index]}');
+${
+  stagedInventory
+    ? `assert.equal(fs.readlinkSync('linked-source.cjs'),'source.cjs');
+assert.equal(fs.readFileSync('linked-source.cjs','utf8'),'exports.value=2;\\n');
+fs.writeFileSync('source.cjs','exports.value=3;\\n');
+assert.equal(fs.readFileSync('linked-source.cjs','utf8'),'exports.value=3;\\n');
+`
+    : ''
+}${layered ? `assert.throws(()=>fs.readdirSync(${JSON.stringify(join(root, 'clones', '.agent-layers'))}));\n` : ''}console.log('ROUTING_SANDBOX_OK:${keys[index]}');
 `,
       );
     };
@@ -449,6 +494,13 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
     }
     assert.equal(pending.length, 3, 'All native requests must complete');
     if (workspaceRouting) assert.ok(routingRequests > 0, 'Native workspace discovery required');
+    if (stagedInventory) {
+      assert.equal(
+        (await git(['status', '--porcelain'])).stdout,
+        '',
+        'Agents must not change the seed',
+      );
+    }
     return {
       platform: process.platform,
       node: process.version,
@@ -457,12 +509,15 @@ console.log('ROUTING_SANDBOX_OK:${keys[index]}');
       ...(workspaceRouting ? { routingRequests, retainedSandboxVerified: true } : {}),
       concurrentAgents: stagedInventory ? 2 : 3,
       ...(stagedInventory ? { stagedInventory: true, retiredPeerRootsVerified: true } : {}),
+      ...(layered ? { overlayWorkspaces: true, privateLayersVerified: true } : {}),
       completedAgents: 3,
       authoritativeUsage: true,
     };
   } finally {
     try {
       await runtime?.close();
+      // Mounted layers must be released before their parent can be deleted.
+      for (const workspace of workspaces) await clones?.removeWorktree(workspace);
       stopped = true;
     } finally {
       server.closeAllConnections();
@@ -600,5 +655,5 @@ process.exit(result.status??1);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
   process.stdout.write(
-    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), workspaceRouting: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true), stagedInventory: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true, true), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
+    `${JSON.stringify({ ...(await runManagedRuntimeProbe(process.argv[2] ?? 'codex')), workspaceRouting: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true), stagedInventory: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true, true), overlayInventory: await runManagedRuntimeProbe(process.argv[2] ?? 'codex', true, true, 'overlay'), authentication: await runNativeAuthRefreshProbe(process.argv[2] ?? 'codex') })}\n`,
   );

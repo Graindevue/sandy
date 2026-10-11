@@ -1,21 +1,23 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import {
+  cp,
   lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   readlink,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CloneManager } from './clone-manager.js';
+import { CloneManager, type WorkspaceLayers } from './clone-manager.js';
 
 /**
  * Drives the {@link CloneManager} against a real `git` binary and a LOCAL bare
@@ -465,6 +467,143 @@ describe('CloneManager', () => {
     expect(repoPath).toBe(dest);
     expect(existsSync(join(repoPath, 'README.md'))).toBe(true);
     expect(await git(repoPath, 'rev-parse', '--is-inside-work-tree')).toBe('true');
+  });
+});
+
+describe('CloneManager overlay Agent workspaces', () => {
+  interface Layer {
+    lower: string;
+    upper: string;
+    work: string;
+    target: string;
+  }
+
+  /** Stands in for privileged overlay mounts: the target shows the lower layer until unmounted. */
+  function fakeLayers(options: { failMount?: boolean } = {}) {
+    const mounts: Layer[] = [];
+    const mounted = new Set<string>();
+    const removed: string[] = [];
+    const layers: WorkspaceLayers = {
+      async mount(layer) {
+        if (options.failMount) throw new Error('mount: permission denied');
+        mounts.push(layer);
+        await cp(layer.lower, layer.target, { recursive: true, verbatimSymlinks: true });
+        mounted.add(layer.target);
+      },
+      async unmount(target) {
+        for (const name of await readdir(target)) await rm(join(target, name), { recursive: true });
+        mounted.delete(target);
+      },
+      async remove(path) {
+        removed.push(path);
+        await rm(path, { recursive: true, force: true });
+      },
+    };
+    return { layers, mounts, mounted, removed };
+  }
+
+  async function seedFor(manager: CloneManager) {
+    const sha = await git(join(tmpRoot, 'origin.git'), 'rev-parse', 'HEAD');
+    await manager.ensureCloned(REPO);
+    return manager.createWorktree(REPO, { reviewJobId: 'rj_layers', sha });
+  }
+
+  it('layers each Agent over the read-only seed and unmounts on release', async () => {
+    const origin = await makeOrigin();
+    const fake = fakeLayers();
+    const baseDir = join(tmpRoot, 'repos');
+    const manager = new CloneManager({
+      baseDir,
+      cloneUrl: () => origin.url,
+      agentWorkspaces: 'overlay',
+      workspaceLayers: fake.layers,
+    });
+    const seed = await seedFor(manager);
+    const logic = await manager.reserveAgentWorkspace(seed, 'logic');
+    const security = await manager.reserveAgentWorkspace(seed, 'security');
+
+    const capacity = await manager.checkAgentWorkspaceCapacity(seed, 2);
+    expect(capacity.layered).toBe(true);
+    expect(capacity.requiredBytes).toBe(capacity.reserveBytes);
+
+    await manager.populateAgentWorkspace(seed, logic);
+    await manager.populateAgentWorkspace(seed, security);
+    expect(await readFile(join(logic.path, 'README.md'), 'utf8')).toBe('# seed\n');
+    const layerFor = (target: string) => {
+      const layer = fake.mounts.find((mount) => mount.target === target);
+      if (layer === undefined) throw new Error(`No layer mounted at ${target}`);
+      return layer;
+    };
+    const logicLayer = layerFor(logic.path);
+    const securityLayer = layerFor(security.path);
+    expect(logicLayer.lower).toBe(await realpath(seed.path));
+    for (const path of [logicLayer.upper, logicLayer.work, securityLayer.upper]) {
+      // Writable layers stay outside every reserved root, so peer deny rules still hold.
+      expect(relative(join(baseDir, '.agent-workspaces'), path).startsWith('..')).toBe(true);
+    }
+    expect(new Set([logicLayer.upper, securityLayer.upper]).size).toBe(2);
+
+    await manager.releaseAgentWorkspace(logic);
+    expect(fake.mounted.has(logic.path)).toBe(false);
+    expect(await readdir(logic.path)).toEqual([]);
+    expect(existsSync(logicLayer.upper)).toBe(false);
+
+    // Removing a still-mounted workspace unmounts it first.
+    await manager.removeWorktree(security);
+    expect(fake.mounted.size).toBe(0);
+    expect(existsSync(security.path)).toBe(false);
+    expect(existsSync(securityLayer.upper)).toBe(false);
+  });
+
+  it('falls back to private copies when overlay mounts are unavailable', async () => {
+    const origin = await makeOrigin();
+    const fake = fakeLayers({ failMount: true });
+    const messages: string[] = [];
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+      agentWorkspaces: 'overlay',
+      workspaceLayers: fake.layers,
+      log: (message) => messages.push(message),
+    });
+    const seed = await seedFor(manager);
+    const workspace = await manager.reserveAgentWorkspace(seed, 'logic');
+
+    const capacity = await manager.checkAgentWorkspaceCapacity(seed, 1);
+    await manager.populateAgentWorkspace(seed, workspace);
+
+    expect(capacity.layered).toBe(false);
+    expect(capacity.seedBytes).toBeGreaterThan(0);
+    expect(await readFile(join(workspace.path, 'README.md'), 'utf8')).toBe('# seed\n');
+    expect(messages.join('\n')).toMatch(/overlay.*unavailable.*permission denied.*cop/is);
+    await manager.removeWorktree(workspace);
+    expect(existsSync(workspace.path)).toBe(false);
+  });
+
+  it('rebases absolute internal links inside layered workspaces', async () => {
+    const origin = await makeOrigin();
+    const fake = fakeLayers();
+    const messages: string[] = [];
+    const manager = new CloneManager({
+      baseDir: join(tmpRoot, 'repos'),
+      cloneUrl: () => origin.url,
+      agentWorkspaces: 'overlay',
+      workspaceLayers: fake.layers,
+      log: (message) => messages.push(message),
+    });
+    const seed = await seedFor(manager);
+    await mkdir(join(seed.path, 'packages/shared'), { recursive: true });
+    await writeFile(join(seed.path, 'packages/shared/output.txt'), 'prepared');
+    await symlink(join(seed.path, 'packages/shared'), join(seed.path, 'absolute-dependency'));
+    await symlink('packages/shared', join(seed.path, 'relative-dependency'));
+
+    const workspace = await manager.materializeAgentWorkspace(seed, 'logic');
+
+    expect(await readlink(join(workspace.path, 'absolute-dependency'))).toBe('packages/shared');
+    expect(await readlink(join(workspace.path, 'relative-dependency'))).toBe('packages/shared');
+    expect(messages).toContain(
+      'Prepared seed has 1 absolute internal link to rebase per Agent workspace.',
+    );
   });
 });
 

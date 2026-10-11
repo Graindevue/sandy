@@ -725,7 +725,10 @@ export class ReviewExecutor {
           ),
         );
         const gib = (bytes: number) => (bytes / 1024 ** 3).toFixed(2);
-        storageSummary = `Requested private workspace storage budget: ${stagedWorkspaces ? Math.min(maxConcurrency, input.agents.length) : input.agents.length} resident copies of ${gib(capacity.seedBytes)} GiB; ${gib(capacity.requiredBytes)} GiB required including ${gib(capacity.reserveBytes)} GiB build reserve; ${gib(capacity.availableBytes)} GiB available.`;
+        const resident = stagedWorkspaces
+          ? Math.min(maxConcurrency, input.agents.length)
+          : input.agents.length;
+        storageSummary = `Requested private workspace storage budget: ${capacity.layered ? `${resident} overlay layers over the read-only seed` : `${resident} resident copies of ${gib(capacity.seedBytes)} GiB`}; ${gib(capacity.requiredBytes)} GiB required including ${gib(capacity.reserveBytes)} GiB build reserve; ${gib(capacity.availableBytes)} GiB available.`;
         this.#logProgress(input.context.job.id, storageSummary);
         if (!capacity.fits) {
           const affordable = Math.floor(capacity.availableBytes / (capacity.seedBytes + 1024 ** 3));
