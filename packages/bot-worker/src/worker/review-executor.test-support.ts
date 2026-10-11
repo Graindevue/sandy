@@ -79,6 +79,8 @@ export const securityFinding: Finding = {
   ...finding,
   agentKey: 'security',
   summary: 'The endpoint accepts an untrusted redirect target.',
+  evidence: 'The handler redirects to the raw next query parameter.',
+  suggestedFix: 'Allow-list redirect targets.',
   category: 'security',
 };
 
@@ -174,7 +176,7 @@ export class FakeExecutionStore implements ReviewExecutionStore {
     builtAt: number;
   }> = [];
   recordedSiblingShas: { jobId: string; siblingShas: SiblingShas }[] = [];
-  confidenceScores: { jobId: string; confidenceScore: Finding['confidence'] }[] = [];
+  confidenceScores: { jobId: string; confidenceScore: Finding['confidence'] | null }[] = [];
   recordedFindings: RecordedFinding[] = [];
   postedFindings: { findingId: string; githubCommentId: number }[] = [];
   agentRuns: RecordAgentRunInput[] = [];

@@ -1,6 +1,13 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PullRequestFacts } from './github/types.js';
-import { assertReviewablePullRequest, loadReviewActionConfig } from './review-action.js';
+import {
+  assertReviewablePullRequest,
+  loadReviewActionConfig,
+  recordRequestAnswered,
+} from './review-action.js';
 
 const env = {
   SANDY_ROOT: '/trusted/sandy',
@@ -116,5 +123,23 @@ describe('review action PR eligibility', () => {
       assertReviewablePullRequest(repo, { ...pr, headRepo: { owner: 'fork', name: 'widget' } }),
     ).toThrow('fork');
     expect(() => assertReviewablePullRequest(repo, { ...pr, headSha: '--help' })).toThrow('SHA');
+  });
+});
+
+describe('review request-answered step output', () => {
+  it('tells the failure-report step that the PR already has, or will get, an answer', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'sandy-review-output-'));
+    try {
+      const output = join(directory, 'output');
+      await writeFile(output, 'earlier=value\n');
+      await recordRequestAnswered(output);
+      expect(await readFile(output, 'utf8')).toBe('earlier=value\nrequest-answered=true\n');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does nothing outside GitHub Actions', async () => {
+    await expect(recordRequestAnswered(undefined)).resolves.toBeUndefined();
   });
 });

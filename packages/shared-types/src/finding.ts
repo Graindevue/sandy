@@ -54,6 +54,11 @@ export interface Finding {
   /** Optional suggested fix. */
   suggestedFix?: string;
   category: FindingCategory;
+  /**
+   * Other Agents whose duplicate Findings the Synthesizer merged into this one.
+   * Set by the Synthesizer only; Agents never emit it.
+   */
+  alsoReportedBy?: string[];
 }
 
 /** Whether and why an Agent performed Cross-Repo Search for one Review run. */

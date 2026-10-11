@@ -90,3 +90,11 @@ test('the exact caller authorization script accepts @sandy and rejects old or un
   await assert.rejects(request(event(), 'issue_comment', 'read'));
   await assert.rejects(request(event(), 'issue_comment', 'write', '2'));
 });
+
+test('a rerun reaches the authorization step and fails with instructions instead of a silent skip', async () => {
+  assert.ok(!workflow.jobs.review.if.includes('run_attempt'));
+  await assert.rejects(
+    request(event(), 'issue_comment', 'write', '2'),
+    /Post a new @sandy comment instead of rerunning/,
+  );
+});

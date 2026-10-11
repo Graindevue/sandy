@@ -22,7 +22,7 @@ import type { ReviewStatusCheckReporter } from './review-status-check.js';
 describe('ReviewExecutor Review Status Check', () => {
   it('creates and persists an in-progress check, then resolves a clean Review to success', async () => {
     const runner = new FakeRunner(findingsOutput([]));
-    const { executor, statusChecks, store } = makeExecutor({
+    const { executor, statusChecks, store, poster } = makeExecutor({
       runner: {
         runAgent: (input) => runner.runAgent(input),
         installDependencies: async () => ({
@@ -61,6 +61,9 @@ describe('ReviewExecutor Review Status Check', () => {
         completedAt: 400,
       },
     ]);
+    expect(poster.results[0]?.summary).toContain(
+      'Sandy check run: https://github.com/acme/widget/runs/1200',
+    );
   });
 
   it('resolves a Review with posted Findings to a neutral check', async () => {
@@ -77,7 +80,7 @@ describe('ReviewExecutor Review Status Check', () => {
     });
   });
 
-  it('keeps a clean focused Review neutral and states that the full suite is deferred to CI', async () => {
+  it('resolves a clean Review to success when the full suite is deferred to CI, and says so', async () => {
     const { executor, statusChecks, poster } = makeExecutor({
       runner: {
         runAgent: async () => runnerOutput(findingsOutput([])),
@@ -96,9 +99,9 @@ describe('ReviewExecutor Review Status Check', () => {
     await executor.executeClaimedJob('job-1');
 
     expect(statusChecks.completed[0]).toMatchObject({
-      conclusion: 'neutral',
+      conclusion: 'success',
       verdict:
-        'Sandy completed review. Full project test suite deferred to CI; reviewers may run focused verification',
+        'Sandy ran cleanly. Full project test suite deferred to CI; reviewers may run focused verification',
       completedAt: 400,
     });
     expect(poster.results[0]?.summary).toMatch(
@@ -149,7 +152,7 @@ describe('ReviewExecutor Review Status Check', () => {
     expect(store.failed).toEqual([]);
     expect(statusChecks.completed[0]).toMatchObject({
       conclusion: 'failure',
-      detailsUrl: 'https://github.com/acme/widget/pull/12',
+      detailsUrl: 'https://github.com/acme/widget/pull/12#issuecomment-900',
       verdict:
         'Sandy failed to produce review results. Tests unavailable: no test-suite result was recorded',
     });
@@ -174,7 +177,7 @@ describe('ReviewExecutor Review Status Check', () => {
     expect(statusChecks.completed[0]).toMatchObject({
       conclusion: 'failure',
       detailsUrl: 'https://github.com/acme/widget/pull/12',
-      verdict: 'Sandy failed to run',
+      verdict: 'Sandy failed to run: Convex write failed',
     });
   });
 

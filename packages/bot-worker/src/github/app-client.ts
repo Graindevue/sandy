@@ -18,6 +18,11 @@ import type {
   PullRequestTarget,
   ReviewCommentInput,
 } from '../worker/poster.js';
+import type {
+  PriorFinding,
+  PullRequestHistory,
+  PullRequestHistorySource,
+} from '../worker/pull-request-history.js';
 import type { RepoForWorktree, ReviewDiffInspector } from '../worker/review-executor.js';
 import type {
   CompleteReviewStatusCheckInput,
@@ -44,6 +49,11 @@ const GITHUB_API_BASE = 'https://api.github.com';
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const PRODUCT_RULES_PATH = '.bot/product-rules.md';
+const LINKED_ISSUE_LIMIT = 5;
+const LINKED_ISSUE_PATTERN =
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|part of|related to)\s*:?\s+#(\d+)\b/gi;
+const SANDY_FINDING_TRAILER = /<!-- bot:finding=[^\s>]+/;
+const SANDY_FINDING_HEADING = /^\*\*(P[012]) ([^*]+)\*\*/;
 
 export class GitHubAppClient
   implements
@@ -51,7 +61,8 @@ export class GitHubAppClient
     ReviewDiffInspector,
     ReviewStatusCheckReporter,
     ReactionCaptureGitHub,
-    MergeStateGitHub
+    MergeStateGitHub,
+    PullRequestHistorySource
 {
   readonly #appId: string;
   readonly #privateKey: string;
@@ -181,6 +192,39 @@ export class GitHubAppClient
         },
       },
     );
+  }
+
+  async loadPullRequestHistory(target: PullRequestTarget): Promise<PullRequestHistory> {
+    const base = `/repos/${target.owner}/${target.repo}`;
+    const [pull, comments] = await Promise.all([
+      this.#installationRequest<{ body?: unknown }>(
+        target.owner,
+        target.repo,
+        `${base}/pulls/${target.pullNumber}`,
+      ),
+      this.#listPaginated<unknown>(
+        target.owner,
+        target.repo,
+        `${base}/pulls/${target.pullNumber}/comments`,
+      ),
+    ]);
+    const body = typeof pull.body === 'string' ? pull.body : null;
+    const linkedIssues = await Promise.all(
+      linkedIssueNumbers(body).map(async (number) => {
+        try {
+          const issue = await this.#installationRequest<{ title?: unknown }>(
+            target.owner,
+            target.repo,
+            `${base}/issues/${number}`,
+          );
+          return typeof issue.title === 'string' ? [{ number, title: issue.title }] : [];
+        } catch {
+          // A missing or private issue only loses context; the Review proceeds.
+          return [];
+        }
+      }),
+    );
+    return { body, linkedIssues: linkedIssues.flat(), priorFindings: priorSandyFindings(comments) };
   }
 
   async resolvePullRequest(repo: RepoRef, number: number): Promise<PullRequestFacts | null> {
@@ -724,6 +768,71 @@ function parseCheckRunId(raw: unknown): number {
     throw new Error('GitHub Check Run response did not include id');
   }
   return id;
+}
+
+function linkedIssueNumbers(body: string | null): number[] {
+  if (body === null) {
+    return [];
+  }
+  const numbers = [...body.matchAll(LINKED_ISSUE_PATTERN)].map(([, number]) => Number(number));
+  return [...new Set(numbers)].slice(0, LINKED_ISSUE_LIMIT);
+}
+
+interface RawReviewComment {
+  id?: unknown;
+  in_reply_to_id?: unknown;
+  body?: unknown;
+  path?: unknown;
+  line?: unknown;
+  commit_id?: unknown;
+  user?: { login?: unknown; type?: unknown } | null;
+}
+
+/**
+ * Sandy finding comments, oldest first, each with its human replies. Only
+ * bot-authored comments count, so a human cannot plant a "prior finding" by
+ * copying the trailer.
+ */
+function priorSandyFindings(rawComments: readonly unknown[]): PriorFinding[] {
+  const comments = rawComments.filter(
+    (raw): raw is RawReviewComment => typeof raw === 'object' && raw !== null,
+  );
+  const findings: PriorFinding[] = [];
+  for (const comment of comments) {
+    if (
+      comment.user?.type !== 'Bot' ||
+      typeof comment.body !== 'string' ||
+      !SANDY_FINDING_TRAILER.test(comment.body)
+    ) {
+      continue;
+    }
+    const [heading = '', summary = ''] = comment.body.split('\n\n');
+    const match = SANDY_FINDING_HEADING.exec(heading);
+    if (match === null || typeof comment.path !== 'string') {
+      continue;
+    }
+    const finding: PriorFinding = {
+      severity: match[1] as PriorFinding['severity'],
+      category: (match[2] ?? '').trim(),
+      summary: summary.trim(),
+      path: comment.path,
+      outdated: typeof comment.line !== 'number',
+      reviewedCommit: typeof comment.commit_id === 'string' ? comment.commit_id : '',
+      replies: comments.flatMap((reply) =>
+        reply.in_reply_to_id === comment.id &&
+        reply.user?.type !== 'Bot' &&
+        typeof reply.user?.login === 'string' &&
+        typeof reply.body === 'string'
+          ? [{ author: reply.user.login, body: reply.body }]
+          : [],
+      ),
+    };
+    if (typeof comment.line === 'number') {
+      finding.line = comment.line;
+    }
+    findings.push(finding);
+  }
+  return findings;
 }
 
 function checkRunSummary(input: CompleteReviewStatusCheckInput): string {

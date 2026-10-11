@@ -81,7 +81,7 @@ export class ConvexExecutionStore implements ReviewExecutionStore {
     const findingIds = (await this.#client.mutation(refs.findings.recordSynthesizedReview, {
       reviewJobId: input.reviewJobId,
       pullRequestId: input.pullRequestId,
-      confidenceScore: input.confidenceScore,
+      ...(input.confidenceScore === null ? {} : { confidenceScore: input.confidenceScore }),
       findings: input.findings.map(findingMutationArgs),
     })) as string[];
 

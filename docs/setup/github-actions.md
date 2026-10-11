@@ -291,15 +291,27 @@ The summary prominently identifies the reviewed commit; verify it is the head
 you intended to review. After new commits, create a new `@sandy` comment to
 request another review.
 Inspect the summary's test status: a confidence score of 5/5 or successful
-Actions run does not prove tests ran. An otherwise successful review receives
-a neutral Sandy Check Run when the full suite is deferred to CI, unavailable,
-failed, or skipped. Focused reviewer tests do not imply that the whole suite passed.
-The review can still complete with static analysis.
+Actions run does not prove tests ran. An otherwise clean review keeps a
+successful Sandy Check Run when the full suite is deferred to CI and states that
+in the verdict; it receives a neutral one when the suite is unavailable, failed,
+or skipped. Focused reviewer tests do not imply that the whole suite passed.
+The review can still complete with static analysis. If any selected Agent
+failed, the summary opens with "Review incomplete", names the failed Agents,
+and leaves the confidence score unscored.
+
+If the run fails before Sandy posts its summary (warm-up, install, auth, or an
+error inside the review step), the action posts a short PR comment naming the
+failed step and linking the run log. A run superseded by a newer request stays
+quiet. It uses the App's existing **Pull requests: write** permission. Step output stays in the run log only, because it
+can contain text from the reviewed code.
 
 Only newly created comments trigger reviews. Editing a comment, clicking the
 Check Run's Re-run control, rerunning an earlier Actions workflow, workflow
 dispatch, pushes, and PR lifecycle changes do not start one. Only the initial
-Actions attempt is accepted; request another review with a new `@sandy` comment.
+Actions attempt is accepted: a rerun waits its turn for the session lock, then
+fails its first step with "Post a new @sandy comment instead of rerunning an
+earlier workflow" rather than showing as skipped. Request another review with a
+new `@sandy` comment.
 The accepted mention is `@sandy`; `@agent-sandy` is not an alias.
 Monitor your ChatGPT plan quota and Actions minutes separately.
 

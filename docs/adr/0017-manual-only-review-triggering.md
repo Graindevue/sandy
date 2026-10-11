@@ -34,8 +34,9 @@ required. `@agent-sandy` is not an alias.
 
 Only `issue_comment` events of type `created` can start a Review. Edited comments,
 Check Run re-requests, workflow dispatch, pushes, and PR lifecycle events do not
-trigger one. Rerunning an earlier Actions workflow is rejected: the workflow and
-request validator require `run_attempt` to be `1`. To request another Review,
+trigger one. Rerunning an earlier Actions workflow is rejected: the request
+validator requires `run_attempt` to be `1` and fails a rerun with that
+instruction (a job-level skip would hide the reason). To request another Review,
 create a new `@sandy` comment. The PR must be open, private, and from the same
 repository.
 

@@ -82,6 +82,24 @@ describe('ConvexExecutionStore', () => {
     expect(persisted).toEqual([{ id: 'finding-1', finding }]);
   });
 
+  it('omits the confidence score for an incomplete, unscored Review', async () => {
+    const client = new FakeConvexClient();
+    const store = new ConvexExecutionStore(client);
+
+    await store.recordSynthesizedReview({
+      reviewJobId: 'job-1',
+      pullRequestId: 'pr-1',
+      confidenceScore: null,
+      findings: [],
+    });
+
+    expect(client.mutations[0]?.args).toEqual({
+      reviewJobId: 'job-1',
+      pullRequestId: 'pr-1',
+      findings: [],
+    });
+  });
+
   it('records a finding with anchor and cross-repo references intact', async () => {
     const client = new FakeConvexClient();
     const store = new ConvexExecutionStore(client);

@@ -21,6 +21,7 @@ import {
   readPackageJson,
 } from './dependency-install.js';
 import { preparationDiagnostic } from './preparation-diagnostics.js';
+import type { PullRequestHistory } from './pull-request-history.js';
 import { readReviewDiff } from './review-diff.js';
 import { buildReviewPrompt } from './review-prompt.js';
 import { minimalSandboxDenials } from './sandbox-denials.js';
@@ -49,6 +50,7 @@ export interface RunAgentInput {
   siblingWorktrees?: readonly RunnerSiblingWorktree[];
   botConfig?: ReviewBotContext;
   dependencyInstall?: DependencyInstallResult;
+  pullRequestHistory?: PullRequestHistory;
   signal?: AbortSignal;
 }
 

@@ -1,4 +1,5 @@
 import type { PostedSummaryComment } from './poster.js';
+import { preparationDiagnosticMarkdown } from './preparation-diagnostics.js';
 
 export type ReviewStatusCheckConclusion =
   | 'success'
@@ -89,7 +90,21 @@ export interface CompleteReviewStatusCheckRunInput {
 }
 
 export interface ReviewStatusCheckRun {
+  /** GitHub URL of the Check Run, or `null` when none was created. */
+  readonly url: string | null;
   complete(input: CompleteReviewStatusCheckRunInput): Promise<void>;
+}
+
+/** A hard ReviewJob failure, with its sanitized reason shown on the Check Run. */
+export function reviewFailedOutcome(error: unknown): ReviewStatusCheckOutcome {
+  const reason = preparationDiagnosticMarkdown(error);
+  return {
+    conclusion: REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed.conclusion,
+    verdict:
+      reason.length === 0
+        ? REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed.verdict
+        : `${REVIEW_STATUS_CHECK_OUTCOMES.reviewFailed.verdict}: ${reason}`,
+  };
 }
 
 class StartedReviewStatusCheckRun implements ReviewStatusCheckRun {
@@ -111,6 +126,13 @@ class StartedReviewStatusCheckRun implements ReviewStatusCheckRun {
     this.#checkRunId = input.checkRunId;
     this.#now = input.now;
     this.#logger = input.logger;
+  }
+
+  get url(): string | null {
+    if (this.#reporter === null || this.#checkRunId === null) {
+      return null;
+    }
+    return `https://github.com/${this.#context.repo.owner}/${this.#context.repo.name}/runs/${this.#checkRunId}`;
   }
 
   async complete(input: CompleteReviewStatusCheckRunInput): Promise<void> {
