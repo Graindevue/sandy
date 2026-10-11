@@ -551,7 +551,14 @@ export class GitHubAppClient
   #botLogin(): Promise<string> {
     this.#botLoginRequest ??= this.#requestJson<{ slug: string }>('/app', {
       token: this.#createJwt(),
-    }).then(({ slug }) => `${slug}[bot]`);
+    }).then(
+      ({ slug }) => `${slug}[bot]`,
+      (error: unknown) => {
+        // Drop the failed lookup so the next review asks GitHub again.
+        this.#botLoginRequest = undefined;
+        throw error;
+      },
+    );
     return this.#botLoginRequest;
   }
 

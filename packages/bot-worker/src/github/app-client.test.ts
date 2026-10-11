@@ -646,6 +646,39 @@ describe('GitHubAppClient.loadPullRequestHistory', () => {
       ],
     });
   });
+
+  it('retries the App lookup after it fails once', async () => {
+    let appLookups = 0;
+    const client = new GitHubAppClient({
+      appId: '123',
+      privateKey: 'unused',
+      createJwt: () => 'app-jwt',
+      fetch: async (url) => {
+        const path = String(url).replace('https://api.github.com', '');
+        if (path === '/app') {
+          appLookups += 1;
+          return appLookups === 1
+            ? jsonResponse({ message: 'Service Unavailable' }, 503)
+            : jsonResponse({ slug: 'sandy' });
+        }
+        if (path === '/repos/acme/widget/installation') return jsonResponse({ id: 42 });
+        if (path === '/app/installations/42/access_tokens') {
+          return jsonResponse({ token: 'installation-token', expires_at: '2099-01-01T00:00:00Z' });
+        }
+        if (path === '/repos/acme/widget/pulls/12') return jsonResponse({ body: 'Adds retries.' });
+        if (path.startsWith('/repos/acme/widget/pulls/12/comments')) return jsonResponse([]);
+        return jsonResponse({ message: `unexpected ${path}` }, 500);
+      },
+    });
+    const target = { owner: 'acme', repo: 'widget', pullNumber: 12, headSha: 'h' };
+
+    await expect(client.loadPullRequestHistory(target)).rejects.toThrow();
+    await expect(client.loadPullRequestHistory(target)).resolves.toEqual({
+      body: 'Adds retries.',
+      linkedIssues: [],
+      priorFindings: [],
+    });
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
