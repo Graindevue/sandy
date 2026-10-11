@@ -160,15 +160,15 @@ runtime suffix and this research note.
 | Prompt | Full-file words before → after | Body words before → after | Full-file proxy tokens before → after | Body proxy tokens before → after |
 | --- | --- | --- | --- | --- |
 | `agents/convex.md` | 718 → 667 | 686 → 635 | 1018 → 950 | 948 → 880 |
-| `agents/i18n.md` | 548 → 484 | 519 → 455 | 798 → 703 | 731 → 636 |
+| `agents/i18n.md` | 548 → 485 | 519 → 456 | 798 → 705 | 731 → 638 |
 | `agents/logic.md` | 379 → 346 | 354 → 321 | 520 → 501 | 460 → 441 |
 | `agents/nextjs.md` | 692 → 640 | 663 → 611 | 973 → 903 | 909 → 839 |
 | `agents/security.md` | 643 → 565 | 616 → 538 | 921 → 825 | 865 → 769 |
 | `agents/style.md` | 408 → 335 | 379 → 306 | 557 → 471 | 495 → 409 |
 | `agents/test-coverage.md` | 520 → 493 | 488 → 461 | 687 → 670 | 625 → 608 |
-| **Total** | **3908 → 3530** | **3705 → 3327** | **5474 → 5023** | **5033 → 4582** |
+| **Total** | **3908 → 3531** | **3705 → 3328** | **5474 → 5025** | **5033 → 4584** |
 
-Net: **-378 words** (9.7% shorter), **-451 proxy tokens**. Every prompt is shorter in both measures.
+Net: **-377 words** (9.6% shorter), **-449 proxy tokens**. Every prompt is shorter in both measures.
 
 ## Per-change rationale and token cost
 
@@ -190,7 +190,7 @@ include tokenizer boundary effects and reconcile exactly to each final file.
 | `i18n` / Priming preamble | Prevents speculative literal-string advice while retaining the shared evidence gate. | -12 |
 | `i18n` / Investigation duplication | Removes manifest/search steps already in the method while preserving cross-repo translation contracts. | -51 |
 | `i18n` / Repeated version lookup | The mandatory shared source contract already resolves exact versions regardless of familiarity. | -33 |
-| `i18n` / Formatter scope | Matches the reviewed Repo's actual formatter rather than assuming Sandy's Biome. | +1 |
+| `i18n` / Formatter scope | Limits the exclusion to locale-file syntax and follows the reviewed Repo’s actual tooling rather than assuming Biome. | +3 |
 | `i18n` / Output and incomplete review | Clarifies valid enum selection, preserves actual empty-review search audits, and reports incomplete checks in an existing field. | +39 |
 | `logic` / Role and diff scope | Keeps React ownership and specialist separation while making the diff boundary explicit. | -2 |
 | `logic` / Caller tracing | Keeps consequential investigation and delegates search triggers to the existing shared contract. | -13 |
