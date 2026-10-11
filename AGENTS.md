@@ -25,6 +25,14 @@ verify a review. Public repositories with fewer than 10 stars require manual
 review requests, including after pushes. A successful status can mean the review
 was skipped; verify a completed review of the current head and its findings.
 
+## Private data
+
+Sandy is a public repository; the repositories it reviews may be private. Never
+commit their PR titles or bodies, findings, review comments, code, file paths,
+or run logs here, in docs, fixtures, tests, commit messages, or PR
+descriptions. Write synthetic fixtures, and keep analyses of a reviewed
+repository in that repository.
+
 ## Runtime
 
 For runtime, auth, or trigger changes, read
