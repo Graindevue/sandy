@@ -70,6 +70,7 @@ export class GitHubAppClient
   readonly #now: () => number;
   readonly #createJwt: () => string;
   readonly #tokens = new Map<string, InstallationToken>();
+  #botLoginRequest: Promise<string> | undefined;
 
   constructor(options: GitHubAppClientOptions) {
     this.#appId = options.appId;
@@ -196,7 +197,8 @@ export class GitHubAppClient
 
   async loadPullRequestHistory(target: PullRequestTarget): Promise<PullRequestHistory> {
     const base = `/repos/${target.owner}/${target.repo}`;
-    const [pull, comments] = await Promise.all([
+    const [botLogin, pull, comments] = await Promise.all([
+      this.#botLogin(),
       this.#installationRequest<{ body?: unknown }>(
         target.owner,
         target.repo,
@@ -224,7 +226,11 @@ export class GitHubAppClient
         }
       }),
     );
-    return { body, linkedIssues: linkedIssues.flat(), priorFindings: priorSandyFindings(comments) };
+    return {
+      body,
+      linkedIssues: linkedIssues.flat(),
+      priorFindings: priorSandyFindings(comments, botLogin),
+    };
   }
 
   async resolvePullRequest(repo: RepoRef, number: number): Promise<PullRequestFacts | null> {
@@ -541,6 +547,14 @@ export class GitHubAppClient
     return await this.#requestJson<T>(path, request);
   }
 
+  /** The login GitHub shows on comments this App posts, e.g. `sandy[bot]`. */
+  #botLogin(): Promise<string> {
+    this.#botLoginRequest ??= this.#requestJson<{ slug: string }>('/app', {
+      token: this.#createJwt(),
+    }).then(({ slug }) => `${slug}[bot]`);
+    return this.#botLoginRequest;
+  }
+
   async #installationToken(owner: string, repo: string): Promise<string> {
     const key = `${owner}/${repo}`.toLowerCase();
     const cached = this.#tokens.get(key);
@@ -790,17 +804,17 @@ interface RawReviewComment {
 
 /**
  * Sandy finding comments, oldest first, each with its human replies. Only
- * bot-authored comments count, so a human cannot plant a "prior finding" by
- * copying the trailer.
+ * comments posted by this App count, so neither a human nor another bot can
+ * plant a "prior finding" by copying the trailer.
  */
-function priorSandyFindings(rawComments: readonly unknown[]): PriorFinding[] {
+function priorSandyFindings(rawComments: readonly unknown[], botLogin: string): PriorFinding[] {
   const comments = rawComments.filter(
     (raw): raw is RawReviewComment => typeof raw === 'object' && raw !== null,
   );
   const findings: PriorFinding[] = [];
   for (const comment of comments) {
     if (
-      comment.user?.type !== 'Bot' ||
+      comment.user?.login !== botLogin ||
       typeof comment.body !== 'string' ||
       !SANDY_FINDING_TRAILER.test(comment.body)
     ) {

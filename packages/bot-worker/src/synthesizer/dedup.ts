@@ -74,20 +74,30 @@ export function dedupeFindings(
 
   for (const [index, finding] of findings.entries()) {
     const candidate = { finding, index };
-    const matchingClusters = clusters.filter((cluster) =>
-      cluster.some((member) => isDuplicateFinding(member.finding, finding, dedupOptions)),
+    // The same wording on nearby lines is one defect, so it chains: lines 22,
+    // 24 and 26 form one cluster and bridge clusters they touch.
+    const lexicalClusters = clusters.filter((cluster) =>
+      cluster.some((member) => isLexicalDuplicate(member.finding, finding, dedupOptions)),
     );
-
-    const firstCluster = matchingClusters[0];
-    if (firstCluster === undefined) {
-      clusters.push([candidate]);
+    const firstCluster = lexicalClusters[0];
+    if (firstCluster !== undefined) {
+      firstCluster.push(candidate);
+      for (const cluster of lexicalClusters.slice(1).reverse()) {
+        firstCluster.push(...cluster);
+        clusters.splice(clusters.indexOf(cluster), 1);
+      }
       continue;
     }
 
-    firstCluster.push(candidate);
-    for (const cluster of matchingClusters.slice(1).reverse()) {
-      firstCluster.push(...cluster);
-      clusters.splice(clusters.indexOf(cluster), 1);
+    // A cross-agent match must hold against every member, so A~B and B~C
+    // cannot pull two unrelated findings A and C into one comment.
+    const crossAgentCluster = clusters.find((cluster) =>
+      cluster.every((member) => isCrossAgentDuplicate(member.finding, finding, dedupOptions)),
+    );
+    if (crossAgentCluster === undefined) {
+      clusters.push([candidate]);
+    } else {
+      crossAgentCluster.push(candidate);
     }
   }
 
@@ -129,17 +139,22 @@ export function summaryCosineSimilarity(left: string, right: string): number {
   return dotProduct / (magnitude(leftVector) * magnitude(rightVector));
 }
 
-function isDuplicateFinding(
+function isLexicalDuplicate(
   left: Finding,
   right: Finding,
   options: Required<DedupFindingsOptions>,
 ): boolean {
-  if (
+  return (
     isNearbySamePath(left, right, options.lineProximity) &&
     summaryCosineSimilarity(left.summary, right.summary) >= options.summaryCosineThreshold
-  ) {
-    return true;
-  }
+  );
+}
+
+function isCrossAgentDuplicate(
+  left: Finding,
+  right: Finding,
+  options: Required<DedupFindingsOptions>,
+): boolean {
   // Different Agents describe the same defect in different words, so summary
   // wording is a poor signal. Require largely shared anchors and shared code
   // identifiers across summary, evidence and fix instead.

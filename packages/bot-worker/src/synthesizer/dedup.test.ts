@@ -177,6 +177,31 @@ describe('dedupeFindings across Agents', () => {
       }),
     ]);
   });
+
+  it('does not chain two unrelated findings together through a third', () => {
+    const merged = dedupeFindings([
+      finding({
+        agentKey: 'logic',
+        lines: [10, 14],
+        summary: RETRY_SUMMARY,
+        identifiers: ['retryDelivery', 'leftOne', 'leftTwo', 'leftThree'],
+      }),
+      finding({
+        agentKey: 'security',
+        lines: [10, 14],
+        summary: RESTART_SUMMARY,
+        identifiers: ['retryDelivery', 'signPayload', 'middleOne', 'middleTwo'],
+      }),
+      finding({
+        agentKey: 'test-coverage',
+        lines: [10, 14],
+        summary: 'Nothing covers a second attempt.',
+        identifiers: ['signPayload', 'rightOne', 'rightTwo', 'rightThree'],
+      }),
+    ]);
+
+    expect(merged).toHaveLength(2);
+  });
 });
 
 describe('dedupeFindings within one Agent', () => {
