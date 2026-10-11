@@ -54,7 +54,7 @@ dependencies on integration/release PRs, pushes, and a weekly schedule. Findings
 are fully redacted; raw secret reports are not uploaded. Both jobs run with
 read-only repository permissions and require no repository secrets, including
 for fork PRs. CI actions are pinned to reviewed commit SHAs, and Dependabot opens
-weekly dependency and Actions updates against `staging`.
+weekly dependency and Actions updates against `main`.
 
 The `Native Linux sandbox` check installs the same pinned Codex CLI and scoped
 bubblewrap/AppArmor prerequisites as the review action. It runs a hostile npm

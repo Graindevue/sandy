@@ -18,4 +18,3 @@ reviews:
     drafts: false
     base_branches:
       - "^main$"
-      - "^staging$"

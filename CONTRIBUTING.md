@@ -16,15 +16,14 @@ Sandy is built primarily for one developer's daily use, but the runtime is gener
 
 ## Pull request workflow
 
-Branches: `main` (default / production) ← `staging` (integration) ← feature branches.
+Branches: `main` (default / production) ← feature branches. There is no
+`staging` branch in this workflow; do not branch from or target it.
 
-1. Branch from `staging` (name it `phase-N/<slug>`)
+1. Branch from `main` (name it `phase-N/<slug>`)
 2. Make focused changes; include tests where reasonable
 3. Run `pnpm lint:fix && pnpm type-check && pnpm test`
-4. Open a PR **against `staging`** and request a [CodeRabbit review](./.agents/skills/coderabbit-review/SKILL.md)
+4. Open a PR **against `main`** and request a [CodeRabbit review](./.agents/skills/coderabbit-review/SKILL.md)
 5. Address verified review findings and pass required CI; a maintainer reviews before merge
-
-Release PRs promote `staging` to `main` through a separate maintainer review.
 
 ## What we won't merge
 

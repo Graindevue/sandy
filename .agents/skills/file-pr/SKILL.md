@@ -14,8 +14,8 @@ the same work.
 
 ## Base branch
 
-Feature work branches from `staging` with a `phase-N/<slug>` name and targets
-`staging`. Release PRs promote `staging` to `main` for maintainer review.
+Feature work branches from `main` with a `phase-N/<slug>` name and targets
+`main`. Never use `staging`.
 Follow [AGENTS.md](../../../AGENTS.md). Fetch the target repository's
 base branch and review the diff against its current remote-tracking ref to make
 sure the contents match the user's goal. Use another base only when the user
@@ -83,7 +83,7 @@ When using `gh`, write multiline descriptions to a temporary file and pass
 
 ## After filing
 
-Open as a draft (`gh pr create --draft --base staging`) unless the user explicitly
+Open as a draft (`gh pr create --draft --base main`) unless the user explicitly
 asks for a ready PR. A maintainer reviews the PR before merge.
 
 When T3 Code exposes `link_pull_request`, register the full PR URL immediately

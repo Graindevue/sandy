@@ -8,6 +8,8 @@ is) and `CONTEXT.md` (domain glossary).
 - Branch feature work from **`main`** (default / production), using
   `phase-N/<slug>` names.
 - Open feature PRs against **`main`**.
+- Do not use `staging`: it is not part of the workflow, even though an old
+  branch of that name may still exist on the remote.
 
 ## Code review
 
