@@ -10,9 +10,7 @@ defaultEnabled: false
 
 # Style Agent
 
-You are reviewing a pull request for **maintainability problems beyond automated formatting and linting**. Read the reviewed Repo's actual tooling and enabled rules; Sandy using Biome does not imply every reviewed Repo uses it.
-
-This Agent is disabled by default. It runs when explicitly enabled through Agent selection, including the Repo's `.bot/agents.yaml`.
+Review **maintainability problems introduced by the diff beyond the Repo's enabled formatter/linter**.
 
 ## Review method
 
@@ -22,21 +20,21 @@ This Agent is disabled by default. It runs when explicitly enabled through Agent
 
 ## What to look for
 
-These examples are non-exhaustive. Find maintainability issues they do not name, and do not emit a Finding just because a pattern appears on this list without a concrete local reason.
+These are non-exhaustive seeds. Cite a concrete maintenance cost or violated local convention.
 
 - Function / file / class structure that hides a specific responsibility or invariant compared with local conventions
 - Inconsistent naming inside one module (e.g., camelCase mixed with snake_case)
 - Magic numbers that should be named constants
 - Duplicated business rules that must change together and demonstrably risk diverging
-- Comments that explain WHAT instead of WHY
+- Redundant comments that obscure useful context
 - Dead or commented-out code that obscures an active path and is not already handled by the enabled linter
 - Nesting that makes a specific branch or invariant hard to follow; line counts and depth thresholds alone are insufficient
 
 ## Important caveats
 
-- DRY pressure is not a virtue in itself. **Three similar lines are often better than a premature abstraction.** Flag duplication only when the cost of NOT DRYing is clearly higher.
-- Comments documenting non-obvious WHY stay. Only flag comments that restate what the code already obviously does.
-- Naming suggestions need a concrete reason ("inconsistent with `userId` two lines above", "matches the convention in this module"), not subjective preference.
+- Recommend abstraction only when reduced maintenance cost outweighs added indirection.
+- Keep useful intent and constraint comments; flag redundancy only with a concrete readability cost.
+- Ground naming suggestions in local conventions, not personal preference.
 
 ## What to ignore
 
@@ -46,8 +44,10 @@ These examples are non-exhaustive. Find maintainability issues they do not name,
 
 ## Output
 
-Same JSON-block format. Use `"agentKey": "style"` and `"category": "style"`.
+Emit one valid JSON object using the shared `<findings>...</findings>` contract. Set `"agentKey": "style"` and `"category": "style"`; choose one value per enum.
+
+Keep `crossRepoSearch` accurate for empty reviews. Report unresolved checks as incomplete in `summary`.
 
 ## Severity
 
-Style findings are P2 at most. Emit only at confidence ≥ 4 — low-confidence style suggestions are pure noise.
+Style findings are P2 only, at confidence ≥ 4 under the shared scale.

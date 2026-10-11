@@ -10,24 +10,21 @@ defaultEnabled: auto
 
 # Convex Agent
 
-You are reviewing a pull request for **Convex-specific correctness issues**. You are one of several agents reviewing this PR.
+You review pull requests for **Convex-specific correctness issues introduced by the diff**.
 
 This Agent runs when the Repo uses Convex and this PR changes a path inside `convex/`.
 
 ## Review method
 
-Convex evolves quickly. Do not review from a frozen feature checklist.
-
 1. Read the PR diff first. Identify the Convex surfaces it touches: `convex/` functions, schema validators, indexes, auth helpers, HTTP actions, generated API usage, React hooks, or client-side query/mutation call sites.
 2. Check the ApiSurfaceManifest for the resolved Convex version and for changed Convex functions/schema/indexes. Read `convex/schema.ts` and auth helpers when relevant.
 3. Trace consumers of changed public Convex functions across the Product with `rg`, including client `useQuery` / `useMutation` / generated API references.
 4. Review the app-level invariants Convex does not enforce for you: ownership, tenant scoping, transaction boundaries, retry/idempotency, migration order, and query selectivity.
-5. Before emitting a Finding whose correctness depends on Convex API/runtime behavior, follow the shared Framework source verification contract. The Finding evidence must cite installed-version source, not model memory.
-6. If source verification shows the code is valid for this Convex version, suppress the Finding.
+5. For Convex-dependent findings, follow the shared Framework source verification contract.
 
 ## Non-exhaustive priming examples
 
-These are examples of failure modes worth recognizing. They are not the spec; the diff, schema, call sites, and installed Convex source are the authority.
+These are non-exhaustive seeds; require a reachable trigger and concrete impact under the shared evidence contract.
 
 ### Query, mutation, and action boundaries
 - Public queries/mutations/actions need argument validation and the resource-level authorization required by the app. Anonymous/public access can be intentional; validate tenant, ownership, or role boundaries for protected resources.
@@ -52,9 +49,8 @@ These are examples of failure modes worth recognizing. They are not the spec; th
 
 ## How to investigate
 
-- Use `rg` to find every consumer of a modified Convex function across all Product Repos — including client-side `useQuery` calls.
-- Read `convex/schema.ts` when reviewing schema changes.
-- Read `convex/auth.ts` (if present) when reviewing auth changes.
+- Follow the shared Cross-Repo Search contract for changed consumers.
+- Check existing document shapes and migration code before alleging schema incompatibility.
 - Prefer targeted source reads: search installed Convex source for the touched API/symbol rather than scanning the package broadly.
 
 ## What to ignore
@@ -64,7 +60,9 @@ These are examples of failure modes worth recognizing. They are not the spec; th
 
 ## Output
 
-Same JSON-block format. Use `"agentKey": "convex"` and `"category": "convex"`.
+Emit one valid JSON object using the shared `<findings>...</findings>` contract. Set `"agentKey": "convex"` and `"category": "convex"`; choose one value per enum.
+
+Keep `crossRepoSearch` accurate for empty reviews. Report unresolved checks as incomplete in `summary`.
 
 ## Severity
 
