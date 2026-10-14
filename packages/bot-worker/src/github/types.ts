@@ -4,7 +4,7 @@ export type GitHubCommentKind = 'pull_request_review_comment' | 'issue_comment';
 
 /** Identity of the GitHub repository an event targets. */
 export interface RepoRef {
-  /** Owner or org login, e.g. `"tony-co"`. */
+  /** Owner or org login, e.g. `"Graindevue"`. */
   owner: string;
   /** Repository name, e.g. `"sandy"`. */
   name: string;

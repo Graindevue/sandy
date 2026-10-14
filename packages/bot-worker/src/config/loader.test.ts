@@ -31,10 +31,10 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-desktop
         defaultBranch: develop
         excludeBranches:
@@ -44,7 +44,7 @@ products:
   - slug: sandy
     name: Sandy
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: sandy
         defaultBranch: main
 `;
@@ -139,7 +139,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -158,11 +158,11 @@ describe('ConfigLoader.resolveForRepo', () => {
   it('resolves the correct Product and Agent set for a registered Repo', async () => {
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-backend');
 
     expect(resolved).not.toBeNull();
     expect(resolved?.product.slug).toBe('acme');
-    expect(resolved?.repo.fullName).toBe('tony-co/acme-backend');
+    expect(resolved?.repo.fullName).toBe('Graindevue/acme-backend');
     expect(resolved?.repo.defaultBranch).toBe('main');
     // acme declares `agents: [logic]`, so exactly the logic Agent applies.
     expect(resolved?.agents.map((a) => a.key)).toEqual(['logic']);
@@ -171,7 +171,7 @@ describe('ConfigLoader.resolveForRepo', () => {
   it('resolves a sibling Repo to the same Product (cross-repo grouping)', async () => {
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-desktop');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-desktop');
 
     expect(resolved?.product.slug).toBe('acme');
     expect(resolved?.repo.defaultBranch).toBe('develop');
@@ -184,7 +184,7 @@ describe('ConfigLoader.resolveForRepo', () => {
 
     // The `sandy` Product declares no `agents`, so the default selection applies:
     // every Agent whose `defaultEnabled` is not false. `security` is opted out.
-    const resolved = loader.resolveForRepo('tony-co', 'sandy');
+    const resolved = loader.resolveForRepo('Graindevue', 'sandy');
 
     expect(resolved?.product.slug).toBe('sandy');
     expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
@@ -203,7 +203,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -217,7 +217,7 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-backend');
     expect(resolved?.agents).toHaveLength(1);
     expect(resolved?.agents[0]?.vendor).toBe('codex');
     expect(resolved?.agents[0]?.model).toBe('gpt-5.6');
@@ -228,7 +228,7 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-backend');
     expect(resolved?.agents[0]?.effort).toBe('high');
   });
 
@@ -240,7 +240,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -255,7 +255,7 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const logic = loader.resolveForRepo('tony-co', 'acme-backend')?.agents[0];
+    const logic = loader.resolveForRepo('Graindevue', 'acme-backend')?.agents[0];
     expect(logic?.vendor).toBe('codex');
     expect(logic?.effort).toBe('xhigh');
   });
@@ -272,7 +272,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -286,7 +286,7 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const logic = loader.resolveForRepo('tony-co', 'acme-backend')?.agents[0];
+    const logic = loader.resolveForRepo('Graindevue', 'acme-backend')?.agents[0];
     expect(logic?.vendor).toBe('codex');
     expect(logic?.effort).toBeUndefined();
   });
@@ -299,7 +299,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -312,7 +312,7 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-backend');
     expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
     expect(resolved?.agents.find((a) => a.key === 'logic')?.model).toBe('gpt-5.6');
   });
@@ -325,7 +325,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents: {}
@@ -334,14 +334,14 @@ products:
 
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('tony-co', 'acme-backend');
+    const resolved = loader.resolveForRepo('Graindevue', 'acme-backend');
     expect(resolved?.agents.map((a) => a.key).sort()).toEqual(['convex', 'logic']);
   });
 
   it('is case-insensitive on owner/name', async () => {
     const loader = await ConfigLoader.create(options());
 
-    const resolved = loader.resolveForRepo('Tony-Co', 'ACME-Backend');
+    const resolved = loader.resolveForRepo('graindevue', 'ACME-Backend');
 
     expect(resolved?.product.slug).toBe('acme');
   });
@@ -356,13 +356,13 @@ products:
 describe('ConfigLoader.reload', () => {
   it('re-reads bot.yaml so a newly added Repo resolves without a restart', async () => {
     const loader = await ConfigLoader.create(options());
-    expect(loader.resolveForRepo('tony-co', 'newly-added')).toBeNull();
+    expect(loader.resolveForRepo('Graindevue', 'newly-added')).toBeNull();
 
-    const updated = `${BOT_YAML}      - owner: tony-co\n        name: newly-added\n        defaultBranch: main\n`;
+    const updated = `${BOT_YAML}      - owner: Graindevue\n        name: newly-added\n        defaultBranch: main\n`;
     await writeFile(layout.botYamlPath, updated);
     await loader.reload();
 
-    const resolved = loader.resolveForRepo('tony-co', 'newly-added');
+    const resolved = loader.resolveForRepo('Graindevue', 'newly-added');
     expect(resolved?.product.slug).toBe('sandy');
   });
 
@@ -373,7 +373,7 @@ describe('ConfigLoader.reload', () => {
     await expect(loader.reload()).rejects.toThrow(/at least one product/i);
 
     // The previous good config is still in effect after a failed reload.
-    expect(loader.resolveForRepo('tony-co', 'acme-backend')?.product.slug).toBe('acme');
+    expect(loader.resolveForRepo('Graindevue', 'acme-backend')?.product.slug).toBe('acme');
   });
 });
 

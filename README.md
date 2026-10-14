@@ -77,8 +77,7 @@ in the `sandy-codex` GitHub environment and written back after every run.
 The canonical source is `Graindevue/sandy`. ChatGPT-managed CI credentials
 belong only in private caller repositories. The caller
 checks out an audited Sandy commit with explicit read access and invokes the
-checked-out composite action at `.github/actions/review`. The original
-`tony-co/sandy` repository retains its history. The caller workflow and setup
+checked-out composite action at `.github/actions/review`. The caller workflow and setup
 instructions explain the required access.
 
 ## Configuration and development

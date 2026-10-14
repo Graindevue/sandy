@@ -22,7 +22,7 @@ directly and retaining Convex Cloud for durable state.
 ## Execution and state
 
 The caller checks out trusted Sandy code and runs its composite action. The
-initial cross-owner setup used private `tony-co/sandy`; the canonical source is
+initial cross-owner setup used a private repository under a personal account; the canonical source is
 `Graindevue/sandy`, preserving the original history. Its source is currently
 public; ChatGPT-managed automation remains confined to private caller Repos. The caller
 checks out an audited Sandy commit with explicit read access and invokes the

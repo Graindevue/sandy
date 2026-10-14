@@ -75,7 +75,7 @@ async function makeOrigin(): Promise<Origin> {
   return { url, commit };
 }
 
-const REPO = { owner: 'tony-co', name: 'sandy', defaultBranch: 'main' };
+const REPO = { owner: 'Graindevue', name: 'sandy', defaultBranch: 'main' };
 
 describe('CloneManager', () => {
   it('clones a Repo on first observation', async () => {
@@ -89,7 +89,7 @@ describe('CloneManager', () => {
     expect(existsSync(join(repoPath, 'README.md'))).toBe(true);
     // The clone lives under baseDir, namespaced by owner/name.
     expect(repoPath.startsWith(baseDir)).toBe(true);
-    expect(repoPath).toContain('tony-co');
+    expect(repoPath).toContain('Graindevue');
     expect(repoPath).toContain('sandy');
   });
 
@@ -413,7 +413,7 @@ describe('CloneManager', () => {
     const baseDir = join(tmpRoot, 'repos');
     const manager = new CloneManager({
       baseDir,
-      cloneUrl: () => 'https://x-access-token:super-secret-token@127.0.0.1:1/tony-co/sandy.git',
+      cloneUrl: () => 'https://x-access-token:super-secret-token@127.0.0.1:1/Graindevue/sandy.git',
     });
 
     let message = '';

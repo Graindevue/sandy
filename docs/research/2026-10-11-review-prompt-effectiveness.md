@@ -5,7 +5,7 @@ structure, voice, and exact runtime frontmatter. The proposed text is the PR
 diff; each replacement and its token cost is recorded below.
 
 The active baseline is `Graindevue/sandy` main at `c8713de`. The historical
-`tony-co/sandy` repository is archived. The active main already incorporates the
+source repository is archived. The active main already incorporates the
 [2026-10-09 guidance audit](2026-10-09-agent-guidance-audit.md), including Codex
 native tools, exact-version source checks, corrected framework assumptions,
 and shared severity/confidence gates. Preserve those fixes; avoid replaying the
