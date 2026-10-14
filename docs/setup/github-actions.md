@@ -115,7 +115,9 @@ package scripts run in a credential-free sandbox; review agents use a filesystem
 profile that denies access to auth files, the App key, and other credential
 directories. On Ubuntu, the action installs bubblewrap and its AppArmor profile
 before materializing Codex auth so the native sandbox can create its isolated
-user namespace. During dependency installation, Sandy skips only a root
+user namespace. It suspends needrestart for that install: when the install
+upgrades a shared library, restarting runner-image services such as php-fpm can
+otherwise stall the step for about 90 seconds. During dependency installation, Sandy skips only a root
 `prepare` script whose exact command is `lefthook install`, in the isolated
 reviewed worktree. It restores the original `package.json` bytes before tests
 and review; other dependency lifecycle scripts still run.
@@ -131,7 +133,11 @@ GitHub Actions cache, separately from the cache used to build Sandy. Every revie
 still performs a fresh frozen installation. Supported stores are npm's
 `_cacache` and pnpm's content store, with side-effect and local-project records
 excluded. Installed dependencies, source, test outputs, tool homes, logs,
-credentials, and configuration files are never saved.
+credentials, and configuration files are never saved. Set
+`SANDY_DEPENDENCY_DOWNLOAD_CACHE=false` (action input
+`dependency-download-cache: false`) to install from the registry without the
+cache service; the action then withholds the cache runtime variables from review
+steps.
 
 A pinned Node action exports only the runner's optional cache-service variables
 to trusted worker steps and masks the runtime token first. Reviewed commands
@@ -148,7 +154,7 @@ The mutable framework-source cache is restore-only and is never saved after revi
 Existing callers must update their workflow from the template and advance the
 audited `SANDY_REF`; updating Sandy alone does not change caller cache policy.
 
-pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
+On a miss, pnpm first fetches the frozen graph with scripts and pnpmfile hooks disabled.
 `fetch` already freezes the lockfile internally; Sandy does not pass the unsupported
 `--frozen-lockfile` fetch option. Frozen installation still uses that flag.
 Pinned pnpm 12 uses a native-platform JSON environment override for both stages,
@@ -162,7 +168,10 @@ fresh `ci` installation. Sandy snapshots validated downloads before reviewed
 hooks and lifecycles run; each ordinary lifecycle still runs once. The
 publication snapshot is denied to reviewed commands, and pnpm package imports
 use copies to keep installation writes out of it. Only successful normal
-preparation publishes that snapshot. The v3 namespace excludes earlier snapshots and distinguishes native platform
+preparation publishes that snapshot. An exact hit is never republished, so it
+skips download-only preparation: the validated restored store moves into the
+install store, frozen installation checks package integrity, and a failure gets
+the cold retry below. The v3 namespace excludes earlier snapshots and distinguishes native platform
 selection from the repository architecture policy, including Linux libc family. npm retains its lockfile tarball integrity checks
 when reading cached content. Both stages share the preparation timeout budget.
 
@@ -267,6 +276,7 @@ reports this deferral. Optional repository variables:
 | `SANDY_AGENT_EXECUTION_MODE` | `serial` (default) or `parallel`, gated by runtime/authentication and quality evidence. |
 | `SANDY_AGENT_CONCURRENCY` | Positive maximum selected Agents in parallel mode; default three, one selects serial. |
 | `SANDY_AGENT_WORKSPACES` | `copy` (default) or `overlay`: layer parallel Agents over the read-only seed instead of copying it (Linux with passwordless `sudo`; falls back to `copy`). |
+| `SANDY_DEPENDENCY_DOWNLOAD_CACHE` | `true` (default) restores and publishes reviewed package downloads through the Actions cache; `false` installs from the registry without it. |
 
 The workflow template passes these test settings to the action's `test-mode`
 and `test-timeout-seconds` inputs. Existing callers that omit them use focused

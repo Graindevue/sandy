@@ -177,7 +177,7 @@ it('reuses downloaded packages while performing a fresh frozen installation for 
   );
   expect(await fixture.runner.installDependencies(input)).toMatchObject({
     status: 'installed',
-    cache: { restore: 'hit' },
+    cache: { restore: 'hit', fetch: 'skipped', fetchMs: 0, save: 'skipped' },
   });
   expect(fixture.downloads()).toBe(1);
   expect(await readFile(join(fixture.repo, 'node_modules/download-fixture/index.js'), 'utf8')).toBe(
@@ -455,7 +455,7 @@ it.each(['10.34.1', '12.10.1', 'current'])(
     await rm(join(fixture.repo, 'node_modules'), { recursive: true });
     expect(await fixture.runner.installDependencies(input)).toMatchObject({
       status: 'installed',
-      cache: { restore: 'hit' },
+      cache: { restore: 'hit', fetch: 'skipped', fetchMs: 0, save: 'skipped' },
     });
     expect(fixture.downloads()).toBe(1);
     const resolved = await exec('node', ['-e', 'console.log(require("download-fixture"))'], {
@@ -693,7 +693,7 @@ it('pnpm 12 fetch and install retain host-native optional packages without forei
   fixture.resetDownloads();
   expect(await fixture.runner.installDependencies(input)).toMatchObject({
     status: 'installed',
-    cache: { restore: 'hit' },
+    cache: { restore: 'hit', fetch: 'skipped', fetchMs: 0, save: 'skipped' },
   });
   expect(fixture.downloads()).toBe(0);
 }, 60_000);

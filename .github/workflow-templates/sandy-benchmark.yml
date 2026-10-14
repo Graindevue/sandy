@@ -95,7 +95,9 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          # The runner image ships services such as php-fpm. When this install upgrades
+          # a shared library they use, needrestart restarts them and can hang ~90s.
+          sudo NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l apt-get install --yes bubblewrap apparmor-profiles
           sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
           printf 'CODEX_HOME=%s\nGITHUB_APP_PRIVATE_KEY_PATH=%s\nSANDY_AUTH_ENVIRONMENT=sandy-codex-test\n' \

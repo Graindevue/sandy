@@ -80,6 +80,26 @@ test('absent optional cache runtime variables stay absent', async () => {
   assert.deepEqual(exports, [['ACTIONS_RESULTS_URL', 'https://cache.example.test']]);
 });
 
+test('turning the dependency cache off withholds cache credentials from the review', () => {
+  const step = exportStep(action.runs.steps);
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression is literal test data.
+  assert.equal(step.if, "${{ inputs.dependency-download-cache != 'false' }}");
+  assert.equal(action.inputs['dependency-download-cache'].default, 'true');
+  const review = action.runs.steps.find((entry) => entry.id === 'review');
+  assert.equal(
+    review.env.SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE,
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression is literal test data.
+    '${{ inputs.dependency-download-cache }}',
+  );
+});
+
+test('sandbox prerequisites never wait on runner services restarted by needrestart', () => {
+  const step = action.runs.steps.find((entry) => entry.id === 'sandbox');
+  const install = step.run.split('\n').find((line) => line.includes('apt-get install'));
+  assert.match(install, /NEEDRESTART_SUSPEND=1/);
+  assert.doesNotMatch(install, /apparmor-utils/);
+});
+
 test('Linux CI exercises the shipped cache adapter after the same credential export contract', () => {
   const job = ci.jobs['dependency-cache'];
   assert.equal(job['runs-on'], 'ubuntu-latest');

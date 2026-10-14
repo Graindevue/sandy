@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { cp, type FileHandle, lstat, mkdir, open, readdir, rm } from 'node:fs/promises';
+import { cp, type FileHandle, lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { DetectedDependencyInstall, DetectedPackageManager } from './dependency-install.js';
 import { readPackageJson } from './dependency-install.js';
@@ -22,7 +22,7 @@ export interface DependencyDownloadCacheMetrics {
   restore: 'hit' | 'miss' | 'unavailable' | 'unverified' | 'discarded';
   restoreMs: number;
   fetchMs: number;
-  fetch?: 'completed' | 'unavailable';
+  fetch?: 'completed' | 'skipped' | 'unavailable';
   save: 'saved' | 'skipped' | 'unavailable';
   saveMs: number;
   coldRetry: boolean;
@@ -171,4 +171,20 @@ export async function snapshotDownloadStore(
     },
   });
   await validateDownloadStore(destination, manager);
+}
+
+/** Move a validated restored store into place; copy only when it lives on another device. */
+export async function adoptDownloadStore(
+  source: string,
+  destination: string,
+  manager: DetectedPackageManager,
+): Promise<void> {
+  await validateDownloadStore(source, manager);
+  await rm(destination, { recursive: true, force: true });
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    await snapshotDownloadStore(source, destination, manager);
+  }
 }

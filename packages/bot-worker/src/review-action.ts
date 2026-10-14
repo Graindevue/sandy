@@ -40,6 +40,7 @@ export interface ReviewActionConfig {
   executionMode: 'serial' | 'parallel';
   maxAgentConcurrency: number;
   agentWorkspaces: AgentWorkspaceLayout;
+  dependencyDownloadCache: boolean;
 }
 
 export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConfig {
@@ -62,6 +63,10 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
   if (agentWorkspaces !== 'copy' && agentWorkspaces !== 'overlay') {
     throw new Error('SANDY_REVIEW_AGENT_WORKSPACES must be copy or overlay');
   }
+  const dependencyDownloadCache = env.SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE ?? 'true';
+  if (dependencyDownloadCache !== 'true' && dependencyDownloadCache !== 'false') {
+    throw new Error('SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE must be true or false');
+  }
   return {
     root,
     repository: { owner, name },
@@ -82,6 +87,7 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     executionMode: maxAgentConcurrency === 1 ? 'serial' : 'parallel',
     maxAgentConcurrency,
     agentWorkspaces,
+    dependencyDownloadCache: dependencyDownloadCache === 'true',
   };
 }
 
@@ -183,7 +189,9 @@ export async function runReviewAction(
     runner: new CodexAppServerRunner({
       codexHome: config.codexHome,
       enableManagedRuntime: config.executionMode === 'parallel',
-      dependencyDownloadCache: createGitHubDependencyDownloadCache(),
+      ...(config.dependencyDownloadCache
+        ? { dependencyDownloadCache: createGitHubDependencyDownloadCache() }
+        : {}),
       ...(config.runnerTempDir
         ? {
             dependencyDownloadCacheDirectory: resolve(

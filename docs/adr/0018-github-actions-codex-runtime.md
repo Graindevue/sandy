@@ -59,7 +59,9 @@ and exact package-manager version. Every Review still performs a fresh frozen
 installation inside the credential-free sandbox. Unsupported or unverified
 stores remain cold; cache failures are optional, and an unusable restored store
 is discarded before one bounded cold retry. Only successful preparation can
-publish downloads. Installed trees, source, tool homes, credentials and mutable
+publish downloads. Download-only preparation runs only on a miss: an exact hit
+is never republished, so its validated store is installed from directly. Callers
+can turn the cache off with the `dependency-download-cache` action input. Installed trees, source, tool homes, credentials and mutable
 Review outputs are excluded.
 
 The key is derived from the actual reviewed head's files, rather than the

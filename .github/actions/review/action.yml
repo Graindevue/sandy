@@ -44,6 +44,9 @@ inputs:
   agent-workspaces:
     description: copy (default) gives each parallel Agent a private copy of the prepared seed; overlay layers each Agent over the read-only seed and falls back to copy when mounts are unavailable.
     default: copy
+  dependency-download-cache:
+    description: true (default) restores and publishes reviewed package downloads through the Actions cache; false installs from the registry without the cache service.
+    default: 'true'
   test-mode:
     description: targeted lets reviewers verify findings with focused tests; suite runs the root test script once before review.
     default: targeted
@@ -105,7 +108,9 @@ runs:
         # AppArmor profile before restoring credentials rather than disabling
         # the restriction for every process on the runner.
         sudo apt-get update
-        sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+        # The runner image ships services such as php-fpm. When this install upgrades
+        # a shared library they use, needrestart restarts them and can hang ~90s.
+        sudo NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l apt-get install --yes bubblewrap apparmor-profiles
         sudo install -m 0644 \
           /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
           /etc/apparmor.d/bwrap-userns-restrict
@@ -155,6 +160,7 @@ runs:
     # The runner supplies cache credentials to Node actions, not run: shell steps.
     - name: Expose the optional cache runtime to trusted review steps
       id: cache-runtime
+      if: ${{ inputs.dependency-download-cache != 'false' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       with:
         script: |
@@ -184,6 +190,7 @@ runs:
         SANDY_REVIEW_EXECUTION_MODE: ${{ inputs.agent-execution-mode }}
         SANDY_REVIEW_AGENT_CONCURRENCY: ${{ inputs.max-agent-concurrency }}
         SANDY_REVIEW_AGENT_WORKSPACES: ${{ inputs.agent-workspaces }}
+        SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE: ${{ inputs.dependency-download-cache }}
         SANDY_REVIEW_TEST_MODE: ${{ inputs.test-mode }}
         SANDY_REVIEW_TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
       # Finish this step before the caller's 120-minute job timeout so the
