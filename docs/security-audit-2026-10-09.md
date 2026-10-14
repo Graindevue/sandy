@@ -46,7 +46,7 @@ For activation, first confirm the caller's encrypted `CONVEX_URL`, let active re
 
 ## Scope and evidence
 
-The public repository is **Graindevue/sandy**. This workspace's `origin` is **tony-co/sandy**, which GitHub still reports as private and which has an older default-branch revision. Runtime findings below refer to the public revision, with links pinned to its commit, rather than assuming this workspace matches production.
+The public repository is **Graindevue/sandy**. Runtime findings below refer to the public revision, with links pinned to its commit, rather than assuming any local workspace matches production.
 
 - Public `main`: `c4efea8a823e9ac2b9a05487716d2c6ba156c642`.
 - Snapshot refreshed through **2026-10-09 12:13 UTC**. Another branch and PR appeared during the audit and were included in the final secret scan.

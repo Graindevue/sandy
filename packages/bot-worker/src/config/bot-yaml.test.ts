@@ -17,7 +17,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
 `;
@@ -27,10 +27,10 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-desktop
         defaultBranch: main
     agents:
@@ -38,7 +38,7 @@ products:
   - slug: sandy
     name: Sandy
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: sandy
         defaultBranch: main
 `;
@@ -52,12 +52,12 @@ describe('parseBotConfig', () => {
     expect(product?.slug).toBe('acme');
     expect(product?.name).toBe('Acme');
     expect(product?.repos).toHaveLength(1);
-    expect(product?.repos[0]?.owner).toBe('tony-co');
+    expect(product?.repos[0]?.owner).toBe('Graindevue');
     expect(product?.repos[0]?.name).toBe('acme-backend');
     expect(product?.repos[0]?.defaultBranch).toBe('main');
     expect(product?.repos[0]?.excludeBranches).toEqual([]);
     // `fullName` is derived, not authored.
-    expect(product?.repos[0]?.fullName).toBe('tony-co/acme-backend');
+    expect(product?.repos[0]?.fullName).toBe('Graindevue/acme-backend');
     // No `agents:` => default/auto selection and no runtime overrides.
     expect(product?.agents).toEqual([]);
     expect(product?.agentSelectionMode).toBe('default');
@@ -70,7 +70,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
         excludeBranches:
@@ -89,8 +89,8 @@ products:
     expect(config.products).toHaveLength(2);
     const acme = config.products.find((p) => p.slug === 'acme');
     expect(acme?.repos.map((r) => r.fullName)).toEqual([
-      'tony-co/acme-backend',
-      'tony-co/acme-desktop',
+      'Graindevue/acme-backend',
+      'Graindevue/acme-desktop',
     ]);
     expect(acme?.agents).toEqual(['logic']);
     expect(acme?.agentSelectionMode).toBe('explicit');
@@ -106,7 +106,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -136,7 +136,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -159,7 +159,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents: {}
@@ -178,7 +178,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -212,7 +212,7 @@ products:
 products:
   - name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
 `;
@@ -237,7 +237,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
 `;
     expect(() => parseBotConfig(yaml)).toThrow(/acme/);
@@ -250,7 +250,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
         excludeBranches: release/*
@@ -267,7 +267,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
         excludeBranches:
@@ -285,7 +285,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
         excludeBranches:
@@ -304,13 +304,13 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: a
         defaultBranch: main
   - slug: acme
     name: Acme Two
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: b
         defaultBranch: main
 `;
@@ -324,17 +324,17 @@ products:
   - slug: one
     name: One
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: shared
         defaultBranch: main
   - slug: two
     name: Two
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: shared
         defaultBranch: main
 `;
-    expect(() => parseBotConfig(yaml)).toThrow(/tony-co\/shared/);
+    expect(() => parseBotConfig(yaml)).toThrow(/Graindevue\/shared/);
   });
 
   it('treats Repos that differ only in case as the same (case-insensitive dedup)', () => {
@@ -345,13 +345,13 @@ products:
   - slug: one
     name: One
     repos:
-      - owner: Tony-Co
+      - owner: graindevue
         name: Shared
         defaultBranch: main
   - slug: two
     name: Two
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: shared
         defaultBranch: main
 `;
@@ -364,15 +364,15 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: "  tony-co  "
+      - owner: "  Graindevue  "
         name: "  acme-backend  "
         defaultBranch: "  main  "
 `;
     const repo = parseBotConfig(yaml).products[0]?.repos[0];
-    expect(repo?.owner).toBe('tony-co');
+    expect(repo?.owner).toBe('Graindevue');
     expect(repo?.name).toBe('acme-backend');
     expect(repo?.defaultBranch).toBe('main');
-    expect(repo?.fullName).toBe('tony-co/acme-backend');
+    expect(repo?.fullName).toBe('Graindevue/acme-backend');
   });
 
   it('throws when list-form `agents` is not a list of strings', () => {
@@ -381,7 +381,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -396,7 +396,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -411,7 +411,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -435,7 +435,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -456,7 +456,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -477,7 +477,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -494,7 +494,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:
@@ -512,7 +512,7 @@ products:
   - slug: acme
     name: Acme
     repos:
-      - owner: tony-co
+      - owner: Graindevue
         name: acme-backend
         defaultBranch: main
     agents:

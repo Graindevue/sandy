@@ -7,7 +7,7 @@ export type RepoId = string;
 export interface Repo {
   id: RepoId;
   productId: ProductId;
-  /** GitHub owner or org login, e.g. `"tony-co"`. */
+  /** GitHub owner or org login, e.g. `"Graindevue"`. */
   owner: string;
   /** Repository name, e.g. `"sandy"`. */
   name: string;
