@@ -158,3 +158,4 @@ jobs:
           agent-execution-mode: ${{ vars.SANDY_AGENT_EXECUTION_MODE || 'serial' }}
           max-agent-concurrency: ${{ vars.SANDY_AGENT_CONCURRENCY || '3' }}
           agent-workspaces: ${{ vars.SANDY_AGENT_WORKSPACES || 'copy' }}
+          dependency-download-cache: ${{ vars.SANDY_DEPENDENCY_DOWNLOAD_CACHE || 'true' }}

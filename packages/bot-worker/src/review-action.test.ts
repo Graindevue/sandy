@@ -74,6 +74,15 @@ describe('review action configuration', () => {
       loadReviewActionConfig({ ...env, SANDY_REVIEW_AGENT_WORKSPACES: 'shared' }),
     ).toThrow('SANDY_REVIEW_AGENT_WORKSPACES');
   });
+  it('uses the dependency download cache unless it is turned off', () => {
+    expect(loadReviewActionConfig(env)).toMatchObject({ dependencyDownloadCache: true });
+    expect(
+      loadReviewActionConfig({ ...env, SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE: 'false' }),
+    ).toMatchObject({ dependencyDownloadCache: false });
+    expect(() =>
+      loadReviewActionConfig({ ...env, SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE: 'off' }),
+    ).toThrow('SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE');
+  });
   it('defaults to focused verification with a bounded optional full suite', () => {
     expect(loadReviewActionConfig(env)).toMatchObject({
       testMode: 'targeted',

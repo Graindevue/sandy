@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import type { AgentDefinition, AgentRunUsage } from '@sandy/shared-types';
 import type { ReviewBotContext } from '../config/review-bot-context.js';
 import {
+  adoptDownloadStore,
   type DependencyDownloadCache,
   type DependencyDownloadCacheMetrics,
   dependencyDownloadCacheKey,
@@ -237,11 +238,15 @@ export class CodexExecRunner {
                 });
                 if (restoredKey !== undefined && restoredKey !== key)
                   throw new Error('Incompatible cache');
-                await snapshotDownloadStore(publishedDownloads, downloads, detected.packageManager);
                 restored = restoredKey === key;
+                // A hit is never republished, so installation can take the restored store itself.
+                if (restored)
+                  await adoptDownloadStore(publishedDownloads, downloads, detected.packageManager);
+                else await mkdir(downloads, { recursive: true });
                 cache.restore = restored ? 'hit' : 'miss';
               } catch (error) {
                 input.signal?.throwIfAborted();
+                restored = false;
                 cache.diagnostics = { ...cache.diagnostics, restore: preparationDiagnostic(error) };
                 cache.restore = 'unavailable';
                 await resetDownloadStore(store);
@@ -275,7 +280,12 @@ export class CodexExecRunner {
                 : remaining(),
             ),
           );
-        if (key !== undefined && cache !== undefined) {
+        // Download-only preparation exists to publish a pre-lifecycle snapshot. An exact hit
+        // already holds that snapshot; frozen installation verifies it and retries cold.
+        if (restored && cache !== undefined) {
+          cache.fetch = 'skipped';
+          this.#logger.info('Sandy dependency download preparation skipped after an exact hit.');
+        } else if (key !== undefined && cache !== undefined) {
           const fetchStartedAt = Date.now();
           try {
             const fetched = await this.#sandboxCommand(
@@ -297,9 +307,6 @@ export class CodexExecRunner {
             input.signal?.throwIfAborted();
             cache.fetch = 'unavailable';
             cache.diagnostics = { ...cache.diagnostics, fetch: preparationDiagnostic(error) };
-            if (restored) cache.restore = 'discarded';
-            cache.coldRetry = restored;
-            restored = false;
             await resetDownloadStore(store);
             await rm(join(input.worktreePath, 'node_modules'), { recursive: true, force: true });
           }
