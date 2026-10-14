@@ -350,7 +350,7 @@ supports_websockets = false
             arguments: JSON.stringify({
               cmd: `node tool-probe.cjs ${agent}`,
               workdir: workspace,
-              yield_time_ms: 1000,
+              yield_time_ms: 10_000,
               max_output_tokens: 1000,
             }),
           },

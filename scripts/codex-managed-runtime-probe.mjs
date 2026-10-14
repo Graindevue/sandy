@@ -124,7 +124,9 @@ export async function runManagedRuntimeProbe(
                 arguments: JSON.stringify({
                   cmd: 'node routing-tool-probe.cjs',
                   workdir: paths[index],
-                  yield_time_ms: 1000,
+                  // Concurrent sandboxed Node starts can exceed a second on a busy runner.
+                  // The command returns as soon as the probe exits.
+                  yield_time_ms: 10_000,
                   max_output_tokens: 1000,
                 }),
               },
@@ -137,9 +139,10 @@ export async function runManagedRuntimeProbe(
           return;
         }
         assert.equal(toolOutputs.length, 1);
+        const toolOutput = JSON.stringify(toolOutputs[0]);
         assert.ok(
-          JSON.stringify(toolOutputs[0]).includes(`ROUTING_SANDBOX_OK:${keys[index]}`),
-          'Retained workspace profile must enforce its sandbox',
+          toolOutput.includes(`ROUTING_SANDBOX_OK:${keys[index]}`),
+          `Retained workspace profile must enforce its sandbox: ${toolOutput.slice(0, 2000)}`,
         );
       }
       pending.push({ response, index });
