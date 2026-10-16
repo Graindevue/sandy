@@ -30,7 +30,7 @@ if (args.includes('generate-json-schema')) {
   const out = args[args.indexOf('--out') + 1];
   fs.mkdirSync(path.join(out, 'v2'), { recursive: true });
   for (const [name, fields] of Object.entries({
-    ThreadStartParams: ['permissions','runtimeWorkspaceRoots','config','ephemeral'],
+    ThreadStartParams: ['permissions','runtimeWorkspaceRoots','config','ephemeral','serviceTier'],
     TurnStartParams: ['threadId','input','effort','permissions'],
     ThreadTokenUsageUpdatedNotification: ['threadId','turnId','tokenUsage'],
     TurnCompletedNotification: ['threadId','turn'],
@@ -132,6 +132,43 @@ async function workspaces(root: string): Promise<{ seed: string; inputs: RunAgen
 }
 
 describe('CodexAppServerRunner Review runtime lifecycle', () => {
+  it('isolates Fast mode to the opted-in Agent in a shared runtime', async () => {
+    const f = await executable(
+      protocolFixture.replace(
+        "if (method === 'thread/start') reply",
+        `if (method === 'thread/start') {
+        const fast = params.cwd.endsWith('/logic');
+        if (params.serviceTier !== (fast ? 'fast' : 'default') || params.config['features.fast_mode'] !== fast) throw new Error('Fast mode leaked across Agents');
+      }
+      if (method === 'thread/start') reply`,
+      ),
+    );
+    const w = await workspaces(f.root);
+    const runtime = await new CodexAppServerRunner({
+      codexHome: f.codexHome,
+      executable: f.path,
+      enableManagedRuntime: true,
+    }).openReview({
+      worktreePath: w.seed,
+      privateWorkspacePaths: w.inputs.map((input) => input.worktreePath),
+      maxConcurrency: 2,
+    });
+    try {
+      const results = await Promise.all(
+        w.inputs.map((input) =>
+          runtime.runAgent({
+            ...input,
+            agent: { ...input.agent, fastMode: input.agent.key === 'logic' },
+          }),
+        ),
+      );
+      expect(runtime.mode).toBe('parallel');
+      expect(results).toHaveLength(2);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it.each([
     {
       message: 'stream disconnected before completion: websocket error PRIVATE_STREAM_SENTINEL',

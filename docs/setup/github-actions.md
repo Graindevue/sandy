@@ -109,6 +109,19 @@ login. Agent execution defaults to serial. An explicitly enabled parallel
 Review uses one managed app-server, so thread concurrency does not remove the
 job-level authentication lock.
 
+To enable Codex Fast mode for the generated logic reviewer, set the caller's
+repository variable `SANDY_FAST_MODE_AGENTS=logic`. The composite action reads
+this variable even with an older caller workflow, once `SANDY_REF` points to a
+Sandy revision supporting Fast mode. The `fast-mode-agents` action input takes
+precedence when nonempty. Use a comma-separated list to select `logic`,
+`security`, and/or `convex`; removing the variable restores standard speed.
+Custom `config-path` configuration instead uses
+[`agents.overrides.<key>.fastMode`](./bot-yaml.md#runtime-overrides).
+The chosen model and effort stay the same. Fast mode consumes subscription
+quota at a higher rate; see the linked configuration guide. Changes apply to
+new Reviews, including those requested by ongoing development work, and do not
+modify an Agent already executing.
+
 The action validates a human requester with repository write access, an open PR,
 a private caller, and a same-repository PR head. Fork PRs are declined. Reviewed
 package scripts run in a credential-free sandbox; review agents use a filesystem

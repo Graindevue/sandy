@@ -250,6 +250,7 @@ products:
           vendor: codex
           model: gpt-5.6
           effort: xhigh
+          fastMode: true
 `,
     );
 
@@ -258,13 +259,17 @@ products:
     const logic = loader.resolveForRepo('Graindevue', 'acme-backend')?.agents[0];
     expect(logic?.vendor).toBe('codex');
     expect(logic?.effort).toBe('xhigh');
+    expect(logic?.fastMode).toBe(true);
   });
 
   it('resets a definition effort when the Product override omits it', async () => {
     // The override is the complete runtime selection: omitting `effort` means
     // the vendor CLI default, not the definition's value (which may belong to
     // a different vendor's vocabulary).
-    await writeFile(join(layout.agentsDir, 'logic.md'), agentMd('logic', 'effort: high\n'));
+    await writeFile(
+      join(layout.agentsDir, 'logic.md'),
+      agentMd('logic', 'effort: high\nfastMode: true\n').replace('vendor: claude', 'vendor: codex'),
+    );
     await writeFile(
       layout.botYamlPath,
       `
@@ -289,6 +294,7 @@ products:
     const logic = loader.resolveForRepo('Graindevue', 'acme-backend')?.agents[0];
     expect(logic?.vendor).toBe('codex');
     expect(logic?.effort).toBeUndefined();
+    expect(logic?.fastMode).toBeUndefined();
   });
 
   it('uses default selection when object-form agents omits enable', async () => {

@@ -153,6 +153,7 @@ jobs:
           product-slug: ${{ vars.SANDY_PRODUCT_SLUG }}
           product-name: ${{ vars.SANDY_PRODUCT_NAME }}
           model: ${{ vars.SANDY_MODEL || 'gpt-6.1-sol' }}
+          fast-mode-agents: ${{ vars.SANDY_FAST_MODE_AGENTS }}
           test-mode: ${{ vars.SANDY_TEST_MODE || 'targeted' }}
           test-timeout-seconds: ${{ vars.SANDY_TEST_TIMEOUT_SECONDS || '120' }}
           agent-execution-mode: ${{ vars.SANDY_AGENT_EXECUTION_MODE || 'serial' }}

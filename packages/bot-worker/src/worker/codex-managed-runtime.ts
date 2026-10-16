@@ -123,12 +123,13 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
     signal.throwIfAborted();
     const response = await this.server.request('thread/start', {
       model: input.agent.model,
+      serviceTier: input.agent.fastMode ? 'fast' : 'default',
       cwd,
       runtimeWorkspaceRoots: [cwd],
       permissions: 'sandy',
       approvalPolicy: 'never',
       ephemeral: true,
-      config,
+      config: { ...config, 'features.fast_mode': input.agent.fastMode ?? false },
     });
     const thread = protocolObject(response.thread, 'thread');
     const roots = response.runtimeWorkspaceRoots;
@@ -150,6 +151,9 @@ export class CodexManagedRuntime implements ReviewAgentRuntime {
     const state: ThreadState = { key: input.agent.key, signal, tools: 0, toolDurationMs: 0 };
     this.#threads.set(threadId, state);
     const startedAt = Date.now();
+    this.options.logger?.info(
+      `Sandy Agent ${JSON.stringify(state.key)} started (${input.agent.fastMode ? 'fast' : 'standard'} mode).`,
+    );
     const timeout = new AbortController();
     const timer = setTimeout(
       () => timeout.abort(new Error('Codex Agent exceeded its timeout')),

@@ -45,6 +45,8 @@ export interface AgentDefinition {
    * the vendor CLI's own default applies — exactly the pre-effort behavior.
    */
   effort?: AgentEffort;
+  /** Opt in to Codex Fast mode without changing the model or reasoning effort. */
+  fastMode?: boolean;
   /** Deprecated configuration metadata; native Codex tools are not filtered by this list. */
   tools?: string[];
   /** Deprecated configuration metadata; the runner performs one turn and at most one resume. */

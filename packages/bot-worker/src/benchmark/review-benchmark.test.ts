@@ -201,7 +201,7 @@ if(args[0]==='--version'){console.log('codex-cli 0.162.0');process.exit(0);}
 if(args[0]==='sandbox'){const command=args.slice(args.indexOf('--')+1);const run=spawnSync(command[0],command.slice(1),{stdio:'inherit'});process.exit(run.status??1);}
 if(args.includes('generate-json-schema')){
  const out=args[args.indexOf('--out')+1];fs.mkdirSync(path.join(out,'v2'),{recursive:true});
- const schemas={ThreadStartParams:['permissions','runtimeWorkspaceRoots','config','ephemeral'],TurnStartParams:['threadId','input','effort','permissions'],ThreadTokenUsageUpdatedNotification:['threadId','turnId','tokenUsage'],TurnCompletedNotification:['threadId','turn'],TurnInterruptParams:['threadId','turnId'],ThreadBackgroundTerminalsCleanParams:['threadId'],GetAccountParams:['refreshToken']};
+ const schemas={ThreadStartParams:['permissions','runtimeWorkspaceRoots','config','ephemeral','serviceTier'],TurnStartParams:['threadId','input','effort','permissions'],ThreadTokenUsageUpdatedNotification:['threadId','turnId','tokenUsage'],TurnCompletedNotification:['threadId','turn'],TurnInterruptParams:['threadId','turnId'],ThreadBackgroundTerminalsCleanParams:['threadId'],GetAccountParams:['refreshToken']};
  for(const [name,fields]of Object.entries(schemas))fs.writeFileSync(path.join(out,'v2',name+'.json'),JSON.stringify({properties:Object.fromEntries(fields.map(k=>[k,{}])),definitions:{TokenUsageBreakdown:{properties:{inputTokens:{},cachedInputTokens:{},cacheWriteInputTokens:{},outputTokens:{}}}}}));
  process.exit(0);
 }

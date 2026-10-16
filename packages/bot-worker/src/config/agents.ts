@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import type { AgentDefaultEnabled, AgentDefinition, AgentVendor } from '@sandy/shared-types';
 import { parse as parseYaml } from 'yaml';
 import { parseEffort } from './effort.js';
+import { parseFastMode } from './fast-mode.js';
 
 /**
  * Loads Agent definitions from markdown files and surfaces them keyed by Agent
@@ -24,6 +25,7 @@ interface RawFrontmatter {
   vendor?: unknown;
   model?: unknown;
   effort?: unknown;
+  fastMode?: unknown;
   tools?: unknown;
   maxIterations?: unknown;
   completionSignal?: unknown;
@@ -120,6 +122,7 @@ export function parseAgentFile(path: string, contents: string): AgentDefinition 
   const vendor = requireVendor(fm.vendor, path);
   // `effort` is vendor-scoped, so it validates against the vendor parsed above.
   const effort = parseEffort(fm.effort, vendor, `agent file ${path}: \`effort\``);
+  const fastMode = parseFastMode(fm.fastMode, vendor, `agent file ${path}: \`fastMode\``);
 
   return {
     key,
@@ -129,6 +132,7 @@ export function parseAgentFile(path: string, contents: string): AgentDefinition 
     vendor,
     model: requireString(fm.model, 'model', path),
     ...(effort !== undefined ? { effort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
     ...(fm.tools !== undefined ? { tools: requireStringArray(fm.tools, 'tools', path) } : {}),
     ...(fm.maxIterations !== undefined
       ? { maxIterations: requirePositiveInt(fm.maxIterations, 'maxIterations', path) }

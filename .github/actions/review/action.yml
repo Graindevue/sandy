@@ -35,6 +35,9 @@ inputs:
   model:
     description: Codex model for the generated logic/security/conditional-convex agent configuration.
     default: gpt-6.1-sol
+  fast-mode-agents:
+    description: Comma-separated generated reviewers using Codex Fast mode (logic, security, convex). Falls back to the caller's SANDY_FAST_MODE_AGENTS variable; empty leaves all at standard speed. Custom config-path uses per-Agent fastMode instead.
+    default: ''
   agent-execution-mode:
     description: serial (rollout default) or parallel (opt in only after runtime and quality gates).
     default: serial
@@ -67,6 +70,7 @@ runs:
         SANDY_INPUT_PRODUCT_SLUG: ${{ inputs.product-slug }}
         SANDY_INPUT_PRODUCT_NAME: ${{ inputs.product-name }}
         SANDY_INPUT_MODEL: ${{ inputs.model }}
+        SANDY_INPUT_FAST_MODE_AGENTS: ${{ inputs.fast-mode-agents || vars.SANDY_FAST_MODE_AGENTS || '' }}
         SANDY_AUTH_ENVIRONMENT: ${{ inputs.auth-environment }}
       run: node "$GITHUB_ACTION_PATH/prepare.mjs"
 
