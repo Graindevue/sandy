@@ -87,40 +87,13 @@ The Actions runner supports **`vendor: codex`**. Existing non-Codex config may
 parse for compatibility, but selected non-Codex personas cannot execute.
 Update older instance configuration or persona definitions to use Codex.
 
-An override replaces `vendor`, `model`, optional `effort`, and optional `fastMode` together. Both
+An override replaces `vendor`, `model`, and optional `effort` together. Both
 vendor and model are required. Sandy accepts Codex effort values `low`, `medium`,
 `high`, `xhigh`, and `max`; the selected model and account must support the
 chosen level. Omission uses the CLI default even when the persona defines effort.
 The shipped `gpt-6.1-sol` personas retain `xhigh`; `max` is opt-in for comparisons
 on representative reviews. See the [agent guidance audit](../research/2026-10-09-agent-guidance-audit.md)
 for official model/CLI compatibility sources and evaluation recommendations.
-
-Set `fastMode: true` on a Codex override to request Fast mode for that Agent:
-
-```yaml
-agents:
-  enable: [logic, security, convex]
-  overrides:
-    logic:
-      vendor: codex
-      model: gpt-6.1-sol
-      effort: xhigh
-      fastMode: true
-```
-
-Omitted or `false` uses standard speed. An override that omits `fastMode`
-resets any persona default. The field is also accepted in Codex persona
-frontmatter. It applies to serial execution, its completion resume, and each
-independent parallel thread. Model and reasoning effort are preserved; other
-Agents keep their own speed setting. Account and model support still apply.
-[Official OpenAI documentation](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode)
-states that Fast mode uses included subscription limits at 2.5 times the
-standard rate, or twice the standard rate for purchased credits and Enterprise
-pay-as-you-go usage.
-
-For generated configuration, use the action's `fast-mode-agents` input or the
-caller's `SANDY_FAST_MODE_AGENTS` repository variable (for example, `logic`).
-Custom `config-path` configuration uses the per-Agent field above instead.
 
 Overrides keep the prompt, tools, category, and completion signal. To customize
 those, provide an instance persona with the same filename; to add a new persona,
@@ -145,4 +118,3 @@ before dependency installation or project tests can change the review worktree.
 
 Each Actions job loads config once. A default-branch config change applies to
 the next request; there is no persistent process to restart.
-An already running Agent cannot switch speed through a config or variable edit.

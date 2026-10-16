@@ -35,6 +35,13 @@ const pr: PullRequestFacts = {
 };
 
 describe('review action configuration', () => {
+  it('uses standard speed unless the validated request enabled Fast mode', () => {
+    expect(loadReviewActionConfig(env).fastMode).toBe(false);
+    expect(loadReviewActionConfig({ ...env, SANDY_REVIEW_FAST_MODE: 'true' }).fastMode).toBe(true);
+    expect(() => loadReviewActionConfig({ ...env, SANDY_REVIEW_FAST_MODE: 'yes' })).toThrow(
+      'SANDY_REVIEW_FAST_MODE',
+    );
+  });
   it('keeps serial execution as the rollout default and bounds explicitly enabled parallel Reviews', () => {
     expect(loadReviewActionConfig(env)).toMatchObject({
       executionMode: 'serial',

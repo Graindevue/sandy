@@ -208,12 +208,11 @@ export function applyProductRuntimeOverride(
   // never carries over, because effort vocabularies are vendor-scoped and the
   // override may change the vendor. An override without `effort` resets the
   // Agent to the vendor CLI default.
-  const { effort: _replaced, fastMode: _replacedFastMode, ...base } = agent;
+  const { effort: _replaced, ...base } = agent;
   return {
     ...base,
     vendor: override.vendor,
     model: override.model,
     ...(override.effort !== undefined ? { effort: override.effort } : {}),
-    ...(override.fastMode !== undefined ? { fastMode: override.fastMode } : {}),
   };
 }

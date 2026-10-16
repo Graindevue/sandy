@@ -45,7 +45,7 @@ export interface AgentDefinition {
    * the vendor CLI's own default applies — exactly the pre-effort behavior.
    */
   effort?: AgentEffort;
-  /** Opt in to Codex Fast mode without changing the model or reasoning effort. */
+  /** Review-request speed selection, applied to every selected Agent at execution. */
   fastMode?: boolean;
   /** Deprecated configuration metadata; native Codex tools are not filtered by this list. */
   tools?: string[];

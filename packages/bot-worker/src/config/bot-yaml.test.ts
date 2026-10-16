@@ -429,34 +429,6 @@ products:
     });
   });
 
-  it.each([
-    { vendor: 'codex', value: 'true', expected: true },
-    { vendor: 'codex', value: 'false', expected: false },
-    { vendor: 'codex', value: '"true"', error: /logic.fastMode must be a boolean/ },
-    { vendor: 'claude', value: 'true', error: /logic.fastMode is only supported for vendor codex/ },
-  ])(
-    'validates runtime override fastMode: $value for $vendor',
-    ({ vendor, value, expected, error }) => {
-      const yaml = `
-products:
-  - slug: acme
-    name: Acme
-    repos:
-      - owner: acme
-        name: widget
-        defaultBranch: main
-    agents:
-      overrides:
-        logic:
-          vendor: ${vendor}
-          model: gpt-6.1-sol
-          fastMode: ${value}
-`;
-      if (error) expect(() => parseBotConfig(yaml)).toThrow(error);
-      else expect(parseBotConfig(yaml).products[0]?.agentOverrides.logic?.fastMode).toBe(expected);
-    },
-  );
-
   it("throws when an override effort is outside the vendor's vocabulary", () => {
     const yaml = `
 products:

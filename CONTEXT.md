@@ -40,10 +40,9 @@ without changing Sandy's implementation.
 
 ## Agent Runtime Override
 
-An operator's replacement of an Agent's vendor, model, optional reasoning
-effort, and optional Fast mode while keeping its persona. The replacement is
-complete: omitted effort uses the runtime default, and omitted Fast mode uses
-standard speed, rather than inheriting those persona settings.
+An operator's replacement of an Agent's vendor, model, and optional reasoning
+effort while keeping its persona. The replacement is complete: omitted effort
+uses the runtime default rather than inheriting the persona's effort.
 _Avoid_: custom Agent (which changes the persona).
 
 ## Agent Run

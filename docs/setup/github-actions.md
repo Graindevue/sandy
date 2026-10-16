@@ -109,19 +109,6 @@ login. Agent execution defaults to serial. An explicitly enabled parallel
 Review uses one managed app-server, so thread concurrency does not remove the
 job-level authentication lock.
 
-To enable Codex Fast mode for the generated logic reviewer, set the caller's
-repository variable `SANDY_FAST_MODE_AGENTS=logic`. The composite action reads
-this variable even with an older caller workflow, once `SANDY_REF` points to a
-Sandy revision supporting Fast mode. The `fast-mode-agents` action input takes
-precedence when nonempty. Use a comma-separated list to select `logic`,
-`security`, and/or `convex`; removing the variable restores standard speed.
-Custom `config-path` configuration instead uses
-[`agents.overrides.<key>.fastMode`](./bot-yaml.md#runtime-overrides).
-The chosen model and effort stay the same. Fast mode consumes subscription
-quota at a higher rate; see the linked configuration guide. Changes apply to
-new Reviews, including those requested by ongoing development work, and do not
-modify an Agent already executing.
-
 The action validates a human requester with repository write access, an open PR,
 a private caller, and a same-repository PR head. Fork PRs are declined. Reviewed
 package scripts run in a credential-free sandbox; review agents use a filesystem
@@ -347,6 +334,26 @@ fails its first step with "Post a new @sandy comment instead of rerunning an
 earlier workflow" rather than showing as skipped. Request another review with a
 new `@sandy` comment.
 The accepted mention is `@sandy`; `@agent-sandy` is not an alias.
+
+Use `@sandy fast` to enable Codex Fast mode for **all selected Agents** for that
+request, including serial fallback and completion resumes. The `fast` word must
+immediately follow the mention on the same line; `@sandy faster` and prose such
+as `@sandy review this fast` retain standard speed. Plain `@sandy` also uses
+standard speed. The model, reasoning effort, reviewer coverage, and auth lock
+are unchanged. An existing caller workflow needs only an updated `SANDY_REF`;
+there is no persistent speed variable or caller workflow edit.
+
+Each result summary includes an Agent table with model, speed, uncached input,
+cached input, output tokens, and estimated purchased credits, plus a review
+total. Failed Agents contribute reported usage when available; missing usage
+and unknown model prices are disclosed and leave a partial subtotal.
+[OpenAI's credit rates](https://learn.chatgpt.com/docs/pricing#token-rates),
+verified 2026-10-16, are built into the estimator. Cache writes count as ordinary
+input, and Fast mode multiplies purchased-credit estimates by two. This is not
+an exact dollar charge or subscription quota measurement: included subscription
+usage has separate accounting, with Fast mode consuming limits at 2.5 times
+the standard rate according to [OpenAI's speed guide](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode).
+The estimate excludes the authentication warm-up and GitHub Actions compute.
 Monitor your ChatGPT plan quota and Actions minutes separately.
 
 ## Recovery

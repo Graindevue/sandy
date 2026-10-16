@@ -13,8 +13,30 @@ test('accepts a standalone @sandy mention and does not evaluate comment text as 
         issue: { number: 3, pull_request: {} },
         comment: { body: `${mention}\n$(echo injected)`, user: { type: 'User', login: 'tony' } },
       }),
-      { prNumber: 3, actor: 'tony' },
+      { prNumber: 3, actor: 'tony', fastMode: false },
     );
+  }
+});
+
+test('only an adjacent fast command enables Fast mode for this request', () => {
+  for (const [body, fastMode] of [
+    ['@sandy fast', true],
+    ['Please @SANDY FAST!', true],
+    ['@sandy\tfast\nThanks', true],
+    ['@sandy fast; $(echo injected)', true],
+    ['@sandy review this fast', false],
+    ['@sandy faster', false],
+    ['@sandy fast-mode', false],
+    ['@sandy fast_mode', false],
+    ['@sandy\nfast', false],
+    ['fast @sandy', false],
+  ]) {
+    const request = reviewRequest('issue_comment', {
+      action: 'created',
+      issue: { number: 3, pull_request: {} },
+      comment: { body, user: { type: 'User', login: 'tony' } },
+    });
+    assert.equal(request.fastMode, fastMode, body);
   }
 });
 

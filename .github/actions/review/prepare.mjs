@@ -8,7 +8,6 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { generatedAgentRuntimes } from './agent-runtimes.mjs';
 import { assertTrustedRequest, positiveInteger, reviewRequest } from './request.mjs';
 
 const env = process.env;
@@ -64,6 +63,7 @@ if (env.SANDY_INPUT_CONFIG_PATH) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
     throw new Error('product-slug must contain only lowercase letters, numbers and hyphens');
   }
+  const runtime = (effort) => ({ vendor: 'codex', model, effort });
   // JSON is valid YAML; serializing avoids YAML injection through action inputs.
   await writeFile(
     configPath,
@@ -82,7 +82,11 @@ if (env.SANDY_INPUT_CONFIG_PATH) {
             ],
             agents: {
               enable: ['logic', 'security', 'convex'],
-              overrides: generatedAgentRuntimes(model, env.SANDY_INPUT_FAST_MODE_AGENTS),
+              overrides: {
+                logic: runtime('xhigh'),
+                security: runtime('xhigh'),
+                convex: runtime('xhigh'),
+              },
             },
           },
         ],
@@ -100,6 +104,7 @@ for (const [name, value] of Object.entries({
   CODEX_HOME: join(scratch, 'codex'),
   OPENSRC_HOME: opensrcHome,
   SANDY_CONFIG_PATH: configPath,
+  SANDY_REVIEW_FAST_MODE: String(request.fastMode),
   SANDY_CLONE_DIR: join(scratch, 'repos'),
   SANDY_ACTION_SCRATCH: scratch,
   GITHUB_APP_PRIVATE_KEY_PATH: join(scratch, 'app.private-key.pem'),

@@ -206,33 +206,6 @@ describe('loadAgentDefinitions', () => {
     expect(agents.get('logic')?.effort).toBe('max');
   });
 
-  it.each([true, false])('parses Codex fastMode: %s in an Agent definition', async (fastMode) => {
-    write(
-      defaultsDir,
-      'logic.md',
-      LOGIC_MD.replace('vendor: claude', 'vendor: codex').replace(
-        'model: opus',
-        `model: gpt-6.1-sol\nfastMode: ${fastMode}`,
-      ),
-    );
-    expect((await loadAgentDefinitions(defaultsDir)).get('logic')?.fastMode).toBe(fastMode);
-  });
-
-  it.each([
-    { vendor: 'codex', value: '"true"', error: /fastMode.*boolean/ },
-    { vendor: 'claude', value: 'true', error: /fastMode.*only supported for vendor codex/ },
-  ])('rejects invalid Fast mode for $vendor', async ({ vendor, value, error }) => {
-    write(
-      defaultsDir,
-      'logic.md',
-      LOGIC_MD.replace('vendor: claude', `vendor: ${vendor}`).replace(
-        'model: opus',
-        `model: gpt-6.1-sol\nfastMode: ${value}`,
-      ),
-    );
-    await expect(loadAgentDefinitions(defaultsDir)).rejects.toThrow(error);
-  });
-
   it('rejects an unknown `effort` value, naming the file and field', async () => {
     write(defaultsDir, 'logic.md', LOGIC_MD.replace('model: opus', 'model: opus\neffort: hgih'));
 

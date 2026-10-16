@@ -14,7 +14,12 @@ export function reviewRequest(eventName, payload, runAttempt = '1') {
   if (payload.comment.user?.type !== 'User') {
     throw new Error('Only human collaborators can request reviews');
   }
-  return { prNumber: positiveInteger(payload.issue.number), actor: payload.comment.user.login };
+  const fastMode = /(?:^|\s)@sandy[ \t]+fast(?=$|[\s.!?,;:])/i.test(payload.comment.body);
+  return {
+    prNumber: positiveInteger(payload.issue.number),
+    actor: payload.comment.user.login,
+    fastMode,
+  };
 }
 
 export function positiveInteger(value) {
