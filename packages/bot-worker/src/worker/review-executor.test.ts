@@ -31,6 +31,51 @@ import {
 import type { ReviewStatusCheckReporter } from './review-status-check.js';
 
 describe('ReviewExecutor', () => {
+  it.each([true, false])(
+    'applies request fastMode: %s to all selected Agents and posts their usage',
+    async (fastMode) => {
+      const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic', 'security'] }));
+      const poster = new FakePoster();
+      const runner = new FakeRunner(findingsOutput([]), agentRunUsage);
+      const executor = new ReviewExecutor({
+        ...fixtureExecutorOptions,
+        store,
+        poster,
+        runner,
+        cloneManager: new FakeCloneManager(),
+        archetypeAssigner: new FakeArchetypeAssigner(),
+        diffInspector: new FakeDiffInspector(42),
+        fastMode,
+        resolveAgent: (_repo, key) => ({
+          ...(key === 'logic' ? logicAgent : securityAgent),
+          vendor: 'codex',
+          model: 'gpt-6.1-sol',
+          effort: 'xhigh',
+        }),
+      });
+      await executor.executeClaimedJob('job-1');
+      expect(
+        runner.calls.map(({ agent }) => ({
+          key: agent.key,
+          fastMode: agent.fastMode,
+          model: agent.model,
+          effort: agent.effort,
+        })),
+      ).toEqual([
+        { key: 'logic', fastMode, model: 'gpt-6.1-sol', effort: 'xhigh' },
+        { key: 'security', fastMode, model: 'gpt-6.1-sol', effort: 'xhigh' },
+      ]);
+      const summary = poster.results[0]?.summary;
+      expect(summary).toContain(
+        `| logic | gpt-6.1-sol | ${fastMode ? 'Fast' : 'Standard'} | 33 | 33 | 44 |`,
+      );
+      expect(summary).toContain(
+        `| security | gpt-6.1-sol | ${fastMode ? 'Fast' : 'Standard'} | 33 | 33 | 44 |`,
+      );
+      expect(summary).toContain('Estimated purchased-credit total');
+    },
+  );
+
   it('posts cache outcomes and sanitized preparation diagnostics with execution mode', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic'] }));
     const poster = new FakePoster();
@@ -1048,6 +1093,9 @@ describe('ReviewExecutor', () => {
       error: expect.stringContaining('FindingsPayload must be an object'),
       usage: agentRunUsage,
     });
+    expect(poster.results[0]?.summary).toContain(
+      '| logic | opus | Standard | 33 | 33 | 44 | unavailable |',
+    );
     expect(store.completed).toEqual([{ jobId: 'job-1', finishedAt: 300 }]);
     expect(store.failed).toEqual([]);
     expect(cloneManager.removed).toEqual(['acme/widget@job-1']);

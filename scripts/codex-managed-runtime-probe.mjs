@@ -109,6 +109,12 @@ export async function runManagedRuntimeProbe(
         JSON.stringify(body.input).includes(`NATIVE_PROBE_${key}`),
       );
       assert.ok(index >= 0, 'Unexpected native probe persona');
+      if (workspaceRouting)
+        assert.equal(
+          body.service_tier,
+          index === 0 ? 'priority' : undefined,
+          'Only logic uses Fast mode',
+        );
       if (workspaceRouting) {
         const toolOutputs = body.input.filter((item) => item.type === 'function_call_output');
         if (toolOutputs.length === 0) {
@@ -445,8 +451,9 @@ assert.equal(fs.readFileSync('linked-source.cjs','utf8'),'exports.value=3;\\n');
           key: keys[index],
           name: keys[index],
           vendor: 'codex',
-          model: 'mock-model',
+          model: 'gpt-6.1-sol',
           effort: 'high',
+          fastMode: index === 0,
           completionSignal: '</findings>',
           systemPrompt: `NATIVE_PROBE_${keys[index]}`,
           tools: [],
@@ -515,6 +522,7 @@ assert.equal(fs.readFileSync('linked-source.cjs','utf8'),'exports.value=3;\\n');
       ...(layered ? { overlayWorkspaces: true, privateLayersVerified: true } : {}),
       completedAgents: 3,
       authoritativeUsage: true,
+      ...(workspaceRouting ? { perAgentFastModeVerified: true } : {}),
     };
   } finally {
     try {

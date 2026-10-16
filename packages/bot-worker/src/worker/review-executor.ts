@@ -56,6 +56,7 @@ import {
   reviewFailedOutcome,
   startReviewStatusCheck,
 } from './review-status-check.js';
+import { buildReviewUsageSummary } from './review-usage.js';
 import {
   materializeReviewWorkspace,
   type ProductRepoForReview,
@@ -222,9 +223,10 @@ type AgentExecutionOutcome =
       usage?: AgentRunUsage;
     };
 
-type SelectedAgentReviewResult =
+type SelectedAgentReviewResult = (
   | { status: 'completed'; output: AgentReviewOutput }
-  | { status: 'failed'; agentKey: string };
+  | { status: 'failed'; agentKey: string }
+) & { usage?: AgentRunUsage };
 
 interface SelectedAgentReviewResults {
   outputs: AgentReviewOutput[];
@@ -232,6 +234,7 @@ interface SelectedAgentReviewResults {
   failedAgentKeys: string[];
   selectedAgentCount: number;
   executionSummary: string;
+  usageSummary: string;
   workspaceReleaseError?: string;
   teardownError?: unknown;
 }
@@ -322,6 +325,7 @@ export interface ReviewExecutorOptions {
   maxChangedLines?: number;
   agentTimeoutMs?: number;
   maxAgentConcurrency?: number;
+  fastMode?: boolean;
   now?: () => number;
   logger?: ReviewStatusCheckLogger;
 }
@@ -353,6 +357,7 @@ export class ReviewExecutor {
   readonly #maxChangedLines: number;
   readonly #agentTimeoutMs: number;
   readonly #maxAgentConcurrency: number;
+  readonly #fastMode: boolean;
   readonly #now: () => number;
   readonly #logger: ReviewStatusCheckLogger;
 
@@ -373,6 +378,7 @@ export class ReviewExecutor {
     this.#maxChangedLines = options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES;
     this.#agentTimeoutMs = options.agentTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
     this.#maxAgentConcurrency = options.maxAgentConcurrency ?? 1;
+    this.#fastMode = options.fastMode ?? false;
     if (!Number.isSafeInteger(this.#maxAgentConcurrency) || this.#maxAgentConcurrency < 1) {
       throw new Error('Maximum Agent concurrency must be a positive safe integer');
     }
@@ -501,7 +507,7 @@ export class ReviewExecutor {
         worktrees,
       });
       failedAgentCount = agentResults.failedAgentCount;
-      const preparationSummary = `${testSummary}\n\n${reviewDependencySummary(dependencyInstall)}\n\n${agentResults.executionSummary}`;
+      const preparationSummary = `${testSummary}\n\n${reviewDependencySummary(dependencyInstall)}\n\n${agentResults.executionSummary}\n\n${agentResults.usageSummary}`;
       this.#logger.info?.(agentResults.executionSummary);
       const reliabilityWarnings: string[] = [];
       if (agentResults.teardownError !== undefined)
@@ -617,7 +623,7 @@ export class ReviewExecutor {
         : this.#resolveAgents(repo);
 
     return await selectAgentsForReview({
-      agents: candidates,
+      agents: candidates.map((agent) => ({ ...agent, fastMode: this.#fastMode })),
       reviewRepoFullName: `${context.repo.owner}/${context.repo.name}`,
       ...(this.#diffInspector.changedPaths === undefined
         ? {}
@@ -965,6 +971,12 @@ export class ReviewExecutor {
       ),
       selectedAgentCount: input.agents.length,
       executionSummary,
+      usageSummary: buildReviewUsageSummary(
+        input.agents.map((agent, index) => ({
+          agent,
+          usage: results[index]?.usage,
+        })),
+      ),
       ...(workspaceReleaseError === undefined ? {} : { workspaceReleaseError }),
       ...(teardownError === undefined ? {} : { teardownError }),
     };
@@ -1004,10 +1016,18 @@ export class ReviewExecutor {
       `Agent ${JSON.stringify(agent.key)} ${outcome.status} in ${outcome.finishedAt - outcome.startedAt}ms${detail}.`,
     );
     if (outcome.status !== 'completed') {
-      return { status: 'failed', agentKey: agent.key };
+      return {
+        status: 'failed',
+        agentKey: agent.key,
+        ...(outcome.usage ? { usage: outcome.usage } : {}),
+      };
     }
 
-    return { status: 'completed', output: { agentKey: agent.key, payload: outcome.payload } };
+    return {
+      status: 'completed',
+      output: { agentKey: agent.key, payload: outcome.payload },
+      ...(outcome.usage ? { usage: outcome.usage } : {}),
+    };
   }
 
   async #executeAgent(input: AgentExecutionInput): Promise<AgentExecutionOutcome> {

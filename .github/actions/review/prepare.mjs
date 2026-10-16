@@ -104,6 +104,7 @@ for (const [name, value] of Object.entries({
   CODEX_HOME: join(scratch, 'codex'),
   OPENSRC_HOME: opensrcHome,
   SANDY_CONFIG_PATH: configPath,
+  SANDY_REVIEW_FAST_MODE: String(request.fastMode),
   SANDY_CLONE_DIR: join(scratch, 'repos'),
   SANDY_ACTION_SCRATCH: scratch,
   GITHUB_APP_PRIVATE_KEY_PATH: join(scratch, 'app.private-key.pem'),

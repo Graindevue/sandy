@@ -41,6 +41,7 @@ export interface ReviewActionConfig {
   maxAgentConcurrency: number;
   agentWorkspaces: AgentWorkspaceLayout;
   dependencyDownloadCache: boolean;
+  fastMode: boolean;
 }
 
 export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConfig {
@@ -67,6 +68,10 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
   if (dependencyDownloadCache !== 'true' && dependencyDownloadCache !== 'false') {
     throw new Error('SANDY_REVIEW_DEPENDENCY_DOWNLOAD_CACHE must be true or false');
   }
+  const fastMode = env.SANDY_REVIEW_FAST_MODE ?? 'false';
+  if (fastMode !== 'true' && fastMode !== 'false') {
+    throw new Error('SANDY_REVIEW_FAST_MODE must be true or false');
+  }
   return {
     root,
     repository: { owner, name },
@@ -88,6 +93,7 @@ export function loadReviewActionConfig(env: NodeJS.ProcessEnv): ReviewActionConf
     maxAgentConcurrency,
     agentWorkspaces,
     dependencyDownloadCache: dependencyDownloadCache === 'true',
+    fastMode: fastMode === 'true',
   };
 }
 
@@ -232,6 +238,7 @@ export async function runReviewAction(
     ...(signal !== undefined ? { signal } : {}),
     maxChangedLines: config.maxChangedLines,
     maxAgentConcurrency: config.maxAgentConcurrency,
+    fastMode: config.fastMode,
     manifestBuilder: {
       buildManifest: async (productId, repos) => {
         const { buildManifest } = await import('@sandy/manifest-builder');

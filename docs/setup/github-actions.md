@@ -334,6 +334,26 @@ fails its first step with "Post a new @sandy comment instead of rerunning an
 earlier workflow" rather than showing as skipped. Request another review with a
 new `@sandy` comment.
 The accepted mention is `@sandy`; `@agent-sandy` is not an alias.
+
+Use `@sandy fast` to enable Codex Fast mode for **all selected Agents** for that
+request, including serial fallback and completion resumes. The `fast` word must
+immediately follow the mention on the same line; `@sandy faster` and prose such
+as `@sandy review this fast` retain standard speed. Plain `@sandy` also uses
+standard speed. The model, reasoning effort, reviewer coverage, and auth lock
+are unchanged. An existing caller workflow needs only an updated `SANDY_REF`;
+there is no persistent speed variable or caller workflow edit.
+
+Each result summary includes an Agent table with model, speed, uncached input,
+cached input, output tokens, and estimated purchased credits, plus a review
+total. Failed Agents contribute reported usage when available; missing usage
+and unknown model prices are disclosed and leave a partial subtotal.
+[OpenAI's credit rates](https://learn.chatgpt.com/docs/pricing#token-rates),
+verified 2026-10-16, are built into the estimator. Cache writes count as ordinary
+input, and Fast mode multiplies purchased-credit estimates by two. This is not
+an exact dollar charge or subscription quota measurement: included subscription
+usage has separate accounting, with Fast mode consuming limits at 2.5 times
+the standard rate according to [OpenAI's speed guide](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode).
+The estimate excludes the authentication warm-up and GitHub Actions compute.
 Monitor your ChatGPT plan quota and Actions minutes separately.
 
 ## Recovery

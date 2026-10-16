@@ -181,7 +181,13 @@ async function validateProtocol(
       options,
     );
     for (const [name, fields] of Object.entries({
-      ThreadStartParams: ['permissions', 'runtimeWorkspaceRoots', 'config', 'ephemeral'],
+      ThreadStartParams: [
+        'permissions',
+        'runtimeWorkspaceRoots',
+        'config',
+        'ephemeral',
+        'serviceTier',
+      ],
       TurnStartParams: ['threadId', 'input', 'effort', 'permissions'],
       ThreadTokenUsageUpdatedNotification: ['threadId', 'turnId', 'tokenUsage'],
       TurnCompletedNotification: ['threadId', 'turn'],

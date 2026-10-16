@@ -109,7 +109,7 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     });
     await expect(runner.runAgent(f.input)).resolves.toEqual({ stdout: findings });
     expect(messages).toEqual([
-      'Sandy agent "logic" invocation started.',
+      'Sandy agent "logic" invocation started (standard mode).',
       expect.stringMatching(
         /^Sandy agent "logic" invocation completed after \d+ms \(1 completed tools\)\.$/,
       ),
@@ -295,20 +295,25 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     },
   );
 
-  it.each(['xhigh', 'max'] as const)(
-    'preserves %s effort when resuming only the explicit review thread and adds both turns of usage',
-    async (effort) => {
+  it.each([
+    { effort: 'xhigh', fastMode: true },
+    { effort: 'max', fastMode: false },
+    { effort: 'xhigh', fastMode: undefined },
+  ] as const)(
+    'preserves $effort effort and fastMode: $fastMode through resume and adds both turns of usage',
+    async ({ effort, fastMode }) => {
       const f = await fixture(`
       let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
       const args = process.argv.slice(2);
       const resumed = args.includes('resume');
       if (args[args.indexOf('--model') + 1] !== 'gpt-6.1-sol' || !args.includes(${JSON.stringify(`model_reasoning_effort="${effort}"`)})) throw new Error('Wrong model options on exec or resume');
+      if (!args.includes(${JSON.stringify(`service_tier="${fastMode ? 'fast' : 'default'}"`)}) || args.includes('features.fast_mode=true') !== ${fastMode === true}) throw new Error('Wrong Fast mode on exec or resume');
       if (resumed && (!args.includes('review-thread') || args.includes('--last') || prompt.includes('PR diff:'))) throw new Error('Wrong resume context');
       process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'review-thread'}) + '\\n');
       process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:resumed ? ${JSON.stringify(findings)} : 'I inspected the change.'}}) + '\\n');
       process.stdout.write(JSON.stringify({type:'turn.completed',usage:resumed ? {input_tokens:600,cached_input_tokens:500,output_tokens:10} : {input_tokens:1000,cached_input_tokens:800,output_tokens:70}}) + '\\n');
     `);
-      f.input.agent = { ...agent, effort };
+      f.input.agent = { ...agent, effort, ...(fastMode !== undefined ? { fastMode } : {}) };
       const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
       await expect(runner.runAgent(f.input)).resolves.toEqual({
         stdout: findings,

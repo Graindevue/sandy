@@ -604,12 +604,16 @@ export class CodexExecRunner {
     );
     if (input.agent.effort !== undefined)
       args.push('-c', `model_reasoning_effort=${JSON.stringify(input.agent.effort)}`);
+    args.push('-c', `service_tier=${JSON.stringify(input.agent.fastMode ? 'fast' : 'default')}`);
+    if (input.agent.fastMode) args.push('-c', 'features.fast_mode=true');
     if (threadId !== undefined) args.push(threadId);
     args.push('-');
     const invocation = `Sandy agent ${JSON.stringify(input.agent.key)} ${threadId === undefined ? 'invocation' : 'resume'}`;
     const startedAt = Date.now();
     let completedTools = 0;
-    this.#logger.info(`${invocation} started.`);
+    this.#logger.info(
+      `${invocation} started (${input.agent.fastMode ? 'fast' : 'standard'} mode).`,
+    );
     try {
       const jsonl = await new Promise<string>((resolve, reject) => {
         const child = spawn(this.#options.executable ?? 'codex', args, {

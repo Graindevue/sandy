@@ -11,6 +11,12 @@ records its state and token usage in Convex Cloud. After new commits, post a new
 `@sandy` comment to request another review. Rerunning an earlier Actions workflow
 is rejected; create a new `@sandy` comment instead.
 
+Use **`@sandy fast`** to request Codex Fast mode for every selected reviewer in
+that Review. Plain `@sandy` uses standard speed. The summary shows each Agent's
+model, speed, token usage, and estimated purchased-credit equivalent. Codex
+subscription billing is not exposed per Review; estimates exclude the auth
+warm-up and Actions compute. See [request options](docs/setup/github-actions.md#5-verify-a-review).
+
 ## How it works
 
 ```text
