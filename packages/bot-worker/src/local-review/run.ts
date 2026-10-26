@@ -245,6 +245,8 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
         info: log,
         warn: (message, ...details) => warn([message, ...details.map(describeError)].join(' ')),
       },
+      // A Local Review has no ReviewJob and posts nothing; the CLI saves the result.
+      progressLabels: { run: 'Local Review', synthesis: 'Synthesis' },
     });
 
     await executor.executeClaimedJob(id);

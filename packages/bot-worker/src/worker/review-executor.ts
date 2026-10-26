@@ -335,7 +335,21 @@ export interface ReviewExecutorOptions {
   instructions?: string;
   now?: () => number;
   logger?: ReviewStatusCheckLogger;
+  /** Defaults to a PR Review's: its ReviewJob, and a final phase that posts on the PR. */
+  progressLabels?: ReviewProgressLabels;
 }
+
+export interface ReviewProgressLabels {
+  /** Precedes the id in progress logs, as in `Sandy ReviewJob <id>: Agent "logic" started.` */
+  run: string;
+  /** Names the phase that synthesizes the Agents' Findings and records the result. */
+  synthesis: string;
+}
+
+const PR_REVIEW_PROGRESS_LABELS: ReviewProgressLabels = {
+  run: 'Sandy ReviewJob',
+  synthesis: 'Synthesis and posting',
+};
 
 const DEFAULT_MAX_CHANGED_LINES = 5000;
 // 10 minutes: now that the sandbox has node_modules, Agents execute real
@@ -368,6 +382,7 @@ export class ReviewExecutor {
   readonly #instructions: string | undefined;
   readonly #now: () => number;
   readonly #logger: ReviewStatusCheckLogger;
+  readonly #progressLabels: ReviewProgressLabels;
 
   constructor(options: ReviewExecutorOptions) {
     this.#store = options.store;
@@ -393,6 +408,7 @@ export class ReviewExecutor {
     }
     this.#now = options.now ?? Date.now;
     this.#logger = options.logger ?? console;
+    this.#progressLabels = options.progressLabels ?? PR_REVIEW_PROGRESS_LABELS;
   }
 
   async executeClaimedJob(jobId: string): Promise<{ failedAgentCount: number }> {
@@ -530,7 +546,7 @@ export class ReviewExecutor {
       let postedReview: PostedReviewResult | null = null;
       // Post whenever an Agent was selected, so a failed run is still answered on the PR.
       if (agentResults.outputs.length > 0 || agentResults.failedAgentKeys.length > 0) {
-        postedReview = await this.#runPhase(jobId, 'Synthesis and posting', () =>
+        postedReview = await this.#runPhase(jobId, this.#progressLabels.synthesis, () =>
           this.#synthesizePersistAndPostReview({
             context,
             target,
@@ -598,7 +614,7 @@ export class ReviewExecutor {
   }
 
   #logProgress(jobId: string, message: string): void {
-    this.#logger.info?.(`Sandy ReviewJob ${jobId}: ${message}`);
+    this.#logger.info?.(`${this.#progressLabels.run} ${jobId}: ${message}`);
   }
 
   async #runPhase<T>(jobId: string, phase: string, run: () => Promise<T>): Promise<T> {
@@ -718,7 +734,7 @@ export class ReviewExecutor {
       } catch (error) {
         const diagnostic = `Agent ${JSON.stringify(agent.key)} workspace release failed: ${preparationDiagnostic(error)}`;
         workspaceReleaseError ??= diagnostic;
-        this.#logger.warn(`Sandy ReviewJob ${input.context.job.id}: ${diagnostic}`);
+        this.#logger.warn(`${this.#progressLabels.run} ${input.context.job.id}: ${diagnostic}`);
         return false;
       }
     };
@@ -873,7 +889,7 @@ export class ReviewExecutor {
                 if (isReviewSupersededError(error)) cancellation.abort(error);
                 else if (!signal.aborted)
                   this.#logger.warn(
-                    `Sandy ReviewJob ${input.context.job.id}: Status check failed; retrying on the next interval.`,
+                    `${this.#progressLabels.run} ${input.context.job.id}: Status check failed; retrying on the next interval.`,
                   );
               })
               .finally(() => {

@@ -444,6 +444,19 @@ describe('sandy review', () => {
     ]);
   });
 
+  it('names the Local Review in its progress, without a ReviewJob or posting', async () => {
+    const f = await fixture();
+    const io = capture(f);
+
+    expect(await main(['review', '--json'], io)).toBe(0);
+    const { id } = JSON.parse(io.out.join('')) as LocalReviewResult;
+    const progress = io.err.join('');
+    expect(progress).toContain(`[sandy] Local Review ${id}: Workspace preparation started.`);
+    expect(progress).toContain(`[sandy] Local Review ${id}: Synthesis started.`);
+    expect(progress).not.toContain('ReviewJob');
+    expect(progress).not.toContain('posting');
+  });
+
   it('exits 1 for a declined Review and logs progress on stderr', async () => {
     const f = await fixture();
     const io = { ...capture(f), env: { ...f.env, SANDY_REVIEW_MAX_CHANGED_LINES: '1' } };
