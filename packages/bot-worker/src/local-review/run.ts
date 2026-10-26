@@ -418,7 +418,8 @@ function reviewContext(input: {
       baseRef: base.label.startsWith('origin/') ? base.label.slice('origin/'.length) : base.label,
       title: branch,
       url: '',
-      baseSha: base.sha,
+      // The fork point, as in the mirror: base commits after it are not the branch's changes.
+      baseSha: base.mergeBase,
       localBranch: branch,
     },
   };

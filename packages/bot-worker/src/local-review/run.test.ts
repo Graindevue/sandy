@@ -52,19 +52,24 @@ interface Invocation {
   home: string | undefined;
   codexHome: string | undefined;
   prompt: string;
+  /** What `origin/main` resolves to in the Agent's worktree. */
+  baseRef: string | null;
 }
 
 /** Stands in for `codex exec --json`: one turn, then a findings payload per Agent. */
 function fakeCodex(logPath: string, behavior: FakeCodexBehavior): string {
   return [
     '#!/usr/bin/env node',
+    "import { execFileSync } from 'node:child_process';",
     "import { appendFileSync, readdirSync, readFileSync } from 'node:fs';",
     `const behavior = ${JSON.stringify(behavior)};`,
     `const logicFinding = ${JSON.stringify(LOGIC_FINDING)};`,
     "const prompt = readFileSync(0, 'utf8');",
     "const agent = prompt.includes('# Security Agent') ? 'security' : 'logic';",
     "const files = readdirSync('.', { recursive: true }).filter((file) => file !== '.git' && !file.startsWith('.git/'));",
-    `appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ agent, args: process.argv.slice(2), cwd: process.cwd(), files, home: process.env.HOME, codexHome: process.env.CODEX_HOME, prompt }) + '\\n');`,
+    'let baseRef = null;',
+    "try { baseRef = execFileSync('git', ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main'], { encoding: 'utf8' }).trim(); } catch {}",
+    `appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ agent, args: process.argv.slice(2), cwd: process.cwd(), files, home: process.env.HOME, codexHome: process.env.CODEX_HOME, prompt, baseRef }) + '\\n');`,
     "if (behavior.failAgent === agent) { process.stderr.write('model unavailable'); process.exit(1); }",
     "const payload = { findings: agent === 'logic' ? [logicFinding] : [], crossRepoSearch: { status: 'skipped', trigger: 'none', rationale: 'The change stays inside one Repo.' } };",
     'const events = [',
@@ -270,6 +275,34 @@ describe('runLocalReview', () => {
     expect(await readdir(join(f.cliHome, 'worktrees'))).toEqual([]);
     expect(await readdir(join(f.cliHome, 'mirrors'))).toEqual([]);
     expect(await pathExists(join(f.cliHome, 'review.lock'))).toBe(false);
+  });
+
+  it('shows reviewers the base at the fork point after the base moves on', async () => {
+    const f = await fixture();
+    // main gains a commit after feature/sum forks, and the developer has it.
+    await git(f.checkout, 'checkout', '--quiet', 'main');
+    await writeFile(join(f.checkout, 'src', 'later.ts'), 'export const later = 1;\n');
+    await git(f.checkout, 'add', '.');
+    await git(f.checkout, 'commit', '--quiet', '-m', 'Add later');
+    await git(f.checkout, 'push', '--quiet', 'origin', 'main');
+    await git(f.checkout, 'checkout', '--quiet', 'feature/sum');
+    const tip = (await git(f.checkout, 'rev-parse', 'origin/main')).trim();
+
+    const result = await review(f);
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      base: { ref: 'origin/main', sha: tip, mergeBase: f.baseSha },
+      changedLines: 4,
+    });
+    const invocations = await f.invocations();
+    expect(invocations).toHaveLength(2);
+    for (const invocation of invocations) {
+      expect(invocation.baseRef).toBe(f.baseSha);
+      expect(invocation.prompt).toContain(`Base ref: main at ${f.baseSha}`);
+      expect(invocation.prompt).not.toContain(tip);
+      expect(invocation.prompt).not.toContain('later.ts');
+    }
   });
 
   it('reviews only commits and warns about uncommitted work', async () => {

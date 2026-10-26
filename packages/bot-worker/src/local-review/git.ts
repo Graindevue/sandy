@@ -87,6 +87,7 @@ export interface ReviewBase {
   fullRef: string | null;
   /** Base tip the diff is computed against, with merge-base (`...`) semantics. */
   sha: string;
+  /** Where HEAD forked from the base; Agents see the base at this commit. */
   mergeBase: string;
 }
 

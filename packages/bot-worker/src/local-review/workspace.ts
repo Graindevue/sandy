@@ -40,10 +40,11 @@ export interface LocalCloneManagerOptions {
 
 /**
  * Review worktrees that never expose the developer's checkout. The reviewed
- * Repo is pushed into a fresh bare mirror that holds only the history of the
- * head and base commits, so uncommitted work, stashes, other branches, and
- * the checkout's Git config never reach an Agent. Sibling Repos are cloned
- * from the origin host at their default branch, as in CI.
+ * Repo is pushed into a fresh bare mirror that holds only the head's history,
+ * with the base ref at the commit the head forked from, so uncommitted work,
+ * stashes, other branches, and the checkout's Git config never reach an Agent.
+ * Sibling Repos are cloned from the origin host at their default branch, as in
+ * CI.
  */
 export class LocalCloneManager implements ReviewCloneManager {
   readonly #options: LocalCloneManagerOptions;
@@ -76,7 +77,7 @@ export class LocalCloneManager implements ReviewCloneManager {
 
   async resolveDefaultBranchSha(repo: RepoForWorktree): Promise<string> {
     if (!this.#isReviewed(repo)) return await this.#siblings.resolveDefaultBranchSha(repo);
-    return this.#options.base.sha;
+    return this.#options.base.mergeBase;
   }
 
   async createWorktree(repo: RepoForWorktree, request: WorktreeRequest): Promise<ReviewWorktree> {
@@ -119,7 +120,9 @@ export class LocalCloneManager implements ReviewCloneManager {
     // Push only the two commits a Review needs. A local clone would hardlink
     // every object, including stashes and unreachable work. From a shallow
     // checkout, receive-pack fails every ref after the first in one push.
-    for (const refspec of [`${headSha}:${HEAD_REF}`, `${base.sha}:${mirrorBaseRef(base)}`]) {
+    // The base ref stops at the fork point: commits the base gained after it
+    // would read as changes the branch reverts.
+    for (const refspec of [`${headSha}:${HEAD_REF}`, `${base.mergeBase}:${mirrorBaseRef(base)}`]) {
       await runGit(
         checkoutRoot,
         [

@@ -33,10 +33,11 @@ ReviewExecutor, Agents, prompts, and Synthesizer of a PR Review.
   `~/.codex`, and never reads or copies `CODEX_AUTH_JSON` or a CI login, so the
   CI auth stream keeps a single owner. A lock on each CLI home serializes the
   Reviews and sign-ins that share its login.
-- **Isolated workspace.** The head and base commits are pushed into a fresh
-  bare mirror, and Agents work in a detached worktree of it. Other branches,
-  stashes, unreachable objects, hooks, and the checkout's Git config never reach
-  an Agent. The Codex sandbox also denies the developer's checkouts, saved Local
+- **Isolated workspace.** The head commit is pushed into a fresh bare mirror
+  whose base ref points at the merge base, so commits the base gained later
+  cannot read as changes the branch reverts. Agents work in a detached worktree
+  of the mirror. Other branches, stashes, unreachable objects, hooks, and the
+  checkout's Git config never reach an Agent. The Codex sandbox also denies the developer's checkouts, saved Local
   Reviews, operator config, other Sandy state, and common credential stores in
   the home directory, including `~/Library` on macOS.
 - **Serial Agents.** Each Agent runs one `codex exec` with targeted tests. The

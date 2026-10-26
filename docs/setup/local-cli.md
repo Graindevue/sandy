@@ -143,8 +143,8 @@ your home directory or a hidden path below, such as `~/.config`.
 ## What reviewers can see
 
 Reviewers work in a detached worktree of a private mirror. The mirror holds
-only the head and base commits, so other branches, stashes, and the checkout's
-Git config stay out. The Codex sandbox hides these paths from them:
+only the head's history, with the base at your branch's merge base, so other
+branches, stashes, and the checkout's Git config stay out. The Codex sandbox hides these paths from them:
 
 - Your checkouts, saved Reviews, Sandy's `.config`, and other `~/.sandy` state.
 - Credential stores in your home directory, such as `~/.ssh`, `~/.config`,
