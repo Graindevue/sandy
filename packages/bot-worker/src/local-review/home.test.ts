@@ -103,6 +103,40 @@ describe('assertDedicatedHome', () => {
       'The Codex home for sandy needs a dedicated parent directory',
     );
   });
+
+  it('refuses a state root or Codex parent that is or holds a path hidden from reviewers', async () => {
+    const refused = [
+      [
+        { SANDY_CLI_HOME: join(user, '.aws') },
+        undefined,
+        `SANDY_CLI_HOME must not be or contain ${join(user, '.aws')}`,
+      ],
+      [
+        { SANDY_CLI_HOME: join(user, '.sandy') },
+        undefined,
+        `SANDY_CLI_HOME must not be or contain ${join(user, '.sandy')}`,
+      ],
+      [
+        {},
+        join(user, '.config', 'sandy-codex'),
+        `The Codex home's parent must not be or contain ${join(user, '.config')}`,
+      ],
+      [
+        {},
+        join(user, '.cargo', 'codex'),
+        `The Codex home's parent must not be or contain ${join(user, '.cargo', 'credentials')}`,
+      ],
+    ] as const;
+    for (const [env, codexHome, message] of refused) {
+      await expect(assertDedicatedHome(localReviewHome(env, codexHome))).rejects.toThrow(message);
+    }
+  });
+
+  it('accepts a state root inside a credential directory, whose rest stays hidden', async () => {
+    const home = localReviewHome({ SANDY_CLI_HOME: join(user, '.config', 'sandy') });
+
+    await expect(assertDedicatedHome(home)).resolves.toBeUndefined();
+  });
 });
 
 describe('ensureHomeDirectories', () => {

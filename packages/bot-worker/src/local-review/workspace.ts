@@ -20,6 +20,8 @@ const MIRROR_CONFIG: readonly (readonly [string, string])[] = [
   ['gc.auto', '0'],
   // Local receive-pack reads this config, not `-c` values from the pushing side.
   ['receive.fsckObjects', 'false'],
+  // A shallow checkout's commits need shallow roots in the mirror.
+  ['receive.shallowUpdate', 'true'],
   ['transfer.fsckObjects', 'false'],
 ];
 
@@ -115,26 +117,28 @@ export class LocalCloneManager implements ReviewCloneManager {
     );
     for (const [key, value] of MIRROR_CONFIG) await this.#mirrorGit(['config', key, value]);
     // Push only the two commits a Review needs. A local clone would hardlink
-    // every object, including stashes and unreachable work.
-    await runGit(
-      checkoutRoot,
-      [
-        '-c',
-        'core.hooksPath=/dev/null',
-        '-c',
-        'push.gpgSign=false',
-        'push',
-        '--no-verify',
-        '--force',
-        '--quiet',
-        '--no-follow-tags',
-        '--recurse-submodules=no',
-        this.#mirror,
-        `${headSha}:${HEAD_REF}`,
-        `${base.sha}:${mirrorBaseRef(base)}`,
-      ],
-      signal === undefined ? {} : { signal },
-    );
+    // every object, including stashes and unreachable work. From a shallow
+    // checkout, receive-pack fails every ref after the first in one push.
+    for (const refspec of [`${headSha}:${HEAD_REF}`, `${base.sha}:${mirrorBaseRef(base)}`]) {
+      await runGit(
+        checkoutRoot,
+        [
+          '-c',
+          'core.hooksPath=/dev/null',
+          '-c',
+          'push.gpgSign=false',
+          'push',
+          '--no-verify',
+          '--force',
+          '--quiet',
+          '--no-follow-tags',
+          '--recurse-submodules=no',
+          this.#mirror,
+          refspec,
+        ],
+        signal === undefined ? {} : { signal },
+      );
+    }
   }
 
   async #mirrorGit(args: readonly string[], env?: Readonly<Record<string, string>>) {

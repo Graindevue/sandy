@@ -88,6 +88,33 @@ describe('LocalCloneManager', () => {
     expect(await git(checkout, 'rev-parse', 'refs/stash')).toBe(stashSha);
     expect(await git(checkout, 'worktree', 'list', '--porcelain')).not.toContain(home.worktrees);
   });
+
+  it('mirrors a shallow checkout', async () => {
+    const seed = join(root, 'seed');
+    await git(root, 'init', '--quiet', '-b', 'main', seed);
+    await commit(seed, 'a.txt', 'one\n');
+    const baseSha = await commit(seed, 'a.txt', 'two\n');
+    const checkout = join(root, 'checkout');
+    await git(root, 'clone', '--quiet', '--depth', '1', `file://${seed}`, checkout);
+    const headSha = await commit(checkout, 'b.txt', 'three\n');
+    const manager = new LocalCloneManager({
+      home: localReviewHome({ SANDY_CLI_HOME: join(root, 'cli') }),
+      reviewId: 'review-1',
+      checkoutRoot: checkout,
+      originUrl: null,
+      reviewed: { owner: 'acme', name: 'widgets' },
+      headSha,
+      base: await resolveReviewBase(checkout, headSha),
+    });
+    const repo = { owner: 'Acme', name: 'Widgets', defaultBranch: 'main' };
+
+    await manager.ensureCloned(repo);
+    const worktree = await manager.createWorktree(repo, { reviewJobId: 'job-1', sha: headSha });
+
+    expect(await manager.resolveDefaultBranchSha(repo)).toBe(baseSha);
+    expect(await git(worktree.path, 'diff', '--name-only', 'origin/main...HEAD')).toBe('b.txt');
+    await manager.removeWorktree(worktree);
+  });
 });
 
 describe('mirrorBaseRef', () => {

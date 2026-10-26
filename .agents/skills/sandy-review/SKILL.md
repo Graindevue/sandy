@@ -18,10 +18,11 @@ every option; Sandy's `docs/setup/local-cli.md` covers installation.
    CI secrets untouched.
 2. **Commits.** Only commits are reviewed. When `git status --porcelain` lists
    work the user expects reviewed, ask whether to commit it first.
-3. **Review.** Run `sandy review --json` as a background task with a timeout of
-   at least 60 minutes, and wait for it to exit: each reviewer may run for 10
-   minutes, and stopping the process discards the Review. Add `--branch <base>`
-   when the branch targets something other than origin's default branch, and
+3. **Review.** Run `sandy review --json` as a background task and wait for it
+   to exit; stopping the process discards the Review. Reviewers run one after
+   another for up to 10 minutes each, so allow at least 60 minutes, plus 10 for
+   each configured reviewer beyond five. Add `--branch <base>` when the branch
+   targets something other than origin's default branch, and
    `--instructions '<focus>'` when the user names a focus.
 4. **Result.** The JSON object on stdout is the result; `[sandy]` lines on
    stderr are progress and warnings. Read the JSON from the command output; the

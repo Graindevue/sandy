@@ -20,11 +20,16 @@ From a Sandy checkout:
 ```bash
 pnpm install
 pnpm --filter @sandy/shared-types --filter @sandy/manifest-builder --filter @sandy/bot-worker build
-alias sandy="node $PWD/packages/bot-worker/dist/local-review/cli.js"
 ```
 
-Add the alias to your shell profile. The CLI reads Agents from the checkout it
-was built in, so rebuild after you pull.
+Then add an alias to your shell profile, with the checkout's absolute path:
+
+```bash
+alias sandy='node /path/to/sandy/packages/bot-worker/dist/local-review/cli.js'
+```
+
+The CLI reads Agents from the checkout it was built in, so rebuild after you
+pull.
 
 ## Sign in
 
@@ -85,7 +90,8 @@ sandy review show 20261025T10   # by id or unique id prefix
 sandy review show --json
 ```
 
-The newest 50 Reviews are kept as owner-only files in `~/.sandy/cli/reviews`.
+The newest 50 Reviews are kept as owner-only files in `~/.sandy/cli/reviews`,
+or `$SANDY_CLI_HOME/reviews` when that is set.
 A run with nothing to review is not saved.
 
 `--json` prints, and `show --json` reprints, these fields:
@@ -116,8 +122,9 @@ The CLI chooses Product configuration in this order:
    reviewers on `gpt-6.1-sol` at `xhigh` effort.
 
 `--model` replaces every reviewer's model. In a multi-repo Product, sibling
-Repos are cloned into `~/.sandy/cli/repos` from origin's host with your Git
-credentials. They are read at their default branches.
+Repos are cloned into `~/.sandy/cli/repos`, or `$SANDY_CLI_HOME/repos`, from
+origin's host with your Git credentials. They are read at their default
+branches.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -129,8 +136,9 @@ credentials. They are read at their default branches.
 | `SANDY_REVIEW_HIDDEN_PATHS` | none | More absolute paths to hide from reviewers, separated by `:` |
 
 Keep `SANDY_CLI_HOME` and the temporary directory outside every checkout;
-reviewers cannot read checkouts. The CLI refuses a state directory that is
-your home directory or contains it.
+reviewers cannot read checkouts. Reviewers can read the CLI home and the
+parent of the Codex home, so the CLI refuses either one when it is or contains
+your home directory or a hidden path below, such as `~/.config`.
 
 ## What reviewers can see
 

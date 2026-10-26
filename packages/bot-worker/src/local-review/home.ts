@@ -57,6 +57,21 @@ export async function assertDedicatedHome(home: LocalReviewHome): Promise<void> 
       'The Codex home for sandy needs a dedicated parent directory; Sandy keeps tool caches beside it',
     );
   }
+  // Agents can read both directories, so neither may hold a path hidden from them.
+  const visible = [
+    ['SANDY_CLI_HOME', root],
+    ["The Codex home's parent", parent],
+  ] as const;
+  for (const path of homeProtectedPaths(user)) {
+    const hidden = await canonicalPath(path);
+    for (const [label, directory] of visible) {
+      if (isWithin(hidden, directory)) {
+        throw new LocalReviewInputError(
+          `${label} must not be or contain ${hidden}; reviewers can read it`,
+        );
+      }
+    }
+  }
 }
 
 /** Create the state root and the Codex home with owner-only access. */
@@ -122,6 +137,17 @@ const HOME_CREDENTIAL_PATHS = [
   '.sqlite_history',
 ];
 
+/** Paths in the home directory that Agents must not read. */
+function homeProtectedPaths(user: string): string[] {
+  return [
+    // HOME is remapped for tools; Library holds keychains, browser profiles, and app tokens.
+    ...(process.platform === 'darwin' ? [join(user, 'Library')] : []),
+    ...HOME_CREDENTIAL_PATHS.map((path) => join(user, path)),
+    // Other Sandy logins and clones.
+    join(user, '.sandy'),
+  ];
+}
+
 export interface ProtectedPathInput {
   home: LocalReviewHome;
   /** The developer's checkouts: uncommitted work and local `.env` files stay hidden. */
@@ -149,18 +175,13 @@ export function hiddenPathsFrom(env: NodeJS.ProcessEnv): string[] {
 
 /** Existing host paths the Agent sandbox must not read. */
 export async function localProtectedPaths(input: ProtectedPathInput): Promise<string[]> {
-  const user = homedir();
   const candidates = [
     ...input.checkoutRoots,
     input.home.reviews,
     join(input.sandyRoot, '.config'),
     ...(input.configPath === undefined ? [] : [input.configPath]),
-    // HOME is remapped for tools; Library holds keychains, browser profiles, and app tokens.
-    ...(process.platform === 'darwin' ? [join(user, 'Library')] : []),
-    ...HOME_CREDENTIAL_PATHS.map((path) => join(user, path)),
+    ...homeProtectedPaths(homedir()),
     ...(input.hiddenPaths ?? []),
-    // Other Sandy logins and clones.
-    join(user, '.sandy'),
   ];
   // Never hide the Review's own workspace or the runner's tool caches.
   const visible = [
