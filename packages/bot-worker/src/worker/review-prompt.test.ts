@@ -244,6 +244,28 @@ describe('buildReviewPrompt PR history', () => {
     expect(prompt).toMatch(/retries.*replays.*concurrent writers.*state transitions.*pagination/);
   });
 
+  it('leaves out the earlier-finding rules when there are no earlier Sandy findings', () => {
+    const prompt = buildReviewPrompt({
+      ...input,
+      pullRequestHistory: { ...history, priorFindings: [] },
+    });
+
+    expect(prompt).toContain('Known limitation: delivery ordering is out of scope.');
+    expect(prompt).toContain('The PR description may declare known limitations');
+    expect(prompt).not.toContain('Do not re-raise an earlier finding');
+    expect(prompt).not.toContain('Regression of earlier finding');
+  });
+
+  it('gives no history rules when the history is only linked issues', () => {
+    const prompt = buildReviewPrompt({
+      ...input,
+      pullRequestHistory: { body: null, linkedIssues: history.linkedIssues, priorFindings: [] },
+    });
+
+    expect(prompt).toContain('- #12: Webhook deliveries are dropped on timeout');
+    expect(prompt).not.toContain('How to use this history');
+  });
+
   it('omits the history section when no history is available', () => {
     expect(buildReviewPrompt(input)).not.toContain('PR history');
   });
