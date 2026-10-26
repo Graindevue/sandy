@@ -35,6 +35,10 @@ export interface RunnerPullRequest {
   baseRef: string;
   title: string;
   url: string;
+  /** Exact diff base commit; defaults to the fetched `origin/<baseRef>` tip. */
+  baseSha?: string;
+  /** Local branch reviewed before it has a pull request; `number` and `url` are placeholders. */
+  localBranch?: string;
 }
 
 export interface RunnerSiblingWorktree {
@@ -52,6 +56,8 @@ export interface RunAgentInput {
   botConfig?: ReviewBotContext;
   dependencyInstall?: DependencyInstallResult;
   pullRequestHistory?: PullRequestHistory;
+  /** Requester focus for this Review; it cannot override the review contracts. */
+  instructions?: string;
   signal?: AbortSignal;
 }
 

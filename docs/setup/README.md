@@ -61,6 +61,12 @@ Run the full repository suite in CI; opt into `test-mode: suite` only when it
 must run before a review. Its default budget is two minutes, and the summary
 always states whether the full suite ran.
 
+## Local Reviews
+
+[Local branch reviews](./local-cli.md) run the same reviewers on a developer's
+machine before a PR exists, with `sandy review`. They use a separate Codex login,
+post nothing, and never touch the `sandy-codex` auth stream.
+
 ## Isolated performance and quality tests
 
 Use [the benchmark setup](./review-benchmark.md) and its dedicated test login

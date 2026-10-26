@@ -55,6 +55,15 @@ affected consumers with SHA-pinned permalinks and post on the reviewed PR.
 Framework behavior is checked against installed-version source with `opensrc`
 before it becomes a Finding.
 
+## Local branch reviews
+
+`sandy review` runs the same reviewers against your branch's commits on your
+machine before you open a PR. It prints the Findings as text or JSON, saves
+them locally, and posts nothing. It needs its own Codex login (`sandy login`),
+separate from CI's and from `~/.codex`. See
+[the local review guide](./docs/setup/local-cli.md) and
+[ADR 0019](./docs/adr/0019-local-branch-review-cli.md).
+
 ## Current scope
 
 - Multiple specialized personas, Product context, Repo-local Rules, dependency
