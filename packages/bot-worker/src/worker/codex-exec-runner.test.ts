@@ -436,6 +436,19 @@ describe('CodexExecRunner through ReviewAgentRunner.runAgent', () => {
     expect(messages.join('\n')).not.toContain('invocation completed');
   });
 
+  it('reports the failed turn when Codex exits non-zero with nothing on stderr', async () => {
+    const f = await fixture(`
+      for await (const chunk of process.stdin) {}
+      process.stdout.write(JSON.stringify({type:'thread.started',thread_id:'overloaded-thread'}) + '\\n');
+      process.stdout.write(JSON.stringify({type:'turn.failed',error:{message:'Selected model is at capacity.'}}) + '\\n');
+      process.exitCode = 1;
+    `);
+    const runner = new CodexExecRunner({ codexHome: f.codexHome, executable: f.executable });
+    await expect(runner.runAgent(f.input)).rejects.toThrow(
+      /^Codex exited with 1: Selected model is at capacity\.$/,
+    );
+  });
+
   it('logs invalid JSONL as an invocation failure even when Codex exits successfully', async () => {
     const f = await fixture(`
       for await (const chunk of process.stdin) {}

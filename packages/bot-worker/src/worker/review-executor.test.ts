@@ -76,6 +76,59 @@ describe('ReviewExecutor', () => {
     },
   );
 
+  it('passes requester focus and a local branch base to every Agent', async () => {
+    const context = makeContext({ agentKeys: ['logic', 'security'] });
+    const runner = new FakeRunner(findingsOutput([]));
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store: new FakeExecutionStore({
+        ...context,
+        pullRequest: { ...context.pullRequest, baseSha: 'b'.repeat(40), localBranch: 'feature/x' },
+      }),
+      poster: new FakePoster(),
+      runner,
+      cloneManager: new FakeCloneManager(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      instructions: '  Check the retry path.  ',
+      resolveAgent: (_repo, key) => (key === 'logic' ? logicAgent : securityAgent),
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(runner.calls.map(({ instructions }) => instructions)).toEqual([
+      'Check the retry path.',
+      'Check the retry path.',
+    ]);
+    expect(runner.calls[0]?.pullRequest).toMatchObject({
+      baseRef: 'main',
+      baseSha: 'b'.repeat(40),
+      localBranch: 'feature/x',
+    });
+  });
+
+  it.each([undefined, '   '])('omits blank requester focus (%j)', async (instructions) => {
+    const runner = new FakeRunner(findingsOutput([]));
+    const executor = new ReviewExecutor({
+      ...fixtureExecutorOptions,
+      store: new FakeExecutionStore(makeContext()),
+      poster: new FakePoster(),
+      runner,
+      cloneManager: new FakeCloneManager(),
+      archetypeAssigner: new FakeArchetypeAssigner(),
+      diffInspector: new FakeDiffInspector(42),
+      ...(instructions === undefined ? {} : { instructions }),
+      resolveAgent: () => logicAgent,
+    });
+
+    await executor.executeClaimedJob('job-1');
+
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]).not.toHaveProperty('instructions');
+    expect(runner.calls[0]?.pullRequest).not.toHaveProperty('baseSha');
+    expect(runner.calls[0]?.pullRequest).not.toHaveProperty('localBranch');
+  });
+
   it('posts cache outcomes and sanitized preparation diagnostics with execution mode', async () => {
     const store = new FakeExecutionStore(makeContext({ agentKeys: ['logic'] }));
     const poster = new FakePoster();

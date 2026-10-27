@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/review-action.js",
   "types": "./dist/review-action.d.ts",
+  "bin": {
+    "sandy": "./dist/local-review/cli.js"
+  },
   "files": [
     "dist"
   ],

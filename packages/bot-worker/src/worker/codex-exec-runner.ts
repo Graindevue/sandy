@@ -35,6 +35,10 @@ export interface RunnerPullRequest {
   baseRef: string;
   title: string;
   url: string;
+  /** Exact diff base commit; defaults to the fetched `origin/<baseRef>` tip. */
+  baseSha?: string;
+  /** Local branch reviewed before it has a pull request; `number` and `url` are placeholders. */
+  localBranch?: string;
 }
 
 export interface RunnerSiblingWorktree {
@@ -52,6 +56,8 @@ export interface RunAgentInput {
   botConfig?: ReviewBotContext;
   dependencyInstall?: DependencyInstallResult;
   pullRequestHistory?: PullRequestHistory;
+  /** Requester focus for this Review; it cannot override the review contracts. */
+  instructions?: string;
   signal?: AbortSignal;
 }
 
@@ -689,7 +695,11 @@ export class CodexExecRunner {
           }
           if (aborted !== undefined) reject(aborted);
           else if (code === 0) resolve(output);
-          else reject(new Error(`Codex exited with ${code}: ${errorOutput}`));
+          else {
+            // A failed turn exits non-zero with its reason on stdout, often with empty stderr.
+            const reason = [lastFailedTurnMessage(output), errorOutput.trim()].filter(Boolean);
+            reject(new Error(`Codex exited with ${code}: ${reason.join('\n')}`));
+          }
         });
         child.stdin.on('error', () => {});
         child.stdin.end(prompt);
@@ -704,19 +714,8 @@ export class CodexExecRunner {
         } catch {
           throw new Error('Codex emitted invalid JSONL');
         }
-        if (event.type === 'turn.failed' || event.type === 'error') {
-          const error =
-            typeof event.error === 'object' && event.error !== null
-              ? objectValue(event.error, 'Codex error')
-              : undefined;
-          throw new Error(
-            typeof error?.message === 'string'
-              ? error.message
-              : typeof event.message === 'string'
-                ? event.message
-                : 'Codex turn failed',
-          );
-        }
+        const failure = failedTurnMessage(event);
+        if (failure !== undefined) throw new Error(failure);
         if (event.type === 'thread.started' && typeof event.thread_id === 'string')
           startedThreadId = event.thread_id;
         if (
@@ -905,6 +904,29 @@ function isCompletedToolEvent(line: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** The reason a `turn.failed` or `error` event gives; undefined for other events. */
+function failedTurnMessage(event: Record<string, unknown>): string | undefined {
+  if (event.type !== 'turn.failed' && event.type !== 'error') return undefined;
+  const error =
+    typeof event.error === 'object' && event.error !== null
+      ? objectValue(event.error, 'Codex error')
+      : undefined;
+  if (typeof error?.message === 'string') return error.message;
+  return typeof event.message === 'string' ? event.message : 'Codex turn failed';
+}
+
+function lastFailedTurnMessage(jsonl: string): string | undefined {
+  let message: string | undefined;
+  for (const line of jsonl.split('\n')) {
+    try {
+      message = failedTurnMessage(objectValue(JSON.parse(line), 'Codex event')) ?? message;
+    } catch {
+      // A truncated or malformed line carries no reason.
+    }
+  }
+  return message;
 }
 
 function objectValue(value: unknown, where: string): Record<string, unknown> {
