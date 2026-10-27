@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   Confidence,
@@ -76,7 +76,17 @@ export async function saveReview(
   await mkdir(home.reviews, { recursive: true, mode: 0o700 });
   await chmod(home.reviews, 0o700);
   const path = join(home.reviews, `${review.id}.json`);
-  await writeFile(path, `${JSON.stringify(review, null, 2)}\n`, { mode: 0o600 });
+  // `list` and `show` read without the review lock, so the file appears whole.
+  const temporary = join(home.reviews, `.${review.id}.tmp`);
+  try {
+    await writeFile(temporary, `${JSON.stringify(review, null, 2)}\n`, {
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   for (const stale of (await savedReviewIds(home)).slice(SAVED_REVIEW_LIMIT)) {
     await rm(join(home.reviews, `${stale}.json`), { force: true });
   }

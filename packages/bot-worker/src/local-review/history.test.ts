@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   findReview,
   type LocalReviewResult,
@@ -12,6 +12,19 @@ import {
 } from './history.js';
 import { type LocalReviewHome, localReviewHome } from './home.js';
 
+const interruptedWrite = vi.hoisted(() => ({ enabled: false }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    writeFile: async (...[file, data, options]: Parameters<typeof actual.writeFile>) => {
+      if (!interruptedWrite.enabled) return actual.writeFile(file, data, options);
+      await actual.writeFile(file, String(data).slice(0, 10), options);
+      throw new Error('write interrupted');
+    },
+  };
+});
+
 let home: LocalReviewHome;
 
 beforeEach(async () => {
@@ -19,6 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  interruptedWrite.enabled = false;
   await rm(home.root, { recursive: true, force: true });
 });
 
@@ -85,6 +99,16 @@ describe('saved Reviews', () => {
     await expect(findReview(home, '../reviews')).rejects.toThrow(
       'A Review id contains only letters, digits, and hyphens',
     );
+  });
+
+  it('leaves nothing behind when a save stops partway', async () => {
+    await saveReview(home, review('20261025T100000Z-aaaaaa'));
+    interruptedWrite.enabled = true;
+
+    await expect(saveReview(home, review('20261025T110000Z-bbbbbb'))).rejects.toThrow(
+      'write interrupted',
+    );
+    expect(await readdir(home.reviews)).toEqual(['20261025T100000Z-aaaaaa.json']);
   });
 
   it('skips files that are not saved Reviews', async () => {
