@@ -8,8 +8,9 @@ packages:
 # so security patches can still be installed without waiting out the window.
 minimumReleaseAge: 10080
 
-# Patch vulnerable transitive versions without changing their major/minor line.
+# Patch vulnerable transitive versions without changing their major line.
 # Remove these selectors once upstream resolution no longer selects them.
 overrides:
   "esbuild@0.28.0": "0.28.1"
-  "vite@>=8.0.0 <8.0.16": "8.0.16"
+  "undici@>=6.5.0 <6.29.1": "6.29.1"
+  "vite@>=8.0.0 <8.1.6": "8.1.6"
