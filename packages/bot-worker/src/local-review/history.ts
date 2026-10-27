@@ -60,11 +60,11 @@ export interface LocalReviewResult {
   finishedAt: string;
 }
 
-/** Sortable ids such as `20261025T101500Z-a1b2c3`. */
+/** Sortable ids such as `20261025T101500123Z-a1b2c3`, to the millisecond. */
 export function newReviewId(now = new Date()): string {
   const stamp = now
     .toISOString()
-    .replace(/\.\d{3}Z$/, 'Z')
+    .replace(/\.(\d{3})Z$/, '$1Z')
     .replace(/[-:]/g, '');
   return `${stamp}-${randomBytes(3).toString('hex')}`;
 }

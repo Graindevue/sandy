@@ -60,7 +60,7 @@ describe('newReviewId', () => {
   it('starts with a sortable UTC timestamp and ends with a random suffix', () => {
     const id = newReviewId(new Date('2026-10-25T10:15:00.123Z'));
 
-    expect(id).toMatch(/^20261025T101500Z-[0-9a-f]{6}$/);
+    expect(id).toMatch(/^20261025T101500123Z-[0-9a-f]{6}$/);
     expect(newReviewId(new Date('2026-10-25T10:15:01Z')) > id).toBe(true);
   });
 });
@@ -82,6 +82,15 @@ describe('saved Reviews', () => {
       review('20261025T110000Z-bbbbbb', { status: 'incomplete' }),
       review('20261025T100000Z-aaaaaa'),
     ]);
+  });
+
+  it('lists Reviews started within one second in the order they started', async () => {
+    const ids = Array.from({ length: 10 }, (_, index) =>
+      newReviewId(new Date(Date.UTC(2026, 9, 25, 10, 15, 0, index * 100))),
+    );
+    for (const id of ids) await saveReview(home, review(id));
+
+    expect((await listReviews(home)).map((saved) => saved.id)).toEqual([...ids].reverse());
   });
 
   it('finds the newest Review, an exact id, or a unique prefix', async () => {
