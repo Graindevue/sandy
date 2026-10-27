@@ -32,6 +32,14 @@ outcome. Findings are advisory; an execution failure is reported as a failure,
 and a partial review must not appear as a clean all-clear.
 _Avoid_: CI check, commit status.
 
+## Local Review
+
+An assessment of a branch's commits that a developer runs on their own machine
+before opening its Pull Request, with the same Agents and Synthesizer as a
+Review. It has no Review trigger, ReviewJob, or Review Status Check; nothing is
+posted, and its result stays on that machine.
+_Avoid_: CLI review, headless review, dry run.
+
 ## Agent
 
 A reviewer persona comprising a prompt, runtime selection, tool guidance, and

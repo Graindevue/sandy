@@ -18,6 +18,11 @@ PRs before merge. Same-repository Dependabot PRs to `main` merge automatically
 after CodeRabbit approves the current head and all required checks pass, with
 review threads resolved. Keep Node declarations aligned with the Node runtime.
 
+Before opening a PR, run a Sandy Local Review of the branch with
+[sandy-review](.agents/skills/sandy-review/SKILL.md). Sandy's PR Reviews run
+only in private repositories, so this is how Sandy reviews itself. Fix the
+Findings you agree with, and say in the PR description why you left any others.
+
 Use [coderabbit-review](.agents/skills/coderabbit-review/SKILL.md) to request and
 verify a review. Public repositories with fewer than 10 stars require manual
 review requests, including after pushes. A successful status can mean the review

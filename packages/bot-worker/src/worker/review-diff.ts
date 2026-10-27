@@ -17,7 +17,8 @@ export async function readReviewDiff(
     timeout: 10_000,
     ...(input.signal ? { signal: input.signal } : {}),
   };
-  const revision = `refs/remotes/origin/${input.pullRequest.baseRef}...${input.pullRequest.headSha}`;
+  const base = input.pullRequest.baseSha ?? `refs/remotes/origin/${input.pullRequest.baseRef}`;
+  const revision = `${base}...${input.pullRequest.headSha}`;
   const { stdout: changed } = await exec(
     'git',
     ['diff', '--name-status', '--find-renames', '-z', revision, '--'],
