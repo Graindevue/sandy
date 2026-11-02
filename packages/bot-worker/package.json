@@ -23,7 +23,7 @@
     "@sandy/convex-backend": "workspace:*",
     "@sandy/manifest-builder": "workspace:*",
     "@sandy/shared-types": "workspace:*",
-    "convex": "^1.47.0",
+    "convex": "^1.48.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
