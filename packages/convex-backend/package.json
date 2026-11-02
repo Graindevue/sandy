@@ -16,8 +16,8 @@
     "deploy": "convex deploy"
   },
   "dependencies": {
-    "convex": "^1.47.0",
-    "convex-helpers": "^0.1.128"
+    "convex": "^1.48.0",
+    "convex-helpers": "^0.1.129"
   },
   "devDependencies": {
     "@sandy/shared-types": "workspace:*"
